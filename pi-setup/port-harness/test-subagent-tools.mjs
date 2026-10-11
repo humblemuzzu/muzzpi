@@ -22,13 +22,12 @@ const CASES = {
     builtinTools: ["read", "grep", "find", "ls", "bash"],
     extensionTools: ["read", "grep", "find", "ls", "bash"],
   },
-  // `task` was replaced by `delegate` in e4c8786; edit/write were replaced by
-  // apply_patch in 6296fef. kept in sync with delegate.ts by hand — the unit
-  // tests pin the real allowlists, this harness proves the flags reach a child.
+  // kept in sync with delegate.ts by hand — the unit tests pin the real
+  // allowlists, this harness proves the flags reach a child.
   delegate: {
-    builtinTools: ["read", "grep", "find", "ls", "bash", "apply_patch"],
+    builtinTools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
     extensionTools: ["read", "grep", "find", "ls", "bash",
-      "apply_patch", "format_file", "skill", "finder",
+      "edit", "write", "format_file", "skill", "finder",
       "web_search", "read_web_page", "screenshot"],
   },
   chad: {

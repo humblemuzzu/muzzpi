@@ -26,7 +26,7 @@ const TAG_HEADS_UP = "Heads up";
 const TAG_YOU_SHOULD_KNOW = "You should know";
 
 /** tools whose sub-agent use means a file actually changed */
-const EDIT_TOOLS = new Set(["apply_patch", "edit", "write", "notebook_edit"]);
+const EDIT_TOOLS = new Set(["edit", "write", "notebook_edit"]);
 const ARG_HINTS = ["path", "file", "filePattern", "pattern", "query", "cmd", "command"];
 
 export interface State {
@@ -172,17 +172,8 @@ export function describeCall(name: string, args: unknown): string {
 export function editPaths(name: string, args: unknown): string[] {
 	if (!EDIT_TOOLS.has(name)) return [];
 	const record = asRecord(args);
-	const paths = new Set<string>();
-	const direct = record.path ?? record.file;
-	if (typeof direct === "string" && direct.trim()) paths.add(clip(direct, 80));
-	const ops = record.ops;
-	if (Array.isArray(ops)) {
-		for (const op of ops) {
-			const candidate = asRecord(op).path;
-			if (typeof candidate === "string" && candidate.trim()) paths.add(clip(candidate, 80));
-		}
-	}
-	return [...paths];
+	const direct = record.path ?? record.file_path ?? record.file;
+	return typeof direct === "string" && direct.trim() ? [clip(direct, 80)] : [];
 }
 
 export function textOf(message: unknown): string {

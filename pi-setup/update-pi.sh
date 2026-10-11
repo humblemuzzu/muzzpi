@@ -57,9 +57,9 @@ bash "$SCRIPT_DIR/verify-patches.sh"
 reply="$(pi --mode json -p --thinking low "Reply with exactly UPDATE_OK and nothing else." 2>/dev/null)"
 if ! grep -q '"text":"UPDATE_OK"' <<<"$reply"; then
     echo "FAIL  headless smoke test did not reply UPDATE_OK"
-    echo "rollback: rm -rf '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../lib/node_modules/$PKG/dist/cli.js $PREFIX/bin/pi"
+    echo "rollback: trash '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../lib/node_modules/$PKG/dist/cli.js $PREFIX/bin/pi"
     exit 1
 fi
 
 echo "pi $(pi --version) installed and patched. Now call one sub-agent (finder/chad) from a live session."
-echo "rollback: rm -rf '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../lib/node_modules/$PKG/dist/cli.js $PREFIX/bin/pi"
+echo "rollback: trash '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../lib/node_modules/$PKG/dist/cli.js $PREFIX/bin/pi"

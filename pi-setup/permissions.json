@@ -26,11 +26,17 @@
     "tool": "Bash",
     "matches": {
       "cmd": [
-        "regex:(^|[;&|(]|\\bdo\\b|\\bthen\\b|\\belse\\b|\\bxargs\\b|-exec)\\s*\\brm\\b"
+        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:(?:\\w+=\\S*|do|then|else|sudo|doas|env|builtin|exec|nohup|time|nice|timeout|watch|xargs|busybox|eval|chroot|stdbuf|ionice|caffeinate|ssh|command(?!\\s+-[vV]))\\b[^\\n;&|]{0,200}?\\s+)*[\"']?\\\\?(?:\\S*/)?(?:rm|rmdir|unlink|shred|srm)(?=$|[\\s;&|)\"'\\x60])",
+        "regex:(?:\\$\\(|\\x60)\\s*(?:which|type\\s+-p|command\\s+-v)\\s+(?:rm|rmdir|unlink|shred)\\b",
+        "regex:(?:\\s-\\w*c|\\beval|\\bforeach|\\bsystem|\\bexecSync|\\bexec|\\bspawnSync|\\bspawn|\\bcheck_call|\\bcheck_output|\\brun|\\bPopen|\\bcall)\\s*\\(?\\s*\\[?\\s*[\"'\\x60]\\s*(?:sudo\\s+)?(?:\\S*/)?(?:rm|rmdir|unlink|shred|srm)(?=$|[\\s\"'\\x60,\\]])",
+        "regex:(?:\\.(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync|rmtree)|\\bos\\.(?:remove|removedirs)|\\bDeno\\.remove|\\bFile\\.delete|\\bFileUtils\\.rm\\w*|\\bunlink|\\brmtree)\\s*\\(|\\bunlink\\s+[\"'$]|\\bfrom\\s+os\\s+import\\b[^\\n]{0,200}\\b(?:remove|unlink|rmdir|removedirs)\\b",
+        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:sudo\\s+)?git\\s+(?:-C\\s+\\S+\\s+|-c\\s+\\S+\\s+|--\\S+\\s+){0,6}(?:rm|clean)\\b(?![^\\n;&|#$()]{0,500}?(?:--cached|--dry-run|\\s-[a-zA-Z]*n[a-zA-Z]*(?=\\s|$)))",
+        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:sudo\\s+)?find\\b[^\\n;&|]{0,500}?\\s-delete\\b",
+        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:sudo\\s+)?rsync\\b[^\\n;&|]{0,500}?\\s--(?:delete\\S*|remove-source-files)\\b"
       ]
     },
     "action": "reject",
-    "message": "use 'trash <file>' instead of rm \u2014 recoverable deletion"
+    "message": "deleting is blocked \u2014 rm, rmdir, unlink, shred, find -delete, rsync --delete, git rm, git clean and delete calls in scripts. use 'trash <path>': it moves the file to the macOS Trash, where it can be recovered. (git rm --cached and dry runs are allowed.)"
   },
   {
     "tool": "Bash",

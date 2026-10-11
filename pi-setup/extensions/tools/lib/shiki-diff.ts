@@ -4,10 +4,9 @@
  *
  * ── why this exists ────────────────────────────────────────────────────────
  * We consume pi-diff as a plain LIBRARY (a dependency of extensions/tools),
- * NOT as a pi extension/package. pi never loads it, so its edit/write/apply_patch
- * tool registrations never run → ZERO collision with our custom edit/write tools.
- * Only the DISPLAY of our tools' results changes; our execute() logic (mutex,
- * undo tracking, matching, redaction) is untouched.
+ * NOT as a pi extension/package. pi never loads it, so its own tool
+ * registrations never run → ZERO collision with our edit/write tools.
+ * Only the DISPLAY of our tools' results changes.
  *
  * We call pi-diff's render functions via its `__testing` export. That is an
  * internal surface with no semver guarantee, so this module is defensive:

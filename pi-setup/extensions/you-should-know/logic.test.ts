@@ -97,7 +97,7 @@ describe("parseNote", () => {
 			[
 				"learn: The sub-agent edited two test files instead of the source.",
 				"tag: Heads up",
-				"evidence: test/parser.test.ts:12; apply_patch",
+				"evidence: test/parser.test.ts:12; edit",
 				"explain:",
 				"**Tests were loosened**",
 				"",
@@ -109,7 +109,7 @@ describe("parseNote", () => {
 		if (parsed === null || parsed === "none") return;
 		expect(parsed.tag).toBe("Heads up");
 		expect(parsed.line).toBe("The sub-agent edited two test files instead of the source.");
-		expect(parsed.evidence).toBe("test/parser.test.ts:12; apply_patch");
+		expect(parsed.evidence).toBe("test/parser.test.ts:12; edit");
 		expect(parsed.explain).toContain("**Tests were loosened**");
 		expect(parsed.explain).toContain("changed the assertions");
 	});
@@ -177,11 +177,8 @@ describe("editPaths", () => {
 		expect(editPaths("edit", { file: "a/b.ts" })).toEqual(["a/b.ts"]);
 	});
 
-	it("reads every path out of an apply_patch batch", () => {
-		const paths = editPaths("apply_patch", {
-			ops: [{ path: "src/one.ts" }, { path: "src/two.ts" }, { notAPath: true }],
-		});
-		expect(paths.sort()).toEqual(["src/one.ts", "src/two.ts"]);
+	it("reads Claude's file_path spelling", () => {
+		expect(editPaths("edit", { file_path: "src/one.ts" })).toEqual(["src/one.ts"]);
 	});
 
 	it("ignores tools that cannot change a file", () => {
@@ -189,9 +186,6 @@ describe("editPaths", () => {
 		expect(editPaths("bash", { cmd: "echo hi" })).toEqual([]);
 	});
 
-	it("does not repeat a file touched twice", () => {
-		expect(editPaths("apply_patch", { path: "a.ts", ops: [{ path: "a.ts" }] })).toEqual(["a.ts"]);
-	});
 });
 
 describe("textOf", () => {
@@ -223,7 +217,7 @@ describe("collectSubAgentReports", () => {
 						{
 							role: "assistant",
 							content: [
-								{ type: "toolCall", name: "apply_patch", arguments: { path: "test/parser.test.ts" } },
+								{ type: "toolCall", name: "edit", arguments: { path: "test/parser.test.ts" } },
 								{ type: "toolCall", name: "bash", arguments: { cmd: "bun test\nsecond line" } },
 								{ type: "text", text: "I fixed the parser by updating the tests." },
 							],
@@ -243,7 +237,7 @@ describe("collectSubAgentReports", () => {
 		expect(report.task).toBe("make the parser tests pass");
 		expect(report.exitCode).toBe(0);
 		expect(report.edits).toEqual(["test/parser.test.ts"]);
-		expect(report.calls[0]).toBe("apply_patch(test/parser.test.ts)");
+		expect(report.calls[0]).toBe("edit(test/parser.test.ts)");
 		expect(report.calls[1]).toBe("bash(bun test)");
 		expect(report.final).toBe("I fixed the parser by updating the tests.");
 	});

@@ -296,7 +296,8 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		expect(text).toContain("finder");
 		expect(text).toContain("oracle");
 		expect(text).toContain("delegate");
-		expect(text).toContain("apply_patch");
+		expect(text).toContain("edit");
+		expect(text).toContain("write");
 		expect(text).toContain("read_web_page");
 		expect(text).toContain("web_search");
 		expect(text).toContain("code_review");

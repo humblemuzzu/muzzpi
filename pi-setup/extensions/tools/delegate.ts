@@ -27,15 +27,10 @@ import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from ".
 import { runSubAgent, toolError } from "./lib/run-sub-agent";
 import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
 
-/*
- * `apply_patch` rather than edit/write: those tools no longer exist, and pi's
- * natives are hidden at session_start, so naming them would leave the child
- * unable to modify anything.
- */
-const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "apply_patch"];
+const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const EXTENSION_TOOLS = [
 	"read", "grep", "find", "ls", "bash",
-	"apply_patch", "format_file", "skill", "finder",
+	"edit", "write", "format_file", "skill", "finder",
 	"web_search", "read_web_page", "screenshot",
 ];
 
@@ -64,7 +59,7 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 		label: "Delegate",
 		description:
 			"Delegate a sub-task to a sub-agent.\n\n" +
-			"Tools: read, grep, find, ls, bash, apply_patch, format_file, skill, finder, " +
+			"Tools: read, grep, find, ls, bash, edit, write, format_file, skill, finder, " +
 			"web_search, read_web_page, screenshot.\n\n" +
 			"When to use delegate:\n" +
 			"- Complex multi-step tasks that are independent of your current thread\n" +
@@ -73,7 +68,7 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 			'- When the user asks you to launch an "agent" or "subagent"\n\n' +
 			"When NOT to use delegate:\n" +
 			"- A single logical task you can do yourself in a few tool calls\n" +
-			"- Reading one file (use read), one search (use grep), one edit (use apply_patch)\n" +
+			"- Reading one file (use read), one search (use grep), one edit (use edit)\n" +
 			"- When you are not yet sure what changes you want\n\n" +
 			"How to use delegate:\n" +
 			"- Run several delegates concurrently for independent work by issuing multiple tool calls in one message.\n" +

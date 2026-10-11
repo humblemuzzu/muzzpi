@@ -33,9 +33,10 @@ const BARE_SYSTEM_PROMPT = `You are a local coding agent on the user's machine. 
 Tools (schemas also in the API):
 - read — file or image path
 - bash — shell; timeout required
-- apply_patch — only file write/edit/batch tool
+- edit — exact text replacement: path + edits[{oldText,newText}]
+- write — create or overwrite a whole file
 - grep / find / ls — search and list
-- undo_edit / redo_edit — revert or redo last patch
+- undo_edit / redo_edit — revert or redo last edit
 - format_file — prettier/biome
 - skill — load a named skill
 - web_search / read_web_page — web

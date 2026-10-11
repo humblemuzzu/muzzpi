@@ -35,17 +35,11 @@ function stallSec(): number {
 
 // --- tool name aliases ---
 
-/**
- * requested name -> registered name. unknown names are dropped silently by pi;
- * mutation aliases all resolve to apply_patch so a config asking for edit/write
- * still has a way to change a file.
- */
+/** requested name -> registered name. unknown names are dropped silently by pi. */
 const TOOL_ALIASES: Record<string, string> = {
 	glob: "find",
-	edit_file: "apply_patch",
-	create_file: "apply_patch",
-	edit: "apply_patch",
-	write: "apply_patch",
+	edit_file: "edit",
+	create_file: "write",
 };
 
 export function resolveAliases(names: string[]): string[] {

@@ -153,6 +153,30 @@ function matchesWithin(params: PermissionParams, roots: PermissionPattern): bool
 	});
 }
 
+const RUNS_HEREDOC = /\b(?:sh|bash|zsh|dash|ksh|fish|python3?|node|bun|deno|perl|ruby|php|osascript|eval|source|ssh|xargs|exec)\b/;
+const HEREDOC_OPEN = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/g;
+
+/**
+ * Drops heredoc bodies that are only data (a commit message, `cat > file`), so a
+ * line in them is not read as a command. A body fed to a shell or interpreter on
+ * the same line is kept: that text runs.
+ */
+export function withoutDataHeredocs(cmd: string): string {
+	const lines = cmd.split("\n");
+	const kept: string[] = [];
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index]!;
+		kept.push(line);
+		const tags = [...line.matchAll(HEREDOC_OPEN)].map((match) => match[2]!);
+		if (tags.length === 0 || RUNS_HEREDOC.test(line)) continue;
+		for (const tag of tags) {
+			while (index + 1 < lines.length && lines[index + 1]!.trim() !== tag) index++;
+			if (index + 1 < lines.length) kept.push(lines[++index]!);
+		}
+	}
+	return kept.join("\n");
+}
+
 // --- evaluation ---
 
 export function evaluatePermission(
@@ -193,7 +217,7 @@ const PERMISSIONS_PATH = path.join(os.homedir(), ".pi", "agent", "permissions.js
 
 export function loadPermissions(): PermissionRule[] {
 	try {
-		const raw = fs.readFileSync(PERMISSIONS_PATH, "utf-8");
+		const raw = fs.readFileSync(process.env.PI_PERMISSIONS_FILE || PERMISSIONS_PATH, "utf-8");
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return [];
 		return parsed;

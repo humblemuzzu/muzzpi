@@ -1,9 +1,9 @@
-/** apply_patch comment gate. behaviour rules are loaded by system-prompt.ts. */
+/** edit/write comment gate. behaviour rules are loaded by system-prompt.ts. */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_THRESHOLDS, judge, type Thresholds } from "./comment-gate";
 
-const GATED_TOOL = "apply_patch";
+const GATED_TOOLS = new Set(["edit", "write"]);
 
 function envNum(name: string, fallback: number): number {
 	const raw = process.env[name];
@@ -24,7 +24,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
 	if (process.env.PI_GUARDRAILS_OFF === "1") return;
 
 	pi.on("tool_call", async (event) => {
-		if (event.toolName !== GATED_TOOL) return;
+		if (!GATED_TOOLS.has(event.toolName)) return;
 
 		/*
 		 * Any failure here means the gate could not decide, and a gate that

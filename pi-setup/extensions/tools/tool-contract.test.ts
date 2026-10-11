@@ -253,8 +253,8 @@ describe("tool contract: grammar sampling stays opt-in", () => {
 	test("no sub-agent tool declares constrainedSampling", () => {
 		// pi-ai's "exactly one required string property" rule only binds tools
 		// that opt in (resolveGrammarConstrainedSampling returns early without a
-		// `constrainedSampling` field). apply_patch opts in; these must not, or
-		// adding a second required parameter would start throwing at request time.
+		// `constrainedSampling` field). sub-agent tools must not opt in, or adding
+		// a second required parameter would start throwing at request time.
 		for (const [name, tool] of SUB_AGENT_TOOLS) {
 			expect((tool as any).constrainedSampling, `${name} must not opt in`).toBeUndefined();
 		}

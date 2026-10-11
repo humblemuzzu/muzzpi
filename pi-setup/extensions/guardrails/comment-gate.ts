@@ -1,5 +1,5 @@
 /**
- * Comment gate — decides whether an apply_patch call adds too much commentary.
+ * Comment gate — decides whether an edit or write call adds too much commentary.
  *
  * Pure. No I/O, no pi imports, so the whole decision is testable without a
  * session. index.ts owns the hook; this file owns the judgement.
@@ -154,7 +154,7 @@ export function countLines(lines: string[], syntax: Syntax): LineCounts {
 	return { comment, code, longestRun };
 }
 
-/** One file's worth of newly added text, pulled out of an apply_patch call. */
+/** One chunk of newly added text, pulled out of an edit or write call. */
 export interface AddedText {
 	path: string;
 	lines: string[];
@@ -163,7 +163,7 @@ export interface AddedText {
 /**
  * Lines present in `next` but not in `prev`, compared as a multiset.
  *
- * An edit's new_string usually replays surrounding context that was already on
+ * An edit's newText usually replays surrounding context that was already on
  * disk. Counting all of it would blame the model for comments it merely moved,
  * so only genuinely new lines are judged.
  */
@@ -182,80 +182,19 @@ function newLines(prev: string, next: string): string[] {
 	return added;
 }
 
-interface OpLike {
-	op?: string;
-	path?: string;
-	to?: string;
-	content?: string;
-	old_string?: string;
-	new_string?: string;
-}
-
-function fromOp(op: OpLike): AddedText | undefined {
-	const target = op.path ?? op.to;
-	if (!target) return undefined;
-
-	if (typeof op.content === "string") {
-		return { path: target, lines: op.content.split("\n") };
-	}
-	if (typeof op.new_string === "string") {
-		return { path: target, lines: newLines(op.old_string ?? "", op.new_string) };
-	}
-	return undefined;
-}
-
-/**
- * Added lines per file from a Codex patch envelope.
- *
- * `+++` is a unified-diff header. apply_patch envelopes do not use one, but a
- * pasted diff can arrive through the same field, and counting its header as an
- * added line would be wrong in a way nobody would ever debug.
- */
-function fromEnvelope(input: string): AddedText[] {
-	const byPath = new Map<string, string[]>();
-	let current = "";
-
-	for (const line of input.split("\n")) {
-		const header = /^\*\*\* (?:Add|Update) File: (.+)$/.exec(line.trim());
-		if (header) {
-			current = header[1].trim();
-			if (!byPath.has(current)) byPath.set(current, []);
-			continue;
-		}
-		if (line.trim().startsWith("*** ")) {
-			current = "";
-			continue;
-		}
-		if (!current) continue;
-		if (line.startsWith("+") && !line.startsWith("+++")) {
-			byPath.get(current)?.push(line.slice(1));
-		}
-	}
-
-	return [...byPath].map(([path, lines]) => ({ path, lines }));
-}
-
-/** Every chunk of newly added text in an apply_patch call, whichever lane it used. */
+/** Arguments arrive after pi's prepareArguments: `{ path, content }` or `{ path, edits: [{ oldText, newText }] }`. */
 export function collectAdded(args: Record<string, unknown>): AddedText[] {
+	const filePath = args.path;
+	if (typeof filePath !== "string" || !filePath) return [];
+	if (typeof args.content === "string") return [{ path: filePath, lines: args.content.split("\n") }];
+	if (!Array.isArray(args.edits)) return [];
 	const out: AddedText[] = [];
-
-	if (typeof args.input === "string") out.push(...fromEnvelope(args.input));
-
-	const opsField = args.ops ?? (args as { edits?: unknown }).edits;
-	if (Array.isArray(opsField)) {
-		for (const raw of opsField) {
-			if (!raw || typeof raw !== "object") continue;
-			const op = raw as OpLike;
-			// A batch may inherit the top-level path (pi's native edit shape).
-			const merged: OpLike = { ...op, path: op.path ?? (args.path as string | undefined) };
-			const added = fromOp(merged);
-			if (added) out.push(added);
-		}
+	for (const raw of args.edits) {
+		if (!raw || typeof raw !== "object") continue;
+		const { oldText, newText } = raw as { oldText?: unknown; newText?: unknown };
+		if (typeof newText !== "string") continue;
+		out.push({ path: filePath, lines: newLines(typeof oldText === "string" ? oldText : "", newText) });
 	}
-
-	const top = fromOp(args as OpLike);
-	if (top) out.push(top);
-
 	return out;
 }
 
@@ -277,9 +216,9 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
 };
 
 /**
- * Judge one apply_patch call.
+ * Judge one edit or write call.
  *
- * Reports the first file that trips a trigger rather than every file, because
+ * Reports the first chunk that trips a trigger rather than every chunk, because
  * the message is an instruction to the model and a list invites it to fix the
  * cheapest entry and retry.
  */

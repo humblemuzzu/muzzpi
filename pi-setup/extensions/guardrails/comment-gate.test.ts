@@ -83,54 +83,35 @@ describe("countLines — other syntaxes", () => {
 });
 
 describe("collectAdded", () => {
-	test("write lane takes the whole file", () => {
+	test("write takes the whole file", () => {
 		const added = collectAdded({ path: "a.ts", content: "// x\nconst a = 1;" });
 		expect(added).toEqual([{ path: "a.ts", lines: ["// x", "const a = 1;"] }]);
 	});
 
-	test("edit lane ignores lines carried over from old_string", () => {
+	test("edit ignores lines carried over from oldText", () => {
 		const added = collectAdded({
 			path: "a.ts",
-			old_string: "const a = 1;",
-			new_string: "// why\nconst a = 1;",
+			edits: [{ oldText: "const a = 1;", newText: "// why\nconst a = 1;" }],
 		});
 		expect(added[0].lines).toEqual(["// why"]);
 	});
 
-	test("batch lane collects every op and inherits a top-level path", () => {
+	test("edit yields one chunk per entry, all on the call's path", () => {
 		const added = collectAdded({
-			path: "top.ts",
-			ops: [
-				{ content: "const a = 1;" },
-				{ path: "b.ts", old_string: "", new_string: "// b" },
+			path: "a.ts",
+			edits: [
+				{ oldText: "x", newText: "const a = 1;" },
+				{ oldText: "y", newText: "// b" },
 			],
 		});
-		expect(added).toHaveLength(2);
-		expect(added[0].path).toBe("top.ts");
-		expect(added[1].path).toBe("b.ts");
-	});
-
-	test("envelope lane takes only added lines, per file", () => {
-		const added = collectAdded({
-			input: [
-				"*** Begin Patch",
-				"*** Update File: a.ts",
-				" context",
-				"-gone",
-				"+// added",
-				"*** Update File: b.ts",
-				"+const b = 2;",
-				"*** End Patch",
-			].join("\n"),
-		});
 		expect(added).toEqual([
-			{ path: "a.ts", lines: ["// added"] },
-			{ path: "b.ts", lines: ["const b = 2;"] },
+			{ path: "a.ts", lines: ["const a = 1;"] },
+			{ path: "a.ts", lines: ["// b"] },
 		]);
 	});
 
-	test("a move contributes no added text", () => {
-		expect(collectAdded({ op: "move", path: "a.ts", to: "b.ts" })).toEqual([]);
+	test("a call without a path contributes nothing", () => {
+		expect(collectAdded({ content: "// x" })).toEqual([]);
 	});
 });
 
@@ -195,44 +176,33 @@ describe("judge", () => {
 
 	test("does not block a pure comment deletion", () => {
 		expect(
-			judge({ path: "a.ts", old_string: `${header(28)}\nconst x = 1;`, new_string: "const x = 1;" })
-				.blocked,
+			judge({ path: "a.ts", edits: [{ oldText: `${header(28)}\nconst x = 1;`, newText: "const x = 1;" }] }).blocked,
 		).toBe(false);
 	});
 
 	test("does not block when an edit only moves an existing block", () => {
 		const block = `${header(28)}`;
 		expect(
-			judge({ path: "a.ts", old_string: `${block}\nconst x = 1;`, new_string: `const x = 1;\n${block}` })
+			judge({ path: "a.ts", edits: [{ oldText: `${block}\nconst x = 1;`, newText: `const x = 1;\n${block}` }] })
 				.blocked,
 		).toBe(false);
 	});
 
-	test("blocks a bad file inside an otherwise clean batch", () => {
+	test("blocks a bad entry inside an otherwise clean edit", () => {
 		const verdict = judge({
-			ops: [
-				{ path: "good.ts", content: "const a = 1;" },
-				{ path: "bad.ts", content: `${header(28)}\nconst b = 2;` },
+			path: "bad.ts",
+			edits: [
+				{ oldText: "a", newText: "const a = 1;" },
+				{ oldText: "b", newText: `${header(28)}\nconst b = 2;` },
 			],
 		});
 		expect(verdict.blocked).toBe(true);
 		expect(verdict.reason).toContain("bad.ts");
 	});
 
-	test("blocks through the envelope lane too", () => {
-		const input = [
-			"*** Begin Patch",
-			"*** Update File: a.ts",
-			...header(28).split("\n").map((l) => `+${l}`),
-			"+const x = 1;",
-			"*** End Patch",
-		].join("\n");
-		expect(judge({ input }).blocked).toBe(true);
-	});
-
 	test("empty and malformed calls pass", () => {
 		expect(judge({}).blocked).toBe(false);
-		expect(judge({ ops: "nonsense" as unknown as [] }).blocked).toBe(false);
+		expect(judge({ path: "a.ts", edits: "nonsense" as unknown as [] }).blocked).toBe(false);
 		expect(judge({ path: "a.ts" }).blocked).toBe(false);
 	});
 

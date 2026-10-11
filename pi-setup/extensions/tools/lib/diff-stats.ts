@@ -1,11 +1,4 @@
-/**
- * diff statistics shared by the file-mutating tools.
- *
- * extracted from edit-file.ts so apply_patch renders the SAME `+3 ~1 -2`
- * summary line. keeping the two in sync by copy-paste guarantees they drift;
- * and `edit-file.ts` is scheduled for deletion once apply_patch is the only
- * editor, at which point this stays put.
- */
+/** diff statistics (`+3 ~1 -2`) shared by the file-mutating tools. */
 
 import type { BoxSection } from "./box-format";
 

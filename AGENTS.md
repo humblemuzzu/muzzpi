@@ -130,15 +130,10 @@ hardcode `/opt/homebrew` in a script**: `install.sh`, `verify-patches.sh`,
 
 ### pi-tool-display config (required)
 
-```json
-{ "registerToolOverrides": { "read": false, "grep": false, "find": false,
-  "ls": false, "bash": false, "edit": false, "write": false },
-  "enableNativeUserMessageBox": true }
-```
-
-Its overrides bootstrap from pi's DEFAULT tools, so any `true` clobbers our
-mutex locking, secret scrubbing, git trailers and image support. Not in the npm
-package; recreate it after a delete-and-reinstall.
+`pi-setup/extensions/pi-tool-display/config.json`: every `registerToolOverrides`
+entry `false`. Its overrides bootstrap from pi's DEFAULT tools, so any `true`
+clobbers our edit/write wrapper, mutex locking, secret scrubbing and image
+support. Not in the npm package; recreate it after a delete-and-reinstall.
 
 ### pi-mcp-adapter config (required)
 
@@ -255,15 +250,16 @@ installed by herdr, not from this repo; leave it.
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border |
 | `subagent-inspector/` | Ctrl+Shift+A / `/subagents` — sub-agent transcripts |
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
-| `guardrails/` | comment gate on `apply_patch` |
+| `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
 | `tools/` | custom tools |
 
 ### guardrails — the comment gate, and where the rules live
 
-`guardrails/` blocks an `apply_patch` that adds a comment run over 12 lines
+`guardrails/` blocks an `edit` or `write` that adds a comment run over 12 lines
 **or** more than 0.5 comment lines per line of code (each trigger catches what
-the other misses). Only real source extensions are gated. **It fails open on
+the other misses). It sees arguments after pi's `prepareArguments`, so only
+pi's two shapes. Only real source extensions are gated. **It fails open on
 any error.** `PI_GUARDRAILS_OFF=1` disables it; `PI_GUARDRAILS_MAX_COMMENT_RUN`,
 `_MAX_COMMENT_RATIO`, `_MIN_COMMENTS` retune it.
 
@@ -336,26 +332,25 @@ output/exec flags. A guardrail, not a sandbox.
 `oracle` returns a **verdict** and has unrestricted bash; `chad` returns
 **evidence** and can write nothing. Finding out → chads; deciding → oracle.
 
-### apply_patch — four lanes, one engine
+### edit / write — pi's tools, thinly wrapped
 
-Lanes: `{ path, content }`, `{ path, old_string, new_string, replace_all? }`,
-`{ ops: [ … ] }` (all-or-nothing), `{ input: "*** Begin Patch …" }`. Every lane
-goes through the same permission → mutex → lock → snapshot → apply →
-commit-or-rollback path.
+`edit-write.ts` registers pi's own tools (`create*ToolDefinition` with injected
+`operations`) under pi's names; schema, prompt text and matching stay upstream's
+— **never reimplement matching**. The wrapper adds only: undo records (saved
+before the write; no record, no write), `permissions.json` checked on the path
+pi resolves and its realpath, `lib/mutex.ts`, Claude's field names, and errors
+with the closest line / duplicate lines / "identical, already done". UTF-8 text
+only; no `replace_all`, delete or move (`trash <path>` / `git mv` in bash).
 
-- **Every schema field is optional and must stay that way** — pi validates
-  arguments before `execute()`, so a required field walls off the other lanes.
-- **`constrainedSampling` was REMOVED, not disabled.** pi-ai needs exactly one
-  required string property and throws otherwise. Guarded by `apply-patch.test.ts`.
-- `normalizeCall()` refuses anything that reads as two lanes; operations are
-  never inferred across lanes. Only `input` is rescued as content, never `diff`.
-- Move refuses to clobber a destination. An indentation shift applies only if
-  replaying it on the OLD lines reproduces the disk; tab/space mixing is refused.
+- **Nothing deletes a user file.** `permissions.json` blocks every delete route
+  (pinned by `lib/permissions.test.ts` against the shipped file); undo of a
+  creation goes through `lib/trash.ts`. Only harness temp files are removed.
+- apply_patch is gone (envelope 9.6%, batch 6.8% failures vs ~2%; see
+  `pi-setup/2026-10-11-edit-tool.md`). If GPT models return, gate it by model id.
 - Undo/redo refuse when a later still-applied change touches the path, or the
   file drifted outside the tool (`force: true` overrides and reports the loss).
   Ordering comes from position in `activeIds`, **never `Date.now()`**. Redo
-  takes the *oldest* undone step. Moves record `movePartnerUri` so undo reverts
-  both halves.
+  takes the *oldest* undone step; legacy move records pair by `movePartnerUri`.
 - `lib/mutex.ts` is a module-level Map — it does **not** span processes, so
   concurrent delegates can collide on one file.
 
@@ -542,6 +537,8 @@ injected in the `context` hook telling the model to call that tool
    unpatched; check for new tool/skill name collisions.
 7. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
    there; run `bun test` before deploying.
+8. **After any pi update, make one real `edit` and `write`**: the wrapper rides
+   on pi's `operations` and error strings.
 
 Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 
@@ -549,9 +546,6 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 
 - **Don't edit `/opt/homebrew/lib/node_modules/` directly** — wiped on update.
   Edit in `pi-setup/`, deploy with `install.sh`.
-- **Don't `npm install -g` a pi package.** Use `pi install npm:<name>`.
-- **Don't set pi-tool-display overrides to `true`.**
-- **Don't simplify the pi-mcp-adapter package entry to the string form.**
 - **Don't run `install.sh` without checking what changed** — it overwrites live
   tweaks (after backing them up); it only seeds the two pi-sub settings files.
   `--dry-run` prints every write first.
@@ -560,7 +554,8 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 
 - `pi-setup/2026-05-17-migration-log.md` — v0.74.0 migration, architecture
 - `pi-setup/2026-07-30-bdsqqq-port.md` — sub-agent wiring, OAuth tool-filter
-  trap, apply_patch lanes. **Read before touching tools/subagents.**
+  trap. **Read before touching tools/subagents.**
+- `pi-setup/2026-10-11-edit-tool.md` — edit/write decision, data, scoreboard
 - `pi-setup/2026-08-13-cloudflare-mcp.md` — the 16 Cloudflare servers, auth flow
 - `pi-setup/2026-10-04-you-should-know.md` — the `/ysk` side agent and its cache-cost maths
 - `pi-setup/2026-10-03-cache-playbook.md` — the Max-plan cache drain: measurement, root

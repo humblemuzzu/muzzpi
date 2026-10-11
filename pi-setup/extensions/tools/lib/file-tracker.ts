@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import { moveToTrash } from "./trash";
 
 const FILE_CHANGES_DIR = path.join(os.homedir(), ".pi", "file-changes");
 
@@ -38,12 +39,8 @@ export interface FileChange {
 	timestamp: number;
 
 	/*
-	 * existence/mode tracking (added for apply_patch, which can delete and
-	 * move files — operations edit/write never performed).
-	 *
-	 * these are OPTIONAL for backward compatibility: change records written
-	 * before apply_patch existed do not have them, and revertChange falls
-	 * back to `isNewFile` when they are absent.
+	 * existence/mode tracking. OPTIONAL: older records do not have them, and
+	 * revertChange falls back to `isNewFile` when they are absent.
 	 *
 	 * without beforeExists, reverting a file CREATION wrote an empty file
 	 * instead of removing it, and reverting a MOVE would leave the
@@ -131,21 +128,9 @@ export function saveChange(
 	return id;
 }
 
-/**
- * record several file changes produced by a single tool call.
- *
- * apply_patch mutates any number of files per call, so it needs this;
- * the storage layout already supported it (each change gets its own UUID
- * under the same {toolCallId} prefix, and loadChanges reads them all back).
- *
- * returns the change IDs in the same order as the input.
- */
-export function saveChanges(
-	sessionId: string,
-	toolCallId: string,
-	changes: Array<Omit<FileChange, "id" | "reverted">>,
-): string[] {
-	return changes.map((change) => saveChange(sessionId, toolCallId, change));
+/** forget a record whose write never happened. the record is ours; the user's file was not touched. */
+export function discardChange(sessionId: string, toolCallId: string, changeId: string): void {
+	fs.rmSync(changePath(sessionId, toolCallId, changeId), { force: true });
 }
 
 /**
@@ -246,9 +231,8 @@ export function revertChange(sessionId: string, toolCallId: string, changeId: st
 		}
 	} else {
 		// the change CREATED this file, so undoing it means removing the file
-		// rather than truncating it to empty. content stays in this record, so
-		// the removal is recoverable.
-		fs.rmSync(filePath, { force: true });
+		// rather than truncating it to empty — to the Trash, never deleted.
+		moveToTrash(filePath);
 	}
 
 	// mark as reverted on disk
@@ -263,7 +247,7 @@ export function revertChange(sessionId: string, toolCallId: string, changeId: st
  * filtered to only the given tool call IDs (branch awareness).
  *
  * the caller gets activeToolCallIds by scanning the current
- * session branch for apply_patch tool calls.
+ * session branch for tool calls.
  */
 /**
  * the OTHER half of a move, if this change is one half of one.
@@ -371,7 +355,7 @@ export function reapplyChange(
 			}
 		}
 	} else {
-		fs.rmSync(filePath, { force: true });
+		moveToTrash(filePath);
 	}
 
 	change.reverted = false;

@@ -139,8 +139,9 @@ describe("every sub-agent's prompt matches its real allowlist", () => {
 		expect(librarianAllowlist()).not.toContain("read");
 		expect(librarianAllowlist()).toContain("read_github");
 		// delegate is the only child that can mutate files
-		expect(delegateAllowlist()).toContain("apply_patch");
-		expect(oracleAllowlist()).not.toContain("apply_patch");
+		expect(delegateAllowlist()).toEqual(expect.arrayContaining(["edit", "write"]));
+		expect(oracleAllowlist()).not.toContain("edit");
+		expect(oracleAllowlist()).not.toContain("write");
 		expect(finderAllowlist()).not.toContain("bash");
 	});
 });

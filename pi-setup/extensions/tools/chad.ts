@@ -16,7 +16,7 @@
  * provide, because `lib/mutex.ts` is a module-level Map and every sub-agent is
  * a separate OS process.
  *
- * second: dropping `apply_patch` is only half a constraint. bash writes. so the
+ * second: dropping `edit`/`write` is only half a constraint. bash writes. so the
  * child also runs under the read-only bash policy (lib/read-only-bash.ts),
  * enforced in its own process, not requested in its prompt.
  *
@@ -32,7 +32,7 @@ import { runSubAgent, toolError } from "./lib/run-sub-agent";
 import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
 
 /*
- * NO mutation tool of any kind: no apply_patch, no format_file, no undo_edit.
+ * NO mutation tool of any kind: no edit, no write, no format_file, no undo_edit.
  * `bash` is present but runs under the read-only policy (readOnlyBash below).
  *
  * `screenshot` is in — grok sees images. `oracle`/`finder`/`librarian` are out
@@ -78,7 +78,7 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 			"parallel research.\n\n" +
 			"Tools: read, grep, find, ls, bash (read-only), skill, web_search, read_web_page, " +
 			"screenshot, and the seven GitHub tools.\n\n" +
-			"IT CANNOT CHANGE ANYTHING. There is no apply_patch and bash is restricted to " +
+			"IT CANNOT CHANGE ANYTHING. There is no edit or write, and bash is restricted to " +
 			"read-only commands. Use it to find out; use delegate to do.\n\n" +
 			"When to use chad:\n" +
 			"- A question that needs a lot of reading to answer properly\n" +

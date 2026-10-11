@@ -17,14 +17,15 @@ describe("chad allowlist: read-only by construction", () => {
 	test("carries NO mutation tool of any kind", () => {
 		// the whole safety argument rests on this list. `bash` is present but
 		// gated by lib/read-only-bash.ts; everything here writes unconditionally.
-		for (const tool of ["apply_patch", "edit", "write", "format_file", "undo_edit", "redo_edit"]) {
+		for (const tool of ["edit", "write", "format_file", "undo_edit", "redo_edit"]) {
 			expect(allowlist).not.toContain(tool);
 		}
 	});
 
-	test("delegate has apply_patch and chad does not — they are not the same tool", () => {
-		expect(delegateAllowlist()).toContain("apply_patch");
-		expect(allowlist).not.toContain("apply_patch");
+	test("delegate has edit and write and chad does not — they are not the same tool", () => {
+		expect(delegateAllowlist()).toEqual(expect.arrayContaining(["edit", "write"]));
+		expect(allowlist).not.toContain("edit");
+		expect(allowlist).not.toContain("write");
 	});
 
 	test("has the research toolset", () => {
@@ -95,14 +96,14 @@ describe("chad description tells the parent what it is", () => {
 	});
 
 	test("never advertises a mutation tool", () => {
-		// apply_patch may only appear as a denial. the tool inventory line is
-		// what a model reads as "what I get", so it must not appear there.
+		// edit/write may only appear as a denial. the tool inventory line is
+		// what a model reads as "what I get", so they must not appear there.
 		const toolsLine = chad.description
 			.split("\n")
 			.find((line: string) => line.startsWith("Tools:"));
 		expect(toolsLine).toBeDefined();
-		expect(toolsLine).not.toContain("apply_patch");
-		expect(chad.description).toContain("no apply_patch");
+		expect(toolsLine).not.toMatch(/\b(edit|write)\b/);
+		expect(chad.description).toContain("no edit or write");
 	});
 });
 

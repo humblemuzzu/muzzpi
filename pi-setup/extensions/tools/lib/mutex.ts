@@ -1,10 +1,9 @@
 /**
- * per-path async mutex for file operations.
+ * per-path async mutex shared by edit, write, bash, format_file and undo_edit.
  *
- * serializes concurrent edits to the same file path to prevent
- * partial writes and race conditions. pi's built-in edit tool doesn't.
- * this mutex is keyed by resolved absolute path — two relative paths
- * pointing to the same file share one lock.
+ * keyed by resolved absolute path — two relative paths pointing to the same
+ * file share one lock. pi's edit/write also take pi's own mutation queue
+ * inside this lock; the two are separate maps, so they cannot deadlock.
  */
 
 import * as path from "node:path";
@@ -36,24 +35,3 @@ export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): P
 	}
 }
 
-/**
- * execute `fn` while holding exclusive locks on EVERY given path.
- *
- * apply_patch mutates several files as one atomic batch, so it must hold
- * all locks for the whole operation rather than locking each file in turn.
- *
- * locks are acquired in sorted order and duplicates are collapsed. the sort
- * is what prevents deadlock: two concurrent batches sharing files always
- * request them in the same global order, so neither can hold one while
- * waiting on the other.
- */
-export async function withFileLocks<T>(filePaths: string[], fn: () => Promise<T>): Promise<T> {
-	const ordered = [...new Set(filePaths.map((p) => path.resolve(p)))].sort();
-
-	const acquire = (index: number): Promise<T> => {
-		const next = ordered[index];
-		return next === undefined ? fn() : withFileLock(next, () => acquire(index + 1));
-	};
-
-	return acquire(0);
-}

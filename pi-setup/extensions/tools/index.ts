@@ -2,7 +2,7 @@
  * tools extension — custom tool implementations for pi.
  *
  * replaces pi's built-in tools with versions that add:
- * - file mutex locking (apply_patch)
+ * - file mutex locking (edit, write, bash, format_file, undo_edit)
  * - file change tracking for undo_edit (disk-persisted, branch-aware)
  *
  * file changes persist to ~/.pi/file-changes/{sessionId}/ as JSON files
@@ -16,7 +16,7 @@
 import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
 import { createReadTool, NORMAL_LIMITS, COMPACT_LIMITS } from "./read";
 import { createLsTool } from "./ls";
-import { createApplyPatchTool } from "./apply-patch";
+import { createEditTool, createWriteTool } from "./edit-write";
 import { createGrepTool } from "./grep";
 import { createGlobTool } from "./glob";
 import { createBashTool } from "./bash";
@@ -65,10 +65,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool(createReadTool(limits));
 	pi.registerTool(createLsTool(limits));
-	// apply_patch is the ONLY file-mutation tool. it replaced edit-file.ts and
-	// create-file.ts, which handled one file per call with no cross-file
-	// atomicity and — on the `edits` array path — no ambiguous-match guard.
-	pi.registerTool(createApplyPatchTool());
+	// same names as pi's built-ins, so these replace them.
+	pi.registerTool(createEditTool());
+	pi.registerTool(createWriteTool());
 	pi.registerTool(createGrepTool());
 	pi.registerTool(createGlobTool());
 	pi.registerTool(createBashTool());
@@ -97,7 +96,7 @@ export default function (pi: ExtensionAPI) {
 	// delegate replaced task.ts: same spawn, plus resumable children via
 	// continueId. Task always ran --no-session, so every child was a dead end.
 	pi.registerTool(createDelegateTool({ models }));
-	// chad is delegate's read-only counterpart: no apply_patch, and its bash
+	// chad is delegate's read-only counterpart: no edit/write, and its bash
 	// runs under the read-only policy in lib/read-only-bash.ts.
 	pi.registerTool(createChadTool({
 		systemPrompt: readAgentPrompt("agent.amp.chad.md"),
@@ -280,27 +279,5 @@ export default function (pi: ExtensionAPI) {
 				matched.length > 0 ? "success" : "info",
 			);
 		},
-	});
-
-	/*
-	 * hide pi's NATIVE edit/write.
-	 *
-	 * we used to register our own `edit` and `write`, which shadowed the
-	 * built-ins by name. deleting edit-file.ts / create-file.ts therefore does
-	 * not remove those tools — it UN-shadows pi's originals, which have none of
-	 * our mutex locking, undo tracking, secret scrubbing or permission checks.
-	 * so the built-ins have to be dropped from the active set explicitly.
-	 *
-	 * done at session_start rather than at registration because the active set
-	 * is assembled after every extension has registered.
-	 */
-	pi.on("session_start", () => {
-		const active = pi.getActiveTools();
-		const filtered = active.filter((name) => name !== "edit" && name !== "write");
-		// only touch the set if something actually showed up; setActiveTools on
-		// an unchanged list is a pointless write that other extensions may react to.
-		if (filtered.length !== active.length) {
-			pi.setActiveTools(filtered);
-		}
 	});
 }

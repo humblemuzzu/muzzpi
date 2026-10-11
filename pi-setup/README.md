@@ -49,7 +49,7 @@ loader level turns one off.
 | `subagent-inspector/` | `Ctrl+Shift+A` / `/subagents` — drill into a sub-agent's live transcript |
 | `local-model.ts` | `/local` — start/stop the llama.cpp router |
 | `deepseek-peak/` | `/deepseek` — a peak/off-peak pricing clock in the editor border |
-| `guardrails/` | Comment gate on `apply_patch` (the behaviour rules themselves ship in the system prompt, not here) |
+| `guardrails/` | Comment gate on `edit` / `write` (the behaviour rules themselves ship in the system prompt, not here) |
 | `theme-studio/` | `/studio`, `/theme`, `Ctrl+Shift+K` — live-preview a pi theme and the Ghostty theme/font/size; Esc reverts, Enter keeps |
 | `you-should-know/` | `/ysk` — a side agent on `deepseek-flash` that flags what you might have missed, and inlines what each sub-agent actually did as evidence. **Off until `/ysk on`**; ~0.1–0.3¢ per check |
 
@@ -59,8 +59,8 @@ The `tools/` extension replaces pi's built-ins and adds new tools:
 
 **Replaced built-ins**: `read`, `ls`, `grep`, `find` (registers as `find`), `bash` — all with
 mutex locking, secret scrubbing, permission rules, and sub-agent compact modes.
-`apply_patch` is the ONLY file-mutation tool (write/edit/batch/envelope lanes, undo tracking) —
-it replaced `edit`/`write`, and pi's natives are hidden at session start.
+`edit` / `write` are pi's own tools wrapped with undo tracking, permission rules, the shared
+file lock, Claude's field names and clearer errors (`edit-write.ts`).
 `format_file`, `skill`, `undo_edit` / `redo_edit` round out the replacements.
 
 **Dedicated sub-agents** — each runs on the model and thinking level `agent-models.json` names
@@ -130,7 +130,7 @@ and `install.sh` does not create them.
 ### Permissions
 - Blocks `git add -A` / `git add .` (forces explicit staging)
 - Blocks force push
-- Blocks `rm` (use `trash` instead)
+- Blocks every way to delete — `rm`, `rmdir`, `unlink`, `shred`, `find -delete`, `git rm`, `git clean`, delete calls in scripts (use `trash` instead)
 
 ### Pi Packages
 `settings.json` `packages` is the list: `pi-token-burden`, `@benvargas/pi-claude-code-use`,
@@ -160,7 +160,7 @@ pi-setup/
 │   ├── subagent-inspector/     # Ctrl+Shift+A sub-agent transcript inspector
 │   ├── theme-studio/           # /studio — live theme + Ghostty preview
 │   ├── deepseek-peak/          # /deepseek — peak/off-peak clock
-│   ├── guardrails/             # apply_patch comment gate
+│   ├── guardrails/             # edit/write comment gate
 │   ├── you-should-know/        # /ysk — side agent (off until asked)
 │   ├── tools/                  # custom tools + shared lib/ (tests run here: bun test)
 │   ├── pi-tool-display/        # config.json (all tool overrides false — required)

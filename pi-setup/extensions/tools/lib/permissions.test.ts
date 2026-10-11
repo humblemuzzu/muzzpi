@@ -1,5 +1,7 @@
 import { describe, it, expect } from "bun:test";
-import { evaluatePermission, type PermissionRule } from "./permissions";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { evaluatePermission, withoutDataHeredocs, type PermissionRule } from "./permissions";
 
 const RULES: PermissionRule[] = [
 	{
@@ -190,17 +192,12 @@ describe("evaluatePermission: within containment guard", () => {
 	});
 });
 
-// --- regex: escape hatch ---
-// plain `*` globs are anchored, so a command-word guard had to enumerate every
-// separator and silently missed "echo hi;rm f", "do rm", "xargs rm", "-exec rm".
-// these pin both halves: the bypasses are caught AND ordinary commands that
-// merely contain the letters "rm" are not.
-describe("evaluatePermission: regex: patterns", () => {
-	const RM_GUARD = String.raw`regex:(^|[;&|(]|\bdo\b|\bthen\b|\belse\b|\bxargs\b|-exec)\s*\brm\b`;
-	const rules: PermissionRule[] = [
-		{ tool: "Bash", matches: { cmd: [RM_GUARD] }, action: "reject", message: "use trash" },
-		{ tool: "*", action: "allow" },
-	];
+// pins both halves of the shipped delete guard: every bypass is caught AND
+// ordinary commands that merely contain the letters "rm" are not.
+describe("the real permissions.json: nothing deletes, everything goes to trash", () => {
+	const rules: PermissionRule[] = JSON.parse(
+		fs.readFileSync(path.join(import.meta.dir, "../../../permissions.json"), "utf8"),
+	);
 	const verdict = (cmd: string) => evaluatePermission("Bash", { cmd }, rules).action;
 
 	it("blocks rm at the start of a command", () => {
@@ -209,7 +206,10 @@ describe("evaluatePermission: regex: patterns", () => {
 	});
 
 	it("blocks rm after any separator, with or without spaces", () => {
-		for (const cmd of ["echo hi && rm f", "echo hi ; rm f", "echo hi; rm f", "echo hi;rm f", "true || rm f", "(rm f)"]) {
+		for (const cmd of [
+			"echo hi && rm f", "echo hi ; rm f", "echo hi; rm f", "echo hi;rm f", "true || rm f", "(rm f)",
+			"echo $(rm f)", "echo `rm f`", "{ rm f; }", "echo hi\nrm f",
+		]) {
 			expect(verdict(cmd)).toBe("reject");
 		}
 	});
@@ -218,15 +218,85 @@ describe("evaluatePermission: regex: patterns", () => {
 		expect(verdict("for f in *; do rm $f; done")).toBe("reject");
 		expect(verdict("if x; then rm f; fi")).toBe("reject");
 		expect(verdict("find . -exec rm {} +")).toBe("reject");
+		expect(verdict("find . -execdir rm {} +")).toBe("reject");
 		expect(verdict("xargs rm < list")).toBe("reject");
+		expect(verdict("ls | xargs -0 rm")).toBe("reject");
 	});
 
-	it("does NOT fire on commands that merely contain 'rm'", () => {
-		for (const cmd of ["npm run rm-cache", "grep rm file.txt", "rmdir empty", "warm up", "echo confirm", "trash foo"]) {
+	it("blocks rm behind a path, a quote, a backslash or a wrapper", () => {
+		for (const cmd of [
+			"/bin/rm f", "/usr/bin/rm -rf x", "\\rm f", '"rm" f', "command rm f", "builtin rm f", "sudo rm f",
+			"sudo -n rm f", "sudo -u root rm f", "env rm f", "env FOO=1 rm f", "FOO=1 rm f", "nohup rm f", "time rm f",
+			"exec rm f", "nice -n 5 rm f", "timeout 5 rm f", "ssh host rm f", "ssh host 'rm f'", "busybox rm f",
+			"eval rm f", 'eval "rm f"', "$(which rm) f", "`which rm` f", "ls | xargs -I{} rm {}", "find . -exec /bin/rm {} +",
+		]) {
+			expect(verdict(cmd)).toBe("reject");
+		}
+	});
+
+	it("blocks rm inside a shell string or a script's process call", () => {
+		for (const cmd of [
+			'sh -c "rm f"', "bash -c 'rm f'", "bash -lc 'rm f'", 'find . -exec sh -c "rm {}" \\;', 'git submodule foreach "rm f"',
+			`python3 -c "import os; os.system('rm f')"`, `python3 -c "import subprocess; subprocess.run(['rm','f'])"`,
+		]) {
+			expect(verdict(cmd)).toBe("reject");
+		}
+	});
+
+	it("blocks every other way to delete", () => {
+		for (const cmd of [
+			"rmdir empty", "unlink f", "shred -u f", "find . -name '*.log' -delete", "sudo find / -delete",
+			"git rm f", "git -C repo rm -r dir", "git clean -fd", "git rm $(git ls-files --cached)", "git rm foo # --cached",
+			"rsync -a --delete src/ dst/", "rsync --remove-source-files a b",
+			`python3 -c "import os; os.remove('f')"`, `python -c "import shutil; shutil.rmtree('d')"`,
+			`python3 -c "from os import remove; remove('f')"`, `node -e "require('fs').rmSync('d', {recursive: true})"`,
+			`node -e "require('fs').promises.rm('d')"`, `node -e "require('fs/promises').rm('d')"`,
+			`bun -e "await Bun.file('f').unlink()"`, `perl -e 'unlink("f")'`, `perl -e 'unlink "f"'`,
+			`perl -MFile::Path -e 'rmtree("d")'`, `deno eval "Deno.remove('f')"`, `ruby -e 'Dir.rmdir("d")'`,
+			`ruby -e 'FileUtils.rm_rf("d")'`, "python3 - <<'EOF'\nfrom pathlib import Path\nPath('f').unlink()\nEOF",
+		]) {
+			expect(verdict(cmd)).toBe("reject");
+		}
+	});
+
+	it("says to use trash", () => {
+		expect(evaluatePermission("Bash", { cmd: "rm f" }, rules).message).toContain("trash <path>");
+	});
+
+	it("does NOT fire on commit messages, dry runs, or commands that merely contain 'rm'", () => {
+		for (const cmd of [
+			"npm run rm-cache", "grep rm file.txt", "warm up", "echo confirm", "trash foo", "trash -v a b",
+			"git rm --cached f", "git rm -r --cached dir", "git log --grep rm", "docker run --rm img", "ls node_modules/.bin",
+			"grep -rn unlinkSync src", 'git commit -m "git clean up"', 'git commit -m "git rm foo"', 'git commit -m "do rm"',
+			'git commit -m "fix: time rm"', 'git commit -m "find -delete support"', 'git commit -m "rsync --delete support"',
+			"git clean -n", "git clean -nd", "git clean --dry-run", "git rm -n f", 'echo "then rm"', "command -v rm",
+			'rg "exec rm" .', "node a.js; git log --grep=unlinkSync", "node scripts/rmSync.js", "cd x && ./scripts/rm.sh",
+			"cat .env", "find . -name '*.ts' -print", "rsync -a src/ dst/", "which trash", "pnpm remove lodash",
+		]) {
 			expect(verdict(cmd)).toBe("allow");
 		}
 	});
 
+	it("a heredoc that is only data (commit message, file body) is not read as commands", () => {
+		const bash = (cmd: string) => evaluatePermission("Bash", { cmd: withoutDataHeredocs(cmd) }, rules).action;
+		expect(bash("git commit -F - <<'EOF'\nblock deletes:\nrsync --delete, rm -rf, git clean\nEOF")).toBe("allow");
+		expect(bash('cat > notes.md <<EOF\nrm f\nEOF\necho done')).toBe("allow");
+		expect(bash("cat > notes.md <<EOF\nrm f\nEOF\nrm g")).toBe("reject");
+		expect(bash("bash <<'EOF'\nrm f\nEOF")).toBe("reject");
+		expect(bash("python3 - <<'EOF'\nimport os; os.remove('f')\nEOF")).toBe("reject");
+		expect(bash("cat <<EOF | sh\nrm f\nEOF")).toBe("reject");
+		expect(bash("ssh host <<EOF\nrm f\nEOF")).toBe("reject");
+	});
+
+	it("stays fast on a huge command full of wrapper and interpreter words", () => {
+		const huge = `cat <<EOF > x\n${"node bun python time sudo exec run call eval xargs ".repeat(8000)}\nEOF`;
+		const started = performance.now();
+		verdict(huge);
+		expect(performance.now() - started).toBeLessThan(200);
+	});
+});
+
+describe("evaluatePermission: regex: patterns", () => {
 	it("fails closed on a malformed regex instead of matching everything", () => {
 		const broken: PermissionRule[] = [
 			{ tool: "*", matches: { cmd: ["regex:([unclosed"] }, action: "reject" },

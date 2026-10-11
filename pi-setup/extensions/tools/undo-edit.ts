@@ -80,10 +80,9 @@ export function createUndoEditTool(): ToolDefinition {
 		label: "Undo Edit",
 		description:
 			"Undo the last change made to a file.\n\n" +
-			"By default this reverts the WHOLE change that last touched the file — so undoing " +
-			"one file of a multi-file apply_patch call rolls back every file that call wrote, " +
-			"and undoing a move restores the file to its original path. Pass scope: \"file\" to " +
-			"revert only the named path.\n\n" +
+			"By default this reverts the WHOLE change that last touched the file — when one " +
+			"tool call wrote several files (a codemode script), every file it wrote is rolled " +
+			"back. Pass scope: \"file\" to revert only the named path.\n\n" +
 			"Returns a diff showing what was undone. Use redo_edit to put it back.",
 
 		parameters: Type.Object({
@@ -252,17 +251,7 @@ export function createUndoEditTool(): ToolDefinition {
 							`those bytes were not recorded anywhere and are gone)`
 						: "";
 
-				/*
-				 * WHOLE-CALL UNDO IS THE DEFAULT.
-				 *
-				 * one apply_patch call is one logical change, and the records were
-				 * always grouped by tool call on disk — but undo only ever reverted
-				 * a single path, so a 7-file batch needed 7 undos and a move needed
-				 * exactly the right 2 (getting it wrong lost the file). Reverting
-				 * the call is what "undo that" has always meant to whoever typed
-				 * it, and it makes the move case correct by construction rather
-				 * than by pairing heuristics.
-				 */
+				// records are grouped by tool call id, so a codemode script's edits undo as one change.
 				if ((params as any).scope !== "file") {
 					const siblings = loadChanges(sessionId, latest.toolCallId).filter((c) => !c.reverted);
 					const net = netPerFile(siblings);
@@ -320,11 +309,10 @@ export function createUndoEditTool(): ToolDefinition {
 				);
 
 				let result = diff;
-				// beforeExists is authoritative when present (apply_patch records it);
-				// older records only have isNewFile.
+				// beforeExists is authoritative when present; older records only have isNewFile.
 				const existedBefore = reverted.beforeExists ?? !reverted.isNewFile;
 				if (!existedBefore) {
-					result += `\n\n(file was created by the reverted edit — file removed)`;
+					result += `\n\n(file was created by the reverted edit — moved to the Trash)`;
 				} else if (reverted.afterExists === false) {
 					result += `\n\n(file was deleted by the reverted edit — file restored)`;
 				}

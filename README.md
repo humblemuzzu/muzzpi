@@ -32,11 +32,11 @@ stock pi. Nothing is forked.
 
 | | vanilla pi 1.1 | muzzpi |
 |---|---|---|
-| Tools the model gets | 4 on by default | 29 of its own, plus codemode and one lazy MCP proxy |
+| Tools the model gets | 4 on by default | 30 of its own, plus codemode and one lazy MCP proxy |
 | Sub-agents | none, by design | 6, each with its own model and thinking level, resumable |
-| Editing | `edit` + `write` | one `apply_patch`: four call shapes, all-or-nothing batches, undo/redo that refuses to clobber drift |
+| Editing | `edit` + `write` | the same `edit` + `write`, plus undo/redo that refuses to clobber drift, permission rules, a comment gate, and errors that show the closest line |
 | Bash | timeout optional, no default | timeout required (1–600s), killed after 300s of no output and no CPU |
-| Command rules | none | `permissions.json`: no `git add -A`, no force push, no `rm`, no shelling out to other agents |
+| Command rules | none | `permissions.json`: no `git add -A`, no force push, no deleting (`trash` only), no shelling out to other agents |
 | Secrets | in the clear | scrubbed from every tool result before the model sees it |
 | Web | none | `web_search`, `read_web_page` with a Q&A child |
 | GitHub | none | 7 tools over `gh api`: read, search, glob, list, commits, diff |
@@ -59,7 +59,7 @@ the tools it has. Pick by what you need back:
 | `librarian` | an explanation across repos | read code on GitHub you have not cloned |
 | `code_review` | a structured review | review a diff described in plain words |
 
-- **chad cannot write.** No `apply_patch`, and its bash runs under an allowlist
+- **chad cannot write.** No `edit` or `write`, and its bash runs under an allowlist
   that refuses redirection, `sed -i`, interpreters and every git subcommand that
   mutates. Finding out is chad; doing is delegate.
 - **The spawn graph is acyclic and pinned by a test.** The only agent that can
@@ -75,9 +75,9 @@ the tools it has. Pick by what you need back:
 
 ## The tools
 
-- **`apply_patch`** is the one way to change a file: whole-file writes, exact
-  replacements, multi-file batches that land all-or-nothing, or a patch envelope.
-  `undo_edit` / `redo_edit` walk it back, even after a restart.
+- **`edit`** and **`write`** are pi's own tools with a thin layer on top: every
+  change is recorded so `undo_edit` / `redo_edit` walk it back, even after a
+  restart. Why not a patch format: [the edit-tool record](pi-setup/2026-10-11-edit-tool.md).
 - **`web_search`** and **`read_web_page`**: fetch a page, or ask a question about
   it and get an answer from a child agent.
 - **7 GitHub tools** read, search and diff any repo you can see, without cloning.
@@ -243,10 +243,10 @@ muzzpi/
 ├── AGENTS.md               the rules and facts every agent reads first
 ├── pi-setup/
 │   ├── extensions/         editor, sub-agent inspector, theme studio, guardrails, …
-│   │   └── tools/          the 29 tools and their tests (bun test)
+│   │   └── tools/          the 30 tools and their tests (bun test)
 │   ├── agents/             system prompt, working rules, one prompt per sub-agent
 │   ├── agent-models.json   which model each sub-agent runs on
-│   ├── permissions.json    what bash and apply_patch may never do
+│   ├── permissions.json    what bash may never do (rules can name edit/write too)
 │   ├── pi-core-patches/    the 3 patched pi files + the pi-tui width patch
 │   ├── config-skills/      12 skills
 │   └── *.md                migration records and investigations
@@ -263,8 +263,8 @@ bug, and [`pi-setup/README.md`](pi-setup/README.md) for the full inventory.
   this sits on.
 - [Amp](https://ampcode.com): the system prompt started as a port of Amp's, which
   is why the prompt files are still named `*.amp.*`.
-- [bdsqqq/dots](https://github.com/bdsqqq/dots): the sub-agent wiring,
-  `apply_patch` and `delegate` began as a port from there.
+- [bdsqqq/dots](https://github.com/bdsqqq/dots): the sub-agent wiring and
+  `delegate` began as a port from there.
 - The packages it runs: [pi-claude-code-use](https://github.com/ben-vargas/pi-packages)
   by Ben Vargas, [pi-sub-bar](https://www.npmjs.com/package/@marckrenn/pi-sub-bar)
   by marckrenn, [pi-tool-display](https://github.com/MasuRii/pi-tool-display),

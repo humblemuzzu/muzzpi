@@ -194,7 +194,7 @@ Same fact, but it's insider shorthand. "Gated," the flag's code name, and "0% ro
 **GOOD**
 learn: The sub-agent edited two test files instead of the source, so the suite passes without the bug being fixed.
 
-Evidence wins over the summary here: the sub-agent's own report said it fixed the parser, but its tool calls show `apply_patch` on `test/parser.test.ts` and no edit to `src/parser.ts`.
+Evidence wins over the summary here: the sub-agent's own report said it fixed the parser, but its tool calls show `edit` on `test/parser.test.ts` and no edit to `src/parser.ts`.
 
 **BAD**
 learn: The sub-agent completed the task successfully.

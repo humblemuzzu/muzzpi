@@ -210,9 +210,8 @@ if [ -f "$SCRIPT_DIR/mcp.json" ]; then
     ok "Global MCP config installed (~/.config/mcp/mcp.json)"
 fi
 if [ -f "$PI_AGENT/mcp.json" ]; then
-    backup_if_exists "$PI_AGENT/mcp.json"
-    run rm -f "$PI_AGENT/mcp.json"
-    ok "Removed leftover $PI_AGENT/mcp.json (adapter reads ~/.config/mcp/mcp.json)"
+    run mv "$PI_AGENT/mcp.json" "$PI_AGENT/mcp.json${BACKUP_SUFFIX}"
+    ok "Moved leftover $PI_AGENT/mcp.json aside (adapter reads ~/.config/mcp/mcp.json)"
 fi
 
 # ── Pi package configs (sub-bar, sub-core) ──

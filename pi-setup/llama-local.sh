@@ -10,7 +10,7 @@
 # 2026-04-06, for months) have two fatal tool-call parser bugs for the lfm2
 # architecture, both fixed upstream in June 2026:
 #   - #24667 double-escaping: `\n` in a tool argument arrives as literal
-#     backslash-n, so every multi-line argument is corrupt (kills apply_patch)
+#     backslash-n, so every multi-line argument is corrupt (kills every edit)
 #   - #24178 parallel calls: `[f(a), f(b)]` is parsed as ONE mangled call
 # Neither errors — they silently produce garbage. Check with `llama-server --version`.
 

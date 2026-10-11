@@ -9,7 +9,7 @@ import { COLLAPSED_EXCERPTS, formatBoxesWindowed, normalizeForDisplay, type BoxS
 import { getText, getContainer } from "./lib/tui";
 import { Type } from "@sinclair/typebox";
 import { withFileLock } from "./lib/mutex";
-import { evaluatePermission, loadPermissions } from "./lib/permissions";
+import { evaluatePermission, loadPermissions, withoutDataHeredocs } from "./lib/permissions";
 import { evaluateReadOnlyCommand, isReadOnlyBash, readOnlyRefusal } from "./lib/read-only-bash";
 import { resolveToAbsolute } from "./read";
 import { OutputBuffer, headTailChars } from "./lib/output-buffer";
@@ -521,7 +521,7 @@ export function createBashTool(): ToolDefinition {
 				}
 			}
 
-			const verdict = evaluatePermission("Bash", { cmd: command }, loadPermissions());
+			const verdict = evaluatePermission("Bash", { cmd: withoutDataHeredocs(command) }, loadPermissions());
 			if (verdict.action === "reject") {
 				const msg = verdict.message
 					? `command rejected: ${verdict.message}`
