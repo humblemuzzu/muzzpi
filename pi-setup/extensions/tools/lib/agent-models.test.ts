@@ -8,6 +8,7 @@ import {
 	emptyAgentModels,
 	loadAgentModels,
 	modelParams,
+	modelViolation,
 	normalizeThinking,
 	parseAgentModels,
 	resolveRoute,
@@ -262,5 +263,28 @@ describe("describeAgentModels", () => {
 
 	test("is empty with no models, so the prompt line is dropped", () => {
 		expect(describeAgentModels(emptyAgentModels())).toBe("");
+	});
+});
+
+describe("modelViolation: the child must run on exactly what was asked for", () => {
+	const shipped = loadAgentModels(join(import.meta.dir, "../../../agent-models.json"));
+
+	test("the requested provider/model passes, any other provider is stopped", () => {
+		expect(modelViolation("anthropic/claude-sonnet-5-5", "anthropic/claude-sonnet-5-5", shipped)).toBeUndefined();
+		for (const lookalike of ["openrouter/anthropic/claude-sonnet-5.5", "opencode/claude-sonnet-5-5", "anthropic/claude-opus-5-5"]) {
+			expect(modelViolation(lookalike, "anthropic/claude-sonnet-5-5", shipped)).toContain("stopped");
+		}
+	});
+
+	test("with nothing requested, only a model listed in agent-models.json may run", () => {
+		expect(modelViolation("anthropic/claude-opus-5-5", undefined, shipped)).toBeUndefined();
+		expect(modelViolation("openrouter/deepseek/deepseek-v4.1-flash", undefined, shipped)).toBeUndefined();
+		expect(modelViolation("openrouter/anthropic/claude-sonnet-5.5", undefined, shipped)).toContain("not one of the models");
+	});
+
+	test("the shipped list names no Claude model outside the anthropic provider", () => {
+		for (const { id } of Object.values(shipped.models)) {
+			if (/claude|sonnet|opus|haiku/i.test(id)) expect(id.startsWith("anthropic/")).toBe(true);
+		}
 	});
 });

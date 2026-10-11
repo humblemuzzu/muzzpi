@@ -456,6 +456,11 @@ edit there, deployed by `install.sh`, read at session start.
   `--model` (the child runs on pi's default, so a missing `DEEPSEEK_API_KEY`
   degrades instead of breaking five agents); a failing **explicit** model is
   refused.
+- **pi's `--model` resolver can fall back across providers** (to another
+  provider's look-alike id when the named one is unauthenticated or missing), so
+  `pi-spawn.ts` SIGKILLs a child whose first assistant message names any
+  provider/model other than the one requested, or, with none requested, one not
+  in `agent-models.json` (`modelViolation`). Keep every Claude id `anthropic/`.
 - **Ids must be provider-qualified** (a bare id is ambiguous across providers
   since pi 0.84); the loader refuses one. No default → `--model` omitted → pi's
   default. A `continueId` resume skips the defaults: pi restores the child's

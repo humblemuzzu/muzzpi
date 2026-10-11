@@ -233,6 +233,25 @@ export function resolveRoute(
 	return { model: config.models[name].id, thinking };
 }
 
+/**
+ * Why a child that answered on `actual` ("provider/model") must be stopped, or
+ * undefined when it may run. With a requested id only that id passes; without
+ * one (a resume, or a default that could not run) only a configured id does.
+ * pi's --model resolver can fall back to another provider's look-alike id, so
+ * what the child reports is checked, not what was asked for.
+ */
+export function modelViolation(actual: string, requested: string | undefined, config: AgentModels): string | undefined {
+	const got = actual.toLowerCase();
+	if (requested) {
+		return got === requested.toLowerCase()
+			? undefined
+			: `sub-agent stopped: it started on ${actual}, but ${requested} was requested. Nothing else was run.`;
+	}
+	const allowed = Object.values(config.models).map((model) => model.id.toLowerCase());
+	if (allowed.length === 0 || allowed.includes(got)) return undefined;
+	return `sub-agent stopped: it started on ${actual}, which is not one of the models in ${AGENT_MODELS_FILE}. Nothing else was run.`;
+}
+
 /** every problem worth telling the user about at session start. */
 export function auditAgentModels(config: AgentModels, catalog: ModelCatalog): string[] {
 	const problems = [...config.problems];

@@ -10,6 +10,7 @@ import { interpolatePromptVars, type InterpolateContext } from "./interpolate";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
 import { READ_ONLY_BASH_ENV } from "./read-only-bash";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./watchdog";
+import { loadAgentModels, modelViolation } from "./agent-models";
 
 // --- stall watchdog ---
 
@@ -379,6 +380,8 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 		 * clearInterval covers both and the timer cannot outlive the spawn.
 		 */
 		let stalled = false;
+		let wrongModel: string | undefined;
+		const agentModels = loadAgentModels();
 		const debugEnabled = !!process.env.PI_SPAWN_DEBUG;
 		const debug = (label: string, data?: Record<string, unknown>) => {
 			if (!debugEnabled) return;
@@ -469,6 +472,19 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 
 				// skip RPC protocol responses (acks for prompt/follow_up/abort commands)
 				if (event.type === "response") return;
+
+				if ((event.type === "message_start" || event.type === "message_end") && event.message?.role === "assistant" && !wrongModel) {
+					const { provider, model } = event.message;
+					const actual = provider && model ? `${provider}/${model}` : undefined;
+					const refusal = actual ? modelViolation(actual, config.model, agentModels) : undefined;
+					if (refusal) {
+						wrongModel = refusal;
+						debug("kill_wrong_model", { actual, requested: config.model });
+						killedAt ??= Date.now();
+						scheduleRelease();
+						proc.kill("SIGKILL");
+					}
+				}
 
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message as Message;
@@ -594,6 +610,11 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 		// RPC processes are killed intentionally — don't treat SIGTERM exit as error
 		if (useRpc && result.exitCode !== 0 && (result.stopReason === "end_turn" || result.stopReason === "stop")) {
 			result.exitCode = 0;
+		}
+		if (wrongModel) {
+			result.exitCode = 1;
+			result.stopReason = "error";
+			result.errorMessage = wrongModel;
 		}
 		return result;
 	} finally {
