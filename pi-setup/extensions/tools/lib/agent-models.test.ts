@@ -278,7 +278,8 @@ describe("modelViolation: the child must run on exactly what was asked for", () 
 
 	test("with nothing requested, only a model listed in agent-models.json may run", () => {
 		expect(modelViolation("anthropic/claude-opus-5-5", undefined, shipped)).toBeUndefined();
-		expect(modelViolation("openrouter/deepseek/deepseek-v4.1-flash", undefined, shipped)).toBeUndefined();
+		expect(modelViolation("openrouter/z-ai/glm-5.3-flash", undefined, shipped)).toBeUndefined();
+		expect(modelViolation("openrouter/deepseek/deepseek-v4.1-flash", undefined, shipped)).toContain("not one of the models");
 		expect(modelViolation("openrouter/anthropic/claude-sonnet-5.5", undefined, shipped)).toContain("not one of the models");
 	});
 

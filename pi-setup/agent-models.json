@@ -5,7 +5,6 @@
     "haiku": { "id": "anthropic/claude-haiku-5-5", "about": "Claude Haiku 5.5 (Claude Max)" },
     "deepseek-flash": { "id": "deepseek/deepseek-flash", "about": "DeepSeek V4.1 Flash, DeepSeek API" },
     "deepseek-pro": { "id": "deepseek/deepseek-v4-pro", "about": "DeepSeek V4 Pro, DeepSeek API, no image input" },
-    "deepseek-flash-openrouter": { "id": "openrouter/deepseek/deepseek-v4.1-flash", "about": "DeepSeek V4.1 Flash via OpenRouter; only when the user says openrouter" },
     "glm-flash": { "id": "openrouter/z-ai/glm-5.3-flash", "about": "GLM 5.3 Flash via OpenRouter" }
   },
   "agents": {

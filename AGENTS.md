@@ -45,7 +45,7 @@ Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
 
 `enabledModels` (what `/model` shows): opus-5-5, sonnet-5-5, haiku-5-5,
 `deepseek/deepseek-flash`, `deepseek/deepseek-v4-pro`, and via openrouter
-`deepseek/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash`. The catalog still has
+`z-ai/glm-5.3-flash`. The catalog still has
 xai, openai-codex, kimi and llama models; a model must be in `enabledModels`
 for `/model` to see it.
 
