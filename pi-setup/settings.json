@@ -33,6 +33,7 @@
     "anthropic/claude-haiku-5-5",
     "deepseek/deepseek-flash",
     "deepseek/deepseek-v4-pro",
+    "openrouter/deepseek/deepseek-v4.1-flash",
     "openrouter/z-ai/glm-5.3-flash"
   ],
   "steeringMode": "all",
