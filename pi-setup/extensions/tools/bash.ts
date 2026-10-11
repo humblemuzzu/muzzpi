@@ -21,7 +21,7 @@ import { sampleGroupCpuSeconds } from "./lib/proc-cpu";
 const HEAD_LINES = 50;
 const TAIL_LINES = 50;
 /** the line window alone lets one minified line through whole. */
-const MAX_OUTPUT_CHARS = 50_000;
+const MAX_OUTPUT_CHARS = 20_000;
 const SIGKILL_DELAY_MS = 3000;
 /** how long after the shell exits a still-open output pipe is taken to mean a background process holds it. */
 const BACKGROUND_GRACE_MS = 1500;

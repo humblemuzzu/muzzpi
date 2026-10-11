@@ -66,7 +66,7 @@ describe("bash structuredContent (codemode contract)", () => {
 			ctx,
 		);
 		expect(updates.length).toBeGreaterThan(0);
-		expect(r.content[0].text).toContain("[150000 characters truncated; full output:");
+		expect(r.content[0].text).toContain("[180000 characters truncated; full output:");
 		expect(r.structuredContent.output).toBe("x".repeat(200_000));
 	});
 
