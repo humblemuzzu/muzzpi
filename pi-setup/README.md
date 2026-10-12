@@ -101,12 +101,15 @@ custom bridge/provider needed.
 
 `enabledModels` in `settings.json` is what `/model` lists: the three Claude models (Max OAuth via
 pi-claude-code-use, default `claude-opus-5-5`), `deepseek/deepseek-flash` and
-`deepseek/deepseek-v4-pro` (`$DEEPSEEK_API_KEY`), and two openrouter models.
+`deepseek/deepseek-v4-pro` (`$DEEPSEEK_API_KEY`), `river/deepseek-ai/DeepSeek-V4.1-Flash`
+(`$RIVER_API_KEY`; same weights, flat 20% under DeepSeek's off-peak rate, no peak surcharge), and
+two openrouter models.
 
 | Provider | Access |
 |---|---|
 | `anthropic` | Claude Max OAuth (`/login anthropic`) via pi-claude-code-use |
 | `deepseek` | `$DEEPSEEK_API_KEY` |
+| `river` | `$RIVER_API_KEY`; models.json sets `supportsDeveloperRole: false` because River accepts the `developer` role and silently drops it |
 | `openrouter`, `xai`, `openai-codex`, `kimi-coding` | `/login`; xai/codex/kimi models are in the catalog but not in `enabledModels` |
 | `llama-local` (`LFM2.5-2.6B`) | local llama.cpp router, managed via `/local` |
 

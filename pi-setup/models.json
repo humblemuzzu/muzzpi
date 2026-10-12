@@ -34,6 +34,39 @@
         }
       ]
     },
+    "river": {
+      "baseUrl": "https://api.river.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$RIVER_API_KEY",
+      "compat": {
+        "supportsDeveloperRole": false
+      },
+      "models": [
+        {
+          "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+          "name": "DeepSeek V4.1 Flash — River",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 1048576,
+          "maxTokens": 384000,
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          },
+          "cost": {
+            "input": 0.12,
+            "output": 0.48,
+            "cacheRead": 0.0024,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
     "openai-codex": {
       "modelOverrides": {
         "gpt-6-astra": {

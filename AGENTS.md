@@ -36,6 +36,7 @@ pi CLI (v1.1.0) — @earendil-works/pi-coding-agent
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
   ├─ deepseek                         → DEEPSEEK_API_KEY in ~/.zshrc
+  ├─ river                            → RIVER_API_KEY in ~/.zshrc
   └─ llama-local                      → llama.cpp via /local
 ```
 
@@ -44,7 +45,8 @@ Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
 `quietStartup: "header"` (`"regular"` restores normal scrollback).
 
 `enabledModels` (what `/model` shows): opus-5-5, sonnet-5-5, haiku-5-5,
-`deepseek/deepseek-flash`, `deepseek/deepseek-v4-pro`, and via openrouter
+`deepseek/deepseek-flash`, `deepseek/deepseek-v4-pro`,
+`river/deepseek-ai/DeepSeek-V4.1-Flash`, and via openrouter
 `deepseek/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash` (picker only: sub-agents
 use DeepSeek's own API). The catalog still has
 xai, openai-codex, kimi and llama models; a model must be in `enabledModels`

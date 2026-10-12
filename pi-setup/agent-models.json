@@ -4,6 +4,7 @@
     "sonnet": { "id": "anthropic/claude-sonnet-5-5", "about": "Claude Sonnet 5.5 (Claude Max)" },
     "haiku": { "id": "anthropic/claude-haiku-5-5", "about": "Claude Haiku 5.5 (Claude Max)" },
     "deepseek-flash": { "id": "deepseek/deepseek-flash", "about": "DeepSeek V4.1 Flash, DeepSeek API" },
+    "river-flash": { "id": "river/deepseek-ai/DeepSeek-V4.1-Flash", "about": "the same DeepSeek V4.1 Flash on River's API: use it for \"river flash\" or \"deepseek flash from/via river\"; plain \"deepseek flash\" means deepseek-flash" },
     "deepseek-pro": { "id": "deepseek/deepseek-v4-pro", "about": "DeepSeek V4 Pro, DeepSeek API, no image input" },
     "glm-flash": { "id": "openrouter/z-ai/glm-5.3-flash", "about": "GLM 5.3 Flash via OpenRouter" }
   },

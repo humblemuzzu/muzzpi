@@ -207,6 +207,7 @@ anthropic` inside pi). To use something else, change `defaultProvider` and
 | | turns on |
 |---|---|
 | `DEEPSEEK_API_KEY` | cheap sub-agents (chad, finder, librarian, read_session, read_web_page); without it they run on your main model |
+| `RIVER_API_KEY` | DeepSeek V4.1 Flash via River in `/model`, cheaper than DeepSeek in its peak hours |
 | `PARALLEL_API_KEY` | `web_search` |
 | `gh auth login` | the 7 GitHub tools |
 | `ripgrep`, `trash`, `bun` | `grep`/`find`, safe deletes, the patch audit and tests |
