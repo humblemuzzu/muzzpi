@@ -18,9 +18,11 @@ for the full root-cause analysis.
 
 ## Usage
 
-Scripts assume they live in `/tmp/pi-render-repro/`:
+Scripts assume they live in `/tmp/pi-render-repro/` and read the repo's tools
+sources from `PI_TOOLS` (the live dir holds bundles, not `.ts`):
 
 ```bash
+export PI_TOOLS="$PWD/pi-setup/extensions/tools"
 mkdir -p /tmp/pi-render-repro && cp pi-setup/render-repro/* /tmp/pi-render-repro/
 chmod +x /tmp/pi-render-repro/*.sh
 

@@ -6,13 +6,18 @@
 
 import { createRequire } from "node:module";
 
-let cheerioLoad: ((html: string) => any) | null = null;
+let cheerioLoad: ((html: string) => any) | null | undefined;
 
-try {
-	const esmRequire = createRequire(import.meta.url);
-	const cheerio = esmRequire("cheerio");
-	cheerioLoad = cheerio.load;
-} catch {}
+function loadCheerio(): ((html: string) => any) | null {
+	if (cheerioLoad === undefined) {
+		try {
+			cheerioLoad = createRequire(import.meta.url)("cheerio").load;
+		} catch {
+			cheerioLoad = null;
+		}
+	}
+	return cheerioLoad;
+}
 
 const REMOVE_SELECTORS = [
 	"script", "style", "noscript", "svg", "iframe",
@@ -144,10 +149,11 @@ function collapseWhitespace(text: string): string {
 }
 
 export function htmlToMarkdown(html: string): string | null {
-	if (!cheerioLoad) return null;
 	if (!isHtmlContent(html)) return null;
+	const load = loadCheerio();
+	if (!load) return null;
 
-	const $ = cheerioLoad(html);
+	const $ = load(html);
 	$(REMOVE_SELECTORS).remove();
 
 	// find main content area

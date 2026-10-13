@@ -137,8 +137,8 @@ and `install.sh` does not create them.
 - Asks before destroying data, here or on a server: SQL `DROP`/`TRUNCATE`/`DELETE` without `WHERE`, Docker volumes, cloud buckets and databases, disks, and an MCP `DELETE`. No UI (a sub-agent) means refused; every answer goes to `~/.pi/agent/approvals.jsonl`.
 
 ### Pi Packages
-`settings.json` `packages` is the list: `pi-token-burden`, `@benvargas/pi-claude-code-use`,
-`@marckrenn/pi-sub-bar`, `pi-tool-display` (config'd), `pi-codex-goal`, `pi-mcp-adapter`.
+`settings.json` `packages` is the list: `@benvargas/pi-claude-code-use`, `pi-codex-goal`,
+`pi-mcp-adapter`.
 See `AGENTS.md` → "Packages (npm)" for versions and patches, and "Removed — do not reinstall"
 for the packages that were taken out on purpose (`verify-patches.sh` fails if one comes back).
 
@@ -155,8 +155,7 @@ pi-setup/
 ├── models.json                 # Custom providers + context-window overrides
 ├── permissions.json            # Tool permission rules
 ├── mcp.json                    # pi-mcp-adapter global MCP servers
-├── pi-sub-bar-settings.json    # sub-bar widget layout
-├── pi-sub-core-settings.json   # sub-core provider/refresh config
+├── build-extensions.ts         # Bundles each extension into one .js (run by install.sh)
 ├── verify-patches.sh           # Read-only audit of every patch/config
 ├── extensions/                 # extensions + tools/ suite
 │   ├── editor/                 # Custom TUI editor + cache line
@@ -167,7 +166,6 @@ pi-setup/
 │   ├── guardrails/             # edit/write comment gate
 │   ├── you-should-know/        # /ysk — side agent (off until asked)
 │   ├── tools/                  # custom tools + shared lib/ (tests run here: bun test)
-│   ├── pi-tool-display/        # config.json (all tool overrides false — required)
 │   ├── stats/                  # /stats — usage analytics dashboard
 │   ├── system-prompt.ts  mentions.ts  session-name.ts
 │   └── md-export.ts  notify.ts  local-model.ts
@@ -176,7 +174,6 @@ pi-setup/
 ├── pi-skills/                  # pi-level skills (→ ~/.pi/agent/skills/); currently empty
 ├── config-skills/              # config skills (→ ~/.config/agents/skills/)
 ├── pi-core-patches/            # resource-loader + session-pinning + pi-tui width patches
-├── pi-sub-patches/             # grok usage provider; manifest.txt maps files to destinations
 ├── pi-migrations.md            # Per-update record. Read before updating pi
 ├── 2026-*.md                   # Investigations: migrations, the bdsqqq port, MCP, cache, login
 └── README.md                   # This file

@@ -1,6 +1,5 @@
 {
   "dependencies": {
-    "@heyhuynhgiabuu/pi-diff": "~0.9.2",
     "cheerio": "^1.0.0",
     "diff": "^9.0.0",
     "playwright-core": "^1.62.0",

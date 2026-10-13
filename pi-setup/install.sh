@@ -144,7 +144,10 @@ elif ! gh auth status &>/dev/null; then
 fi
 command -v rg &>/dev/null || warn "rg (ripgrep) not found: grep and find need it (brew install ripgrep)"
 command -v trash &>/dev/null || warn "trash not found: permissions.json blocks rm and points the agent at trash (brew install trash)"
-command -v bun &>/dev/null || warn "bun not found: verify-patches.sh uses it to audit agent-models.json, and the tests run on it"
+if ! command -v bun &>/dev/null; then
+    warn "bun not found. The installer bundles the extensions with it: brew install oven-sh/bun/bun"
+    exit 1
+fi
 
 # ── Create directories ──
 info "Creating directories..."
@@ -152,8 +155,37 @@ run mkdir -p "$PI_AGENT"
 run mkdir -p "$CONFIG_SKILLS"
 
 # ── Extensions ──
-info "Installing extensions..."
-sync_dir "$SCRIPT_DIR/extensions" "$PI_AGENT/extensions"
+# pi loads one prebuilt file per extension; the TypeScript stays in the repo.
+# The old dir is moved aside as the backup, then what the repo does not own
+# (herdr's extension) and the installed tool deps are carried over.
+info "Building and installing extensions..."
+EXT_LIVE="$PI_AGENT/extensions"
+EXT_OLD="$EXT_LIVE$BACKUP_SUFFIX"
+if [ -d "$EXT_LIVE" ]; then
+    run mv "$EXT_LIVE" "$EXT_OLD"
+    warn "Backed up extensions to $(basename "$EXT_OLD")"
+fi
+if ! run bun "$SCRIPT_DIR/build-extensions.ts" "$EXT_LIVE"; then
+    if [ -d "$EXT_OLD" ]; then
+        if [ -e "$EXT_LIVE" ]; then mv "$EXT_LIVE" "$EXT_LIVE.failed$BACKUP_SUFFIX"; fi
+        mv "$EXT_OLD" "$EXT_LIVE"
+    fi
+    warn "extension build failed (see above); the previous extensions are back in place"
+    exit 1
+fi
+if [ -d "$EXT_OLD" ]; then
+    for old in "$EXT_OLD"/*; do
+        [ -e "$old" ] || continue
+        name="$(basename "$old")"
+        if [ ! -e "$SCRIPT_DIR/extensions/$name" ] && [ ! -e "$EXT_LIVE/$name" ]; then
+            run cp -R "$old" "$EXT_LIVE/"
+            warn "Kept $name (not from this repo)"
+        fi
+    done
+    if [ -d "$EXT_OLD/tools/node_modules" ]; then
+        run mv "$EXT_OLD/tools/node_modules" "$EXT_LIVE/tools/"
+    fi
+fi
 
 if command -v npm &>/dev/null; then
     TOOLS_DIR="$PI_AGENT/extensions/tools"
@@ -214,28 +246,11 @@ if [ -f "$PI_AGENT/mcp.json" ]; then
     ok "Moved leftover $PI_AGENT/mcp.json aside (adapter reads ~/.config/mcp/mcp.json)"
 fi
 
-# ── Pi package configs (sub-bar, sub-core) ──
-# live copies are TUI-saved; only seed when missing
-info "Installing pi package configs..."
-for cfg in pi-sub-bar-settings.json pi-sub-core-settings.json; do
-    if [ -f "$SCRIPT_DIR/$cfg" ]; then
-        if [ -f "$PI_AGENT/$cfg" ]; then
-            warn "Keeping live $cfg — not overwriting"
-        else
-            run cp "$SCRIPT_DIR/$cfg" "$PI_AGENT/$cfg"
-            ok "Seeded $cfg (no live copy)"
-        fi
-    fi
-done
-
 # ── Pi packages (npm, discovered by pi at runtime) ──
 info "Installing pi packages..."
 # Mirror of settings.json "packages"; never re-add one AGENTS.md lists as removed.
 packages=(
-    "npm:pi-token-burden"
     "npm:@benvargas/pi-claude-code-use@2.2.1"
-    "npm:@marckrenn/pi-sub-bar"
-    "npm:pi-tool-display"
     "npm:pi-codex-goal@0.6.0"
     "npm:pi-mcp-adapter@5.1.0"
 )
@@ -265,40 +280,9 @@ if [ -d "$SCRIPT_DIR/pi-core-patches" ]; then
     # every npm package bundles its own pi-tui, and one unpatched copy still smears
     run node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs" || \
         warn "pi-tui width patch failed on some copies — TUI may smear on exotic unicode (see AGENTS.md)"
-    # some pi versions import pi-server without declaring the dependency
-    run bash "$SCRIPT_DIR/pi-core-patches/install-pi-server.sh" || \
-        warn "pi-server install failed — pi may not start (see AGENTS.md)"
-    ok "pi core patches applied (resource-loader + session pinning + pi-tui widths + pi-server)"
+    ok "pi core patches applied (resource-loader + session pinning + pi-tui widths)"
 else
     warn "pi-core-patches/ missing — apply them by hand"
-fi
-
-# ── pi-sub grok provider patch ──
-# Upstream has no provider plugin hook — PROVIDER_FACTORIES is a hardcoded map —
-# so the installed copies are patched after every `pi install`.
-SUB_NM="$PI_AGENT/npm/node_modules/@marckrenn"
-SUB_PATCH="$SCRIPT_DIR/pi-sub-patches"
-if [ -f "$SUB_PATCH/manifest.txt" ] && { [ -d "$SUB_NM/pi-sub-core" ] || [ "$DRY_RUN" -eq 1 ]; }; then
-    info "Applying pi-sub grok provider patch..."
-    sub_failed=0
-    while read -r src dest || [ -n "$src" ]; do
-        [ -z "$src" ] && continue
-        run cp "$SUB_PATCH/$src" "$SUB_NM/$dest" || { warn "pi-sub patch: could not copy $src → $dest"; sub_failed=1; }
-    done < "$SUB_PATCH/manifest.txt"
-    if [ "$sub_failed" -eq 0 ]; then ok "pi-sub grok provider patch applied"; else warn "pi-sub grok provider patch INCOMPLETE — see above"; fi
-    info "Applying pi-sub-core stale-ctx guard..."
-    run node "$SUB_PATCH/apply-sub-core-stale-guard.mjs" || \
-        warn "pi-sub-core stale-ctx guard FAILED — a usage fetch outliving /resume will exit pi"
-else
-    warn "pi-sub packages or pi-sub-patches missing — grok usage provider not installed"
-fi
-
-# ── pi-tool-display config ──
-if [ -f "$SCRIPT_DIR/extensions/pi-tool-display/config.json" ]; then
-    info "Installing pi-tool-display config (all tool overrides disabled)..."
-    run mkdir -p "$PI_AGENT/extensions/pi-tool-display"
-    run cp "$SCRIPT_DIR/extensions/pi-tool-display/config.json" "$PI_AGENT/extensions/pi-tool-display/config.json"
-    ok "pi-tool-display config installed"
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then

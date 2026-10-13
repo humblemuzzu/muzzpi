@@ -514,14 +514,22 @@ export function osc8Link(url: string, text: string): string {
 export function renderCallLine(label: string, context: string, theme: any): { render(width: number): string[]; invalidate(): void } {
 	const line = theme.fg("toolTitle", theme.bold(normalizeForDisplay(label))) +
 		(context ? " " + theme.fg("dim", normalizeForDisplay(context)) : "");
+	let cachedWidth = -1;
+	let cached: string[] = [];
 	return {
 		// `context` is usually a path, but nothing stops a caller passing a
 		// title or query. Returning `line` unbounded made this the next crash
 		// site after the box header: one over-wide line kills the process.
 		render(width: number): string[] {
 			if (!Number.isFinite(width) || width <= 0) return [line];
-			return [truncateToWidth(line, width, "…")];
+			if (width !== cachedWidth) {
+				cachedWidth = width;
+				cached = [truncateToWidth(line, width, "…")];
+			}
+			return cached;
 		},
-		invalidate() {},
+		invalidate() {
+			cachedWidth = -1;
+		},
 	};
 }

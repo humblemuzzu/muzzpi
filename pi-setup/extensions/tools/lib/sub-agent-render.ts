@@ -12,7 +12,7 @@
 import * as os from "node:os";
 import type { Message } from "@mariozechner/pi-ai";
 import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Text, TruncatedText } from "@mariozechner/pi-tui";
+import { Container, Markdown, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { normalizeForDisplay } from "./box-format";
 import type { PiSpawnResult, SpawnSessionMeta, UsageStats } from "./pi-spawn";
 import type { ToolCostDetails } from "./tool-cost";
@@ -316,6 +316,29 @@ function renderToolLine(
 	return `${icon} ${fg("accent", toolLabel(item.name))} ${fg("dim", normalizeForDisplay(toolArgSummary(item.name, item.args)))}`;
 }
 
+class Line {
+	private width = -1;
+	private lines: string[] = [];
+	private readonly text: string;
+
+	constructor(text: string) {
+		const cut = text.indexOf("\n");
+		this.text = cut === -1 ? text : text.slice(0, cut);
+	}
+
+	render(width: number): string[] {
+		if (width !== this.width) {
+			this.width = width;
+			this.lines = [truncateToWidth(this.text, width)];
+		}
+		return this.lines;
+	}
+
+	invalidate(): void {
+		this.width = -1;
+	}
+}
+
 // --- tree rendering ---
 
 const COLLAPSED_ITEM_COUNT = 10;
@@ -384,7 +407,7 @@ export function renderAgentTree(
 			if (child.kind === "text") {
 				container.addChild(new Text(connector + fg("dim", normalizeForDisplay(child.content)), 0, 0));
 			} else if (child.kind === "tool") {
-				container.addChild(new TruncatedText(connector + renderToolLine(child.item, fg), 0, 0));
+				container.addChild(new Line(connector + renderToolLine(child.item, fg)));
 			} else if (child.kind === "summary") {
 				container.addChild(new Text(connector + fg("muted", "Summary:"), 0, 0));
 				const indent = isLast ? "    " : CONT;

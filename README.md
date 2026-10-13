@@ -158,7 +158,12 @@ ones worth knowing about:
   and the whole TUI desynced. Fixed with a patch applied to every pi-tui copy
   on the machine, and a render harness to prove it.
 - **3 GB of duplicates.** Three npm roots held 18 stale pi packages and 24 copies
-  of pi-tui. Now there are 4, all patched, all loaded.
+  of pi-tui. Now there is 1, patched, loaded.
+- **A 700k-token session took 180 ms per keystroke.** pi-tui redraws the whole
+  transcript every frame, and the edit/write diff renderer re-cut all 3,267 of
+  its lines each time. Diffs now render once per width, three packages that
+  cost 600 ms of startup went, and each extension ships as one prebuilt file:
+  10 ms per keystroke, 1.1 s to 0.44 s to start (every sub-agent too).
 - **`pi update --self` silently disables every patch.** It points `pi` at a
   bundled build that ignores patched files. Updates go through
   [`update-pi.sh`](pi-setup/update-pi.sh) instead.
@@ -168,7 +173,7 @@ Every pi release since 0.82 has a written migration record:
 
 ## The graveyard
 
-16 packages were installed, used, and removed. `verify-patches.sh` fails if any
+19 packages were installed, used, and removed. `verify-patches.sh` fails if any
 of them comes back.
 
 | Package | Why it went |
@@ -183,6 +188,9 @@ of them comes back.
 | `@sting8k/pi-vcc` | redundant once native compaction landed |
 | `lsp-pi`, `pi-powerline-footer`, `pi-anycopy` | installed where pi never loads them |
 | `pi-gpt-config`, `pi-ask`, `pi-grok-cli`, `todos` | unused |
+| `@marckrenn/pi-sub-bar` | +324 ms per start for a widget with every provider off |
+| `pi-tool-display` | rewrote stored messages, then spliced the whole context on every request |
+| `pi-token-burden` | +143 ms per start for one diagnostic command |
 
 ## By the numbers
 
@@ -193,8 +201,8 @@ As of October 2026:
 | First commit | 2026-03-10 |
 | Commits | 105, on 57 different days |
 | Lines changed | +97,381 / −37,598 |
-| Tests | 1,877 across 55 files, 0 failing |
-| pi releases lived through | 20+, from 0.67 to 1.1 |
+| Tests | 1,877 across 56 files, 0 failing |
+| pi releases lived through | 20+, from 0.67 to 1.2 |
 | Default-model changes | 17, across six providers: Opus 4.6 → GLM 5.1 → Kimi → GPT-5.5 → Grok 4.6 → Opus 5.5, and back again more than once |
 | MCP servers wired in | 19, none connected until first use |
 | Skills | 13 |
@@ -203,7 +211,8 @@ As of October 2026:
 
 ## Install
 
-**Needs:** macOS (built and tested there), node ≥ 22.19, and pi itself:
+**Needs:** macOS (built and tested there), node ≥ 22.19, bun (the installer
+bundles each extension into one file so pi starts fast), and pi itself:
 `npm install -g @earendil-works/pi-coding-agent`. Homebrew, nvm and any other
 npm prefix all work; the installer finds pi from the `pi` on your `PATH`.
 
@@ -219,7 +228,7 @@ anthropic` inside pi). To use something else, change `defaultProvider` and
 | `RIVER_API_KEY` | DeepSeek V4.1 Flash via River in `/model`, cheaper than DeepSeek in its peak hours |
 | `PARALLEL_API_KEY` | `web_search` |
 | `gh auth login` | the 7 GitHub tools |
-| `ripgrep`, `trash`, `bun` | `grep`/`find`, safe deletes, the patch audit and tests |
+| `ripgrep`, `trash` | `grep`/`find`, safe deletes |
 
 ```bash
 ./install.sh pi --dry-run   # read this first
@@ -276,9 +285,7 @@ bug, and [`pi-setup/README.md`](pi-setup/README.md) for the full inventory.
 - [bdsqqq/dots](https://github.com/bdsqqq/dots): the sub-agent wiring and
   `delegate` began as a port from there.
 - The packages it runs: [pi-claude-code-use](https://github.com/ben-vargas/pi-packages)
-  by Ben Vargas, [pi-sub-bar](https://www.npmjs.com/package/@marckrenn/pi-sub-bar)
-  by marckrenn, [pi-tool-display](https://github.com/MasuRii/pi-tool-display),
-  [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal) and
+  by Ben Vargas, [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal) and
   [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter).
 - Skills adapted from Matt Pocock (`mat-*`), dmmulroy (`dm-*`) and Cursor (`c-*`).
 - Ghostty theme palettes inspired by [opencode](https://github.com/anomalyco/opencode).

@@ -21,7 +21,7 @@ import fs from "node:fs";
 const PI_ROOT = "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent";
 const { createJiti } = await import(`${PI_ROOT}/node_modules/jiti/lib/jiti.mjs`);
 const TUI_PKG = `${PI_ROOT}/node_modules/@earendil-works/pi-tui`;
-const TOOLS = process.env.HOME + "/.pi/agent/extensions/tools";
+const TOOLS = (process.env.PI_TOOLS ?? decodeURIComponent(new URL("../extensions/tools", import.meta.url).pathname));
 const OUT = process.env.OUT || "/tmp/pi-render-repro/dsr-report.txt";
 const PHASE = process.env.PHASE || "A";
 

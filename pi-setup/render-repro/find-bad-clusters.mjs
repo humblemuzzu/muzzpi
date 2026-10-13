@@ -12,7 +12,7 @@ const jiti = createJiti(import.meta.url, {
   interopDefault: true,
   alias: { "@mariozechner/pi-tui": TUI_PKG, "@earendil-works/pi-tui": TUI_PKG },
 });
-const { normalizeForDisplay } = await jiti.import(process.env.HOME + "/.pi/agent/extensions/tools/lib/box-format.ts");
+const { normalizeForDisplay } = await jiti.import((process.env.PI_TOOLS ?? decodeURIComponent(new URL("../extensions/tools", import.meta.url).pathname)) + "/lib/box-format.ts");
 
 // same corpus as phase F
 let seed = 12345;

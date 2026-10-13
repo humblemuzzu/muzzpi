@@ -56,12 +56,6 @@ for `/model` to see it.
 2.2.1 aliases non-core tools to `mcp__tools__*` on anthropic+OAuth; that env
 skips the remap and sends flat names and aliases together.
 
-**When changing the default provider, also update `pi-sub-core-settings.json`**
-— its `defaultProvider` is what the status bar reports. A provider left
-`enabled: false` there returns `{}` (all are currently off, deliberately).
-`tools.usageTool` / `allUsageTool` stay `false`: `true` adds 4 usage tools to
-every request.
-
 ### System prompt assembly
 
 1. `extensions/system-prompt.ts` sets `systemPromptOptions.customPrompt`, which
@@ -100,9 +94,7 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 | `resource-loader.js` | pi core `dist/core/` | suppresses extension tool-conflict boot errors |
 | `session-selector.js` + `keybindings.js` | pi core | session pinning, `Ctrl+B` in `/resume`; pins in `~/.pi/agent/pinned-sessions.json` (user data) |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
-| pi-sub grok provider | `@marckrenn/pi-sub-*` | wiped by every `pi install` / `pi update --extensions` |
-| pi-sub-core stale-ctx guard | `@marckrenn/pi-sub-core/index.ts` | same wipe; without it a usage fetch outliving `/new`/`/resume`/fork throws and pi exits |
-| pi-tool-display `config.json` | `~/.pi/agent/extensions/pi-tool-display/` | all tool overrides `false`, or it replaces our tools |
+| extension bundles | `~/.pi/agent/extensions/` | `.js` only; a stray `.ts` shadows its bundle |
 | pi-mcp-adapter settings | `~/.config/mcp/mcp.json` + `settings.json` | `scriptMode: false`, `namespaceProxyTools: false`, skills `[]` |
 | sub-agent models | `~/.pi/agent/agent-models.json` | valid, every id listed by `pi --list-models` |
 
@@ -116,25 +108,12 @@ cp pi-setup/pi-core-patches/keybindings.js      $PI/dist/core/keybindings.js
 
 node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs           # all copies
 node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs --check   # audit
-
-cp pi-setup/extensions/pi-tool-display/config.json ~/.pi/agent/extensions/pi-tool-display/config.json
-
-# grok provider: pi-sub-patches/manifest.txt maps each file to its destination
-while read -r s d; do cp "pi-setup/pi-sub-patches/$s" ~/.pi/agent/npm/node_modules/@marckrenn/"$d"; done < pi-setup/pi-sub-patches/manifest.txt
-node pi-setup/pi-sub-patches/apply-sub-core-stale-guard.mjs          # idempotent; --check audits
 ```
 
 `install.sh` applies all of these and runs `verify-patches.sh` last. **Never
-hardcode `/opt/homebrew` in a script**: `install.sh`, `verify-patches.sh`,
-`update-pi.sh` and `install-pi-server.sh` all locate pi via `pi-location.sh`
+hardcode `/opt/homebrew` in a script**: `install.sh`, `verify-patches.sh` and
+`update-pi.sh` all locate pi via `pi-location.sh`
 (strangers run pi from nvm and Intel prefixes too).
-
-### pi-tool-display config (required)
-
-`pi-setup/extensions/pi-tool-display/config.json`: every `registerToolOverrides`
-entry `false`. Its overrides bootstrap from pi's DEFAULT tools, so any `true`
-clobbers our edit/write wrapper, mutex locking, secret scrubbing and image
-support. Not in the npm package; recreate it after a delete-and-reinstall.
 
 ### pi-mcp-adapter config (required)
 
@@ -152,9 +131,6 @@ skills do not contain `mcp-scripting`. pi's built-in `mcp` extension is
 |---|---|---|---|
 | `@earendil-works/pi-coding-agent` | 1.2.0 | pi itself | 3 core patches |
 | `@benvargas/pi-claude-code-use` | **2.2.1 (pinned)** | Claude Max OAuth payload shim | no |
-| `pi-token-burden` | 0.6.5 | token usage display | no |
-| `@marckrenn/pi-sub-bar` | 1.5.0 | quota widget | **grok patch** |
-| `pi-tool-display` | 0.5.0 | thinking labels, user msg box | **config** |
 | `pi-codex-goal` | 0.6.0 (pinned) | `/goal` | no |
 | `pi-mcp-adapter` | 5.1.0 (pinned) | one `mcp` proxy tool, lazy servers | **config** |
 
@@ -173,7 +149,11 @@ JSON-stringified), `@tomooshi/condensed-milk-pi` (**reported failed git
 commands as successes**), `claude-agent-sdk-pi`, `@sting8k/pi-vcc`,
 `pi-computer-use`, `pi-gpt-config`, `pi-ask`, `pi-grok-cli`, `pi-claude-bridge`,
 `lsp-pi`, `pi-powerline-footer`, `pi-anycopy`, `pi-autoresearch` (its
-`promptGuidelines` flip mid-session, re-writing the prompt cache).
+`promptGuidelines` flip mid-session, re-writing the prompt cache),
+`pi-token-burden` (+143 ms on every start for one command),
+`@marckrenn/pi-sub-bar` (+324 ms, every provider off, two patches to stop it
+crashing pi), `pi-tool-display` (rewrote stored messages, then spliced the
+whole context on every LLM call to undo it).
 `verify-patches.sh` `REMOVED_PKGS` must match this list; it fails on any trace.
 
 ### One install, no duplicates
@@ -190,8 +170,7 @@ pinned version, and brings an unpatched pi-tui copy. **`npm ls -g` lies here**
 
 `extensions/tools/node_modules` is gitignored **deployment source**. Its pi
 packages are `file:` links to the installed pi (devDeps + `overrides`), so
-tests run against the real, patched pi-tui; pi-diff ≥0.9 declares pi-tui as a
-peer and resolves to that same copy. **Never put `"*"` back** for those links —
+tests run against the real, patched pi-tui. **Never put `"*"` back** for those links —
 it installs stale pi copies. The live dir installs with `--no-package-lock`
 because the lockfile stores the links relative to the checkout.
 
@@ -226,10 +205,13 @@ row; `collapsedResultLines` (1–3) sets collapsed height.
 
 ## Extensions (`extensions/`)
 
-pi auto-discovers every `.ts` here — there is **no** disabled state; delete or
-move out to disable. From a subdirectory pi loads **only `index.ts`**, so tests
-can live beside an extension. The live dir also holds `herdr-agent-state.ts`,
-installed by herdr, not from this repo; leave it.
+The repo holds TypeScript; `install.sh` runs `build-extensions.ts`, which
+bundles each extension into one file (`<dir>/index.js`, `<name>.js`, npm
+packages external), so pi does not resolve every import through jiti at boot
+(~190 ms on every start and every sub-agent). **Never copy `.ts` into the live
+dir**: pi prefers `index.ts` over `index.js`; `settings.json` lists the `.js`.
+There is **no** disabled state; delete or move out to disable. The live dir also
+holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 
 | Extension | Purpose |
 |---|---|
@@ -267,6 +249,11 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
 
 ### Extension rules learned the hard way
 
+- **Every transcript component caches its lines per width.** In fullscreen
+  mode pi-tui renders the whole transcript every frame (a fresh cache per
+  frame, `layout.js`), and `Box` reuses its output only when child lines come
+  back unchanged. One row rebuilding its lines made each keystroke cost
+  O(session): 180 ms at 700k context. `render-cache.test.ts` pins ours.
 - **Extensions do not share module state.** Each loads with its own jiti
   instance and `moduleCache: false`; a module-level Map imported from another
   extension reads *empty*. Importing pure functions/constants is fine;
@@ -521,17 +508,9 @@ injected in the `context` hook telling the model to call that tool
    `@mariozechner/*` compat aliases will eventually go — then rename imports.
 4. **Any `pi install` / package update** → `verify-patches.sh` (width patcher
    check included).
-5. **pi-sub-* update** → re-apply the grok patch and the stale-ctx guard. Valid
-   providers are `anthropic copilot gemini antigravity codex kiro zai` + our
-   `grok`; there is **no `kimi`, no `crofai`** — a provider with no factory
-   breaks usage refresh only at refresh time, so boot looks clean.
-   `pi-sub-patches/grok.test.ts` runs only beside `impl/grok.ts` in the
-   installed pi-sub-core: copy it there, `bun test` it, trash the copy.
-6. **pi-tool-display** → verify `config.json` still exists. The rest are
-   unpatched; check for new tool/skill name collisions.
-7. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
+5. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
    there; `npm ci` (node_modules is gitignored), then `bun test` before deploying.
-8. **After any pi update, make one real `edit` and `write`**: the wrapper rides
+6. **After any pi update, make one real `edit` and `write`**: the wrapper rides
    on pi's `operations` and error strings.
 
 Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
@@ -541,7 +520,7 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 - **Don't edit `/opt/homebrew/lib/node_modules/` directly** — wiped on update.
   Edit in `pi-setup/`, deploy with `install.sh`.
 - **Don't run `install.sh` without checking what changed** — it overwrites live
-  tweaks (after backing them up); it only seeds the two pi-sub settings files.
+  tweaks (after backing them up).
   `--dry-run` prints every write first.
 
 ## Where the detail lives
@@ -550,6 +529,8 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 - `pi-setup/2026-07-30-bdsqqq-port.md` — sub-agent wiring, OAuth tool-filter
   trap. **Read before touching tools/subagents.**
 - `pi-setup/2026-10-11-edit-tool.md` — edit/write decision, data, scoreboard
+- `pi-setup/2026-10-13-performance.md` — keystroke and boot profiling, the bundled
+  deploy, what was removed and why
 - `pi-setup/2026-10-13-permissions.md` — server deletes, approval dialog, secret redaction, edit hints
 - `pi-setup/2026-08-13-cloudflare-mcp.md` — the 16 Cloudflare servers, auth flow
 - `pi-setup/2026-10-04-you-should-know.md` — the `/ysk` side agent and its cache-cost maths

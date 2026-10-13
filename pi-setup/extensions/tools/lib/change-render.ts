@@ -1,13 +1,12 @@
 /**
- * TUI rendering for edit and write: a call header, then the side-by-side Shiki
- * diff of `details.changes`, with a plain boxed diff until Shiki has loaded.
+ * TUI rendering for edit and write: a call header, then a boxed, colored diff
+ * of `details.changes`, rendered once per width.
  */
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { formatBoxesWindowed, osc8Link, type BoxBlock, type BoxLine, type BoxSection, type Excerpt } from "./box-format";
+import { boxRendererWindowed, osc8Link, type BoxBlock, type BoxLine, type BoxSection, type BoxWindowedOpts, type Excerpt } from "./box-format";
 import { computeDiffStats, formatStats, sumStats } from "./diff-stats";
-import { createShikiDiffComponent } from "./shiki-diff";
 import { getContainer, getText } from "./tui";
 
 export interface FileChangeSummary {
@@ -25,11 +24,6 @@ function displayName(file: string, cwd: string): string {
 	const relative = path.relative(cwd, file);
 	if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) return relative;
 	return shortenPath(file);
-}
-
-/** pi-diff titles its view from the ---/+++ headers, so they must carry the same label as the box. */
-function relabelDiff(diff: string, label: string): string {
-	return diff.replace(/^--- .*$/m, `--- ${label}`).replace(/^\+\+\+ .*$/m, `+++ ${label}`);
 }
 
 function parseDiffToSections(filename: string, diffText: string): BoxSection[] {
@@ -66,6 +60,12 @@ const HUNK_EXCERPTS: Excerpt[] = [
 	{ focus: "head", context: 12 },
 	{ focus: "tail", context: 13 },
 ];
+const DIFF_BOX: BoxWindowedOpts = { maxSections: 1, excerpts: HUNK_EXCERPTS };
+
+function colorLine(line: BoxLine, theme: any): BoxLine {
+	if (!line.highlight) return line;
+	return { ...line, text: theme.fg(line.text.startsWith("+") ? "toolDiffAdded" : "toolDiffRemoved", line.text) };
+}
 
 export function renderChangeCall(verb: string, streamField?: string) {
 	return (args: any, theme: any, context: any) => {
@@ -108,27 +108,14 @@ export function renderChangeResult(result: any, { expanded }: { expanded: boolea
 		const sections = parseDiffToSections(display, change.diff);
 		container.addChild(new Text(formatStats(sumStats([computeDiffStats(sections)]), theme), 0, 0));
 		const linked = change.path.startsWith("/") ? osc8Link(`file://${change.path}`, display) : display;
-		const fallback = (width: number): string[] =>
-			formatBoxesWindowed(
-				sections.map((s) => ({
-					...s,
-					header: linked,
-					blocks: !expanded && s.blocks.length > 1 ? s.blocks.slice(-1) : s.blocks,
+		const build = (): BoxSection[] =>
+			sections.map((s) => ({
+				header: linked,
+				blocks: (!expanded && s.blocks.length > 1 ? s.blocks.slice(-1) : s.blocks).map((b) => ({
+					lines: b.lines.map((line) => colorLine(line, theme)),
 				})),
-				{ maxSections: 1, excerpts: HUNK_EXCERPTS },
-				undefined,
-				width,
-			).split("\n");
-		container.addChild(
-			createShikiDiffComponent({
-				diffText: relabelDiff(change.diff, display),
-				filePath: change.path,
-				expanded,
-				split: true,
-				fallback,
-				invalidate: context?.invalidate,
-			}),
-		);
+			}));
+		container.addChild(boxRendererWindowed(build, { collapsed: DIFF_BOX, expanded: DIFF_BOX }));
 	}
 	return container;
 }

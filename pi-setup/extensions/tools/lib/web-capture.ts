@@ -7,6 +7,7 @@
 
 import { createRequire } from "node:module";
 import path from "node:path";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 export class WebCaptureError extends Error {}
 
@@ -32,17 +33,18 @@ const REVEAL_IMAGE_WAIT_MS = 3_000;
 const REVEAL_NETWORK_WAIT_MS = 5_000;
 
 function loadPlaywright(): any {
-	const require = createRequire(import.meta.url);
-	const candidates = [
-		"playwright-core",
-		"playwright",
-		path.join(__dirname, "..", "node_modules", "playwright-core"),
+	// stats bundles this file too, and its bundle sits beside tools/, not in it
+	const requires = [
+		createRequire(import.meta.url),
+		createRequire(path.join(getAgentDir(), "extensions", "tools", "package.json")),
 	];
-	for (const candidate of candidates) {
-		try {
-			return require(candidate);
-		} catch {
-			/* try the next one */
+	for (const require of requires) {
+		for (const name of ["playwright-core", "playwright"]) {
+			try {
+				return require(name);
+			} catch {
+				/* try the next one */
+			}
 		}
 	}
 	throw new WebCaptureError(

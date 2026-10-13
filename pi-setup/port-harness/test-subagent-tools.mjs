@@ -3,7 +3,7 @@
 // with PI_BIN pointed at a wrapper that logs argv + injects the probe extension.
 import { createJiti } from "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs";
 
-const TOOLS_DIR = process.env.HOME + "/.pi/agent/extensions/tools/";
+const TOOLS_DIR = (process.env.PI_TOOLS ?? decodeURIComponent(new URL("../extensions/tools", import.meta.url).pathname)) + "/";
 const jiti = createJiti(TOOLS_DIR);
 const { piSpawn } = await jiti.import("./lib/pi-spawn.ts");
 

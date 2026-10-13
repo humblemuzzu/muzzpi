@@ -73,22 +73,13 @@ else
          "node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs"
 fi
 
-# ── pi-server: some pi versions import it without declaring the dependency ──
-if ! grep -q "@earendil-works/pi-server" "$PI_DIST/experimental/server.js" 2>/dev/null; then
-    pass "pi core: pi-server not needed (not imported by this pi)"
-elif [ -d "$PI_PKG/node_modules/@earendil-works/pi-server" ]; then
-    pass "pi core: pi-server present"
-else
-    fail "pi core: @earendil-works/pi-server missing — every command crashes (ERR_MODULE_NOT_FOUND)" \
-         "bash pi-setup/pi-core-patches/install-pi-server.sh"
-fi
-
 # ── removed packages must stay removed (AGENTS.md "Removed — do not reinstall") ──
 REMOVED_PKGS=(
     pi-context todos pi-web-access pi-tasks @tomooshi/condensed-milk-pi
     claude-agent-sdk-pi @sting8k/pi-vcc pi-computer-use pi-gpt-config pi-ask
     pi-grok-cli pi-claude-bridge lsp-pi pi-powerline-footer pi-anycopy
-    pi-autoresearch
+    pi-autoresearch pi-token-burden @marckrenn/pi-sub-bar @marckrenn/pi-sub-core
+    pi-tool-display
 )
 NPM_GLOBAL="$(npm root -g 2>/dev/null || true)"
 removed_found=""
@@ -98,8 +89,8 @@ for pkg in "${REMOVED_PKGS[@]}"; do
     done
     git_hit=$(find "$PI_AGENT/git" -mindepth 3 -maxdepth 3 -type d -name "${pkg##*/}" 2>/dev/null)
     [ -n "$git_hit" ] && removed_found+=" $git_hit"
-    for ext in json ts; do
-        [ -e "$PI_AGENT/extensions/${pkg##*/}.$ext" ] && removed_found+=" $PI_AGENT/extensions/${pkg##*/}.$ext"
+    for leftover in "${pkg##*/}" "${pkg##*/}.json" "${pkg##*/}.ts" "${pkg##*/}.js"; do
+        [ -e "$PI_AGENT/extensions/$leftover" ] && removed_found+=" $PI_AGENT/extensions/$leftover"
     done
     grep -qE "\"npm:${pkg}(@[^\"]*)?\"|\"git:[^\"]*/${pkg##*/}(@[^\"]*)?\"" "$PI_AGENT/settings.json" 2>/dev/null \
         && removed_found+=" settings.json→$pkg"
@@ -109,18 +100,6 @@ if [ -z "$removed_found" ]; then
 else
     fail "removed packages are back:$removed_found" \
          "pi remove <source> for each, and trash any leftover dir or config named above"
-fi
-
-# ── pi-tool-display: config with ALL tool overrides disabled ──
-TDCFG="$PI_AGENT/extensions/pi-tool-display/config.json"
-if [ -f "$TDCFG" ] && python3 -c '
-import json, sys
-overrides = json.load(open(sys.argv[1])).get("registerToolOverrides", {})
-sys.exit(1 if any(overrides.values()) else 0)' "$TDCFG" 2>/dev/null; then
-    pass "pi-tool-display: config present, all tool overrides false"
-else
-    fail "pi-tool-display: config missing, unreadable, or an override is true (clobbers our custom tools)" \
-         "cp pi-setup/extensions/pi-tool-display/config.json $TDCFG"
 fi
 
 # ── images: pi still normalizes tool images with the profile lib/image-budget.ts assumes ──
@@ -165,25 +144,34 @@ else
 fi
 
 # ── our extensions: smear fixes present in the LIVE deployed copies ──
-if grep -q "flattenLabelText" "$PI_AGENT/extensions/editor/index.ts" 2>/dev/null && \
-   grep -q "flattenSegmentText" "$PI_AGENT/extensions/editor/widget-row.ts" 2>/dev/null; then
+# install.sh deploys bundles; a .ts left beside one shadows it (pi prefers index.ts)
+stale_ts=$(find "$PI_AGENT/extensions" -name node_modules -prune -o -name "*.ts" ! -name herdr-agent-state.ts -print 2>/dev/null | head -3)
+if [ -z "$stale_ts" ] && [ -f "$PI_AGENT/extensions/tools/index.js" ]; then
+    pass "extensions: deployed as bundles (no TypeScript sources to resolve at startup)"
+else
+    fail "extensions: not deployed as bundles${stale_ts:+ (found ${stale_ts//$'\n'/, })}" \
+         "bash pi-setup/install.sh"
+fi
+
+if grep -q "flattenLabelText" "$PI_AGENT/extensions/editor/index.js" 2>/dev/null && \
+   grep -q "flattenSegmentText" "$PI_AGENT/extensions/editor/index.js" 2>/dev/null; then
     pass "editor extension: label newline guards (describeToolCall + sinks)"
 else
     fail "editor extension: label guards missing (multiline bash cmds smear the TUI)" \
-         "cp -R pi-setup/extensions/editor/. $PI_AGENT/extensions/editor/"
+         "bash pi-setup/install.sh"
 fi
 
-if grep -q "normalizeForDisplay" "$PI_AGENT/extensions/tools/lib/box-format.ts" 2>/dev/null; then
+if grep -q "normalizeForDisplay" "$PI_AGENT/extensions/tools/index.js" 2>/dev/null; then
     pass "tools extension: box-format display normalization"
 else
     fail "tools extension: box-format normalization missing" \
-         "cp -R pi-setup/extensions/tools/. $PI_AGENT/extensions/tools/ && (cd $PI_AGENT/extensions/tools && npm install --no-package-lock)"
+         "bash pi-setup/install.sh"
 fi
 
 # ── sub-agents: agent-models.json loads cleanly and every model is in pi's catalog ──
-# Parsed by the deployed loader itself, so this cannot drift from what the tools
-# read. A model missing from `pi --list-models` would be refused at call time.
-AM_REPORT=$(cd "$PI_AGENT/extensions/tools" 2>/dev/null && bun -e '
+# Parsed by the loader the tools bundle is built from, so this cannot drift from
+# what the tools read. A model missing from `pi --list-models` would be refused at call time.
+AM_REPORT=$(cd "$SCRIPT_DIR/extensions/tools" 2>/dev/null && bun -e '
 const { loadAgentModels } = await import("./lib/agent-models.ts");
 const { execFileSync } = await import("node:child_process");
 const config = loadAgentModels();
@@ -197,55 +185,6 @@ if [ -f "$PI_AGENT/agent-models.json" ] && [ -z "$AM_REPORT" ]; then
 else
     fail "sub-agents: agent-models.json — ${AM_REPORT:-missing}" \
          "cp pi-setup/agent-models.json $PI_AGENT/agent-models.json  # then fix the named entries"
-fi
-
-# ── pi-sub: grok usage provider (local patch, files listed in manifest.txt) ──
-SUB_NM="$PI_AGENT/npm/node_modules/@marckrenn"
-SUB_MANIFEST="$SCRIPT_DIR/pi-sub-patches/manifest.txt"
-sub_stale=""
-if [ -f "$SUB_MANIFEST" ]; then
-    while read -r src dest || [ -n "$src" ]; do
-        [ -z "$src" ] && continue
-        cmp -s "$SCRIPT_DIR/pi-sub-patches/$src" "$SUB_NM/$dest" || sub_stale+=" $dest"
-    done < "$SUB_MANIFEST"
-else
-    sub_stale=" (pi-sub-patches/manifest.txt is missing)"
-fi
-if [ -z "$sub_stale" ]; then
-    pass "pi-sub: grok provider patch (every manifest file matches pi-sub-patches/)"
-else
-    fail "pi-sub: grok provider patch missing or stale:$sub_stale" \
-         "while read -r s d; do cp \"pi-setup/pi-sub-patches/\$s\" \"$SUB_NM/\$d\"; done < pi-setup/pi-sub-patches/manifest.txt"
-fi
-
-# ── pi-sub-core: stale-ctx guard ──
-if node "$SCRIPT_DIR/pi-sub-patches/apply-sub-core-stale-guard.mjs" --check >/dev/null 2>&1; then
-    pass "pi-sub-core: stale-ctx guard present"
-else
-    fail "pi-sub-core: stale-ctx guard missing (a fetch outliving /resume exits pi)" \
-         "node pi-setup/pi-sub-patches/apply-sub-core-stale-guard.mjs"
-fi
-
-# ── shiki-diff: pi-diff render pipeline (edit/write syntax-highlighted diffs) ──
-# Non-fatal at runtime (falls back to the plain box renderer), but a FAIL means
-# the pretty diffs are silently off. Probed with plain node; pi loads under jiti.
-TOOLS_DIR="$PI_AGENT/extensions/tools"
-if [ ! -d "$TOOLS_DIR/node_modules/@heyhuynhgiabuu/pi-diff" ]; then
-    fail "shiki-diff: @heyhuynhgiabuu/pi-diff not installed (edit/write diffs fall back to plain)" \
-         "(cd \"$TOOLS_DIR\" && npm install --no-package-lock)"
-else
-    # exit 0 = full pipeline incl renderSplit; 2 = mandatory ok but renderSplit
-    # missing (edit degrades to unified — non-fatal); 3 = mandatory API missing.
-    ( cd "$TOOLS_DIR" && node --input-type=module -e "const m=await import('@heyhuynhgiabuu/pi-diff');const t=m?.__testing;if(!t||typeof t.parsePatchFiles!=='function'||typeof t.renderUnified!=='function')process.exit(3);process.exit(typeof t.renderSplit==='function'?0:2)" ) >/dev/null 2>&1
-    cm_rc=$?
-    if [ "$cm_rc" -eq 0 ]; then
-        pass "shiki-diff: pi-diff __testing pipeline (parsePatchFiles + renderUnified + renderSplit)"
-    elif [ "$cm_rc" -eq 2 ]; then
-        pass "shiki-diff: pi-diff __testing pipeline present; renderSplit missing — edit uses unified"
-    else
-        fail "shiki-diff: pi-diff __testing API changed — edit/write diffs degraded to plain fallback" \
-             "update extensions/tools/lib/shiki-diff.ts to the new pi-diff export shape"
-    fi
 fi
 
 echo

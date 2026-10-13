@@ -12,6 +12,17 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## Packages + deploy (2026-10-13): 3 packages out, extensions bundled
+
+Removed `pi-token-burden`, `@marckrenn/pi-sub-bar` (+ pi-sub-core) and
+`pi-tool-display` with `pi remove`; trashed their configs, `pi-sub-patches/`
+and `install-pi-server.sh`. Extensions now deploy as Bun bundles
+(`build-extensions.ts`); `settings.json` lists `.js`. Boot 1135 to 443 ms,
+keystroke at 700k 180 to 10 ms. Detail: `2026-10-13-performance.md`.
+Backup: `~/.pi/agent/extensions.backup-20261013-180008`.
+
+---
+
 ## 1.2.0 (2026-10-13) — from 1.1.0, `resource-loader.js` + `keybindings.js` re-derived
 
 **Patch drift (stock 1.1.0 vs stock 1.2.0, registry tarballs):**

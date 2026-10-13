@@ -1,5 +1,0 @@
-pi-sub-shared-index.ts pi-sub-shared/index.ts
-registry.ts pi-sub-core/src/providers/registry.ts
-grok.ts pi-sub-core/src/providers/impl/grok.ts
-bar-metadata.ts pi-sub-bar/src/providers/metadata.ts
-bar-settings-types.ts pi-sub-bar/src/settings-types.ts

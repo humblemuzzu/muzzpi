@@ -10,14 +10,14 @@
   ],
   "extensions": [
     "~/.pi/agent/extensions/editor",
-    "~/.pi/agent/extensions/session-name.ts",
-    "~/.pi/agent/extensions/system-prompt.ts",
+    "~/.pi/agent/extensions/session-name.js",
+    "~/.pi/agent/extensions/system-prompt.js",
     "~/.pi/agent/extensions/tools",
     "~/.pi/agent/extensions/command-palette",
     "~/.pi/agent/extensions/theme-studio",
     "~/.pi/agent/extensions/stats",
-    "~/.pi/agent/extensions/notify.ts",
-    "~/.pi/agent/extensions/mentions.ts",
+    "~/.pi/agent/extensions/notify.js",
+    "~/.pi/agent/extensions/mentions.js",
     "-builtin:mcp"
   ],
   "compaction": {
@@ -43,10 +43,7 @@
   "quietStartup": "header",
   "tuiMode": "fullscreen",
   "packages": [
-    "npm:pi-token-burden",
     "npm:@benvargas/pi-claude-code-use@2.2.1",
-    "npm:@marckrenn/pi-sub-bar",
-    "npm:pi-tool-display",
     "npm:pi-codex-goal@0.6.0",
     { "source": "npm:pi-mcp-adapter@5.1.0", "skills": [] }
   ],
