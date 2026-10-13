@@ -10,10 +10,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { piSpawn } from "./pi-spawn";
+import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, piSpawn } from "./pi-spawn";
 
 let dir: string;
 let stub: string;
@@ -92,6 +92,41 @@ describe("--model", () => {
 	test("is absent when no model is given, so the child runs on pi's default", async () => {
 		const run = await launch({});
 		expect(run.args).not.toContain("--model");
+	});
+});
+
+describe("child extensions", () => {
+	const deployed = CHILD_EXTENSIONS.slice(0, 2).every((p) => existsSync(p));
+
+	test.if(deployed)("a child loads only the extensions it uses", async () => {
+		for (const config of [{}, { followUp: "report" }]) {
+			const run = await launch(config);
+			expect(run.args).toContain("--no-extensions");
+			const loaded = run.args.filter((_, i) => run.args[i - 1] === "-e");
+			expect(loaded).toEqual(CHILD_EXTENSIONS.filter((p) => existsSync(p)));
+			expect(loaded.some((p) => p.endsWith("/extensions/tools"))).toBe(true);
+			expect(loaded.some((p) => p.endsWith("/system-prompt.js"))).toBe(true);
+		}
+	});
+
+	test.if(deployed)("builtin codemode loads only for a child whose tools include it", async () => {
+		const loadedBy = async (extensionTools: string[]) => {
+			const run = await launch({ extensionTools });
+			return run.args.filter((_, i) => run.args[i - 1] === "-e");
+		};
+		expect(await loadedBy(["read", "codemode"])).toContain("builtin:codemode");
+		expect(await loadedBy(["read"])).not.toContain("builtin:codemode");
+	});
+
+	test(`${ALL_EXTENSIONS_ENV}=1 gives a child every extension again`, async () => {
+		process.env[ALL_EXTENSIONS_ENV] = "1";
+		try {
+			const run = await launch({});
+			expect(run.args).not.toContain("--no-extensions");
+			expect(run.args).not.toContain("-e");
+		} finally {
+			delete process.env[ALL_EXTENSIONS_ENV];
+		}
 	});
 });
 

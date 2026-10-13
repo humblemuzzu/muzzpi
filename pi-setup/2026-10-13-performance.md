@@ -64,6 +64,40 @@ in that session.
 - pi-sub-bar, pi-token-burden, pi-tool-display uninstalled with their configs,
   patches and checks; added to the removed list.
 
+## Round 2: sub-agents, session start
+
+Every sub-agent result in `sessions/` (3,473, with nested children) was
+scanned for what children used:
+
+| | finder | chad | oracle | delegate | code_review | librarian | read_* |
+|---|---|---|---|---|---|---|---|
+| runs | 461 | 487 | 276 | 1,139 | 606 | 55 | 1,518 |
+| comment-gate blocks | 0 | 0 | 0 | 92 | 0 | 0 | 0 |
+| skill loads | 0 | 138 | 0 | 333 | 1 | 0 | 0 |
+| results with `[REDACTED]` | 2 | 26 | 6 | 105 | 34 | 1 | 0 |
+
+No child ever passed an @mention, called `mcp`, a goal tool or codemode, or
+received a custom message. Providers come from `models.json`; only the tools
+extension registers tools a child calls. So a child loads tools,
+system-prompt, guardrails and claude-code-use (all four always), keeping
+skills and AGENTS.md.
+
+| | before | after |
+|---|---|---|
+| sub-agent start | 409 ms + `tmux`/`curl` + a naming request + a mailbox | 355 ms |
+| interactive ready | 558 ms | 533 ms |
+
+Also: `local-model` probes asynchronously and only with a UI (it blocked
+33 ms on every start), `session-name` is off in children (0 of 1,574 child
+sessions ever got a name), psst re-reads `auth.json` only when it changes,
+`pngjs` loads on first use (10.5 ms), and `agent_message` with its mailbox is
+gone (4,691 never-cleaned folders).
+
+Not done: prebuilding the npm packages (6 ms for claude-code-use + codex-goal;
+pi-mcp-adapter reads its own files and keychain helper by relative path), lazy
+`psst-cli` (5.8 ms, the first prompt loads it anyway), a calmer spinner (its
+glyph changes each tick, so every repaint is real).
+
 ## Checked and left alone
 
 - Node's compile cache (`NODE_COMPILE_CACHE`): 17 ms, not worth a core patch.

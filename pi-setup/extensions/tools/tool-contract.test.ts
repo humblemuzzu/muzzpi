@@ -238,6 +238,14 @@ describe("tool contract: the spawn graph is acyclic", () => {
 		}
 	});
 
+	test("codemode goes to chad, delegate and code_review, and gives chad no way to write", () => {
+		for (const name of ["chad", "delegate", "code_review"]) expect(allowlists[name]).toContain("codemode");
+		for (const name of ["finder", "oracle", "librarian"]) expect(allowlists[name]).not.toContain("codemode");
+		for (const mutation of ["edit", "write", "format_file", "undo_edit", "redo_edit"]) {
+			expect(allowlists.chad).not.toContain(mutation);
+		}
+	});
+
 	test("the one nesting edge is delegate -> finder, and it terminates", () => {
 		// stated explicitly so a change to the shape of the graph has to change
 		// this line too, rather than silently passing the generic checks above.

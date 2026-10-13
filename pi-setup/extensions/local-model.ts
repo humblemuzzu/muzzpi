@@ -14,7 +14,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { execSync } from "child_process";
+import { execFile, execSync } from "child_process";
 import * as os from "os";
 import { SUB_AGENT_TOOLS_ENV } from "./tools/lib/sub-agent-prompt";
 
@@ -155,9 +155,21 @@ const STATE_ICON: Record<string, string> = {
 	unloaded: "⚪",
 };
 
-function statusBarLabel(): string {
-	if (!tmuxAlive() || !serverUp()) return "";
-	const m = findModel();
+function run(cmd: string, args: string[], timeout: number): Promise<{ ok: boolean; out: string }> {
+	return new Promise((resolve) => {
+		execFile(cmd, args, { timeout, encoding: "utf-8" }, (error, stdout) => resolve({ ok: !error, out: stdout ?? "" }));
+	});
+}
+
+async function statusBarLabel(): Promise<string> {
+	if (!(await run("tmux", ["has-session", "-t", TMUX_SESSION], 10_000)).ok) return "";
+	if (!(await run("curl", ["-sf", "--max-time", "2", `${BASE}/health`], 10_000)).ok) return "";
+	const r = await run("curl", ["-sf", "--max-time", "3", `${BASE}/models`], 10_000);
+	let models: LlamaModel[] = [];
+	try {
+		models = r.ok ? (JSON.parse(r.out)?.data ?? []) : [];
+	} catch {}
+	const m = models.find((model) => model.id === DEFAULT_MODEL);
 	if (!m) return `🟡 local :${PORT}`;
 	const icon = STATE_ICON[m.status.value] ?? "🟡";
 	return `${icon} ${m.id}`;
@@ -212,11 +224,14 @@ function statusReport(): string {
 // ── extension ────────────────────────────────────────────────────────────────
 export default function localModelExtension(pi: ExtensionAPI) {
 	const refreshStatus = (ctx: any) => {
-		try {
-			ctx.ui.setStatus("local-model", statusBarLabel());
-		} catch {
-			/* status bar unavailable (print/json mode) */
-		}
+		if (!ctx.hasUI) return;
+		void statusBarLabel().then((label) => {
+			try {
+				ctx.ui.setStatus("local-model", label);
+			} catch {
+				/* the session was replaced while the probe ran */
+			}
+		});
 	};
 
 	pi.registerCommand("local", {

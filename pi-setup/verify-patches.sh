@@ -187,6 +187,15 @@ else
          "cp pi-setup/agent-models.json $PI_AGENT/agent-models.json  # then fix the named entries"
 fi
 
+# pi-spawn.ts starts children with --no-extensions -e <the four they use>; that
+# relies on --no-extensions keeping exactly the -e paths
+if grep -q "this.noExtensions ? cliEnabledExtensions" "$PI_DIST/core/resource-loader.js" 2>/dev/null; then
+    pass "sub-agents: pi still loads only the -e extensions under --no-extensions"
+else
+    fail "sub-agents: pi changed how --no-extensions works; children may be missing their tools" \
+         "check resource-loader.js, then call one real sub-agent; PI_SUBAGENT_ALL_EXTENSIONS=1 restores the full set meanwhile"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
     echo "ALL PATCHES IN PLACE ✓"

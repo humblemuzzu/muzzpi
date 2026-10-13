@@ -38,11 +38,13 @@ import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
  * `screenshot` is in — grok sees images. `oracle`/`finder`/`librarian` are out
  * because nesting one is a whole extra process for tools chad can call itself.
  * the seven github tools are here directly for the same reason. `chad`/`delegate`
- * are out — a swarm that spawns swarms is a fork bomb.
+ * are out — a swarm that spawns swarms is a fork bomb. `codemode` scripts
+ * reach only the tools listed here, through the same hooks, so bash stays
+ * read-only inside a script too.
  */
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash"];
 const EXTENSION_TOOLS = [
-	"read", "grep", "find", "ls", "bash", "skill",
+	"read", "grep", "find", "ls", "bash", "skill", "codemode",
 	"web_search", "read_web_page", "screenshot",
 	"read_github", "search_github", "list_directory_github",
 	"list_repositories", "glob_github", "commit_search", "diff",

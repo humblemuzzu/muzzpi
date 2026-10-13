@@ -163,7 +163,8 @@ ones worth knowing about:
   transcript every frame, and the edit/write diff renderer re-cut all 3,267 of
   its lines each time. Diffs now render once per width, three packages that
   cost 600 ms of startup went, and each extension ships as one prebuilt file:
-  10 ms per keystroke, 1.1 s to 0.44 s to start (every sub-agent too).
+  10 ms per keystroke, 1.1 s to 0.44 s to start, and sub-agents load only the
+  4 extensions they use: 0.36 s each.
 - **`pi update --self` silently disables every patch.** It points `pi` at a
   bundled build that ignores patched files. Updates go through
   [`update-pi.sh`](pi-setup/update-pi.sh) instead.

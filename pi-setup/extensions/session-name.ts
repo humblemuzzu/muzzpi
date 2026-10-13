@@ -7,10 +7,13 @@
 
 import { complete, type Api, type Model, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { SUB_AGENT_TOOLS_ENV } from "./tools/lib/sub-agent-prompt";
 
-const NAMING_MODEL = { provider: "anthropic", id: "claude-haiku-4-5" } as const;
+const NAMING_MODEL = { provider: "anthropic", id: "claude-haiku-5-5" } as const;
 
 export default function (pi: ExtensionAPI) {
+	// a sub-agent's name is never shown and its process exits before the request lands
+	if (process.env[SUB_AGENT_TOOLS_ENV]?.trim()) return;
 	let named = false;
 
 	pi.on("input", async (event, ctx) => {

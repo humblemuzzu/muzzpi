@@ -119,6 +119,29 @@ export async function loadSecrets(): Promise<SecretEntry[]> {
 
 // --- comprehensive scrubbing values ---
 
+// re-parsed only when the file changes, so a refreshed OAuth token is still caught
+let authCache: { path: string; mtimeMs: number; size: number; values: string[] } | undefined;
+
+function authJsonValues(): string[] {
+	const authPath = path.join(os.homedir(), ".pi", "agent", "auth.json");
+	try {
+		const st = fs.statSync(authPath);
+		if (authCache?.path === authPath && authCache.mtimeMs === st.mtimeMs && authCache.size === st.size) return authCache.values;
+		const values: string[] = [];
+		for (const provider of Object.values(JSON.parse(fs.readFileSync(authPath, "utf-8"))) as any[]) {
+			for (const field of ["key", "refresh", "access"] as const) {
+				const val = provider?.[field];
+				if (typeof val === "string" && val.length >= 8) values.push(val);
+			}
+		}
+		authCache = { path: authPath, mtimeMs: st.mtimeMs, size: st.size, values };
+		return values;
+	} catch {
+		authCache = undefined;
+		return [];
+	}
+}
+
 /**
  * load ALL sensitive string values for output scrubbing.
  * covers vault secrets + auth.json tokens + sensitive env vars.
@@ -134,21 +157,7 @@ export async function loadAllScrubValues(): Promise<string[]> {
 	}
 
 	// 2. auth.json tokens
-	try {
-		const authPath = path.join(os.homedir(), ".pi", "agent", "auth.json");
-		if (fs.existsSync(authPath)) {
-			const raw = fs.readFileSync(authPath, "utf-8");
-			const auth = JSON.parse(raw);
-			for (const provider of Object.values(auth) as any[]) {
-				for (const field of ["key", "refresh", "access"] as const) {
-					const val = provider[field];
-					if (typeof val === "string" && val.length >= 8) {
-						values.push(val);
-					}
-				}
-			}
-		}
-	} catch { /* ignore */ }
+	values.push(...authJsonValues());
 
 	// 3. sensitive env vars
 	const sensitiveEnvPatterns = [

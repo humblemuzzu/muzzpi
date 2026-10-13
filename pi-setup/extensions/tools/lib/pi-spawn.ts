@@ -292,12 +292,42 @@ export function readAgentPrompt(filename: string): string {
 
 // --- spawn ---
 
+const PI_AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
+
+/**
+ * The only extensions a headless child uses: every sub-agent run on record
+ * called no tool, command or hook from the others (see
+ * pi-setup/2026-10-13-performance.md). tools and system-prompt are required.
+ */
+export const CHILD_EXTENSIONS: readonly string[] = [
+	path.join(PI_AGENT_DIR, "extensions", "tools"),
+	path.join(PI_AGENT_DIR, "extensions", "system-prompt.js"),
+	path.join(PI_AGENT_DIR, "extensions", "guardrails"),
+	path.join(PI_AGENT_DIR, "npm", "node_modules", "@benvargas", "pi-claude-code-use"),
+];
+
+/** set to 1 to give children every extension again */
+export const ALL_EXTENSIONS_ENV = "PI_SUBAGENT_ALL_EXTENSIONS";
+
+export function childExtensionArgs(tools: readonly string[] = []): string[] {
+	if (process.env[ALL_EXTENSIONS_ENV] === "1") return [];
+	if (!CHILD_EXTENSIONS.slice(0, 2).every((p) => fs.existsSync(p))) return [];
+	const paths = CHILD_EXTENSIONS.filter((p) => fs.existsSync(p));
+	// pi adds built-ins during extension discovery, which --no-extensions skips
+	if (tools.includes("codemode")) paths.push("builtin:codemode");
+	return ["--no-extensions", ...paths.flatMap((p) => ["-e", p])];
+}
+
 export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 	const useRpc = !!config.followUp;
 	const routing = resolveSessionArgs(config.session);
+	const requestedTools = resolveAliases([
+		...(config.builtinTools ?? []),
+		...(config.extensionTools ?? []),
+	]);
 	const args: string[] = useRpc
-		? ["--mode", "rpc", ...routing.args]
-		: ["--mode", "json", "-p", ...routing.args];
+		? ["--mode", "rpc", ...routing.args, ...childExtensionArgs(requestedTools)]
+		: ["--mode", "json", "-p", ...routing.args, ...childExtensionArgs(requestedTools)];
 
 	if (config.model) args.push("--model", config.model);
 
@@ -306,12 +336,8 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 	if (config.thinkingLevel) {
 		args.push("--thinking", config.thinkingLevel);
 	}
-	// merge into one native --tools allowlist. never emit --no-tools: it
-	// empties the registry so nothing can be re-activated afterwards.
-	const requestedTools = resolveAliases([
-		...(config.builtinTools ?? []),
-		...(config.extensionTools ?? []),
-	]);
+	// one native --tools allowlist. never emit --no-tools: it empties the
+	// registry so nothing can be re-activated afterwards.
 	if (requestedTools.length > 0) {
 		args.push("--tools", requestedTools.join(","));
 	}

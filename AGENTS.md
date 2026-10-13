@@ -300,6 +300,14 @@ made a mailbox that was never cleaned up, and sub-agents could not receive.
   `continueId`.
 - **Don't use `--no-tools`** for sub-agents: it empties the registry and
   nothing can be re-activated.
+- **Children load only `CHILD_EXTENSIONS`** (`pi-spawn.ts`: tools,
+  system-prompt, guardrails, claude-code-use) via `--no-extensions -e`, plus
+  `-e builtin:codemode` when the child's tools include `codemode` (chad,
+  delegate, code_review): `--no-extensions` also drops pi's built-ins. A
+  script reaches only the child's listed tools, through the same hooks. An
+  extension a child must have goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1`
+  restores the full set. `verify-patches.sh` fails if pi changes what
+  `--no-extensions` keeps.
 
 ### chad — read-only
 

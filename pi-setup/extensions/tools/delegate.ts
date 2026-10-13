@@ -30,7 +30,7 @@ import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const EXTENSION_TOOLS = [
 	"read", "grep", "find", "ls", "bash",
-	"edit", "write", "format_file", "skill", "finder",
+	"edit", "write", "format_file", "skill", "finder", "codemode",
 	"web_search", "read_web_page", "screenshot",
 ];
 

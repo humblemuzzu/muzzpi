@@ -4,8 +4,15 @@
  */
 
 import { closeSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
-import { PNG } from "pngjs";
+import { createRequire } from "node:module";
+import type { PNG as PngClass } from "pngjs";
 import type { Box } from "./vision";
+
+let pngClass: typeof PngClass | undefined;
+function Png(): typeof PngClass {
+  pngClass ??= (createRequire(import.meta.url)("pngjs") as { PNG: typeof PngClass }).PNG;
+  return pngClass;
+}
 
 // pngjs is ^7 but @types/pngjs stops at 6.0.5. Only PNG.sync.read/write and
 // the PNG constructor are used, and those did not change across the major.
@@ -41,7 +48,7 @@ export function pngSizeFromHeader(head: Buffer, path = "image"): { width: number
 }
 
 export function load(path: string): Image {
-  const png = PNG.sync.read(readFileSync(path));
+  const png = Png().sync.read(readFileSync(path));
   const pixels = png.width * png.height;
   const rgb = new Uint8Array(pixels * 3);
   for (let i = 0; i < pixels; i += 1) {
@@ -57,6 +64,7 @@ export function load(path: string): Image {
 }
 
 export function encode(img: Image): Buffer {
+  const PNG = Png();
   const png = new PNG({ width: img.width, height: img.height });
   for (let i = 0; i < img.width * img.height; i += 1) {
     png.data[i * 4] = img.rgb[i * 3] as number;
