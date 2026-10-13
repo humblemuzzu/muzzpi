@@ -57,6 +57,8 @@ import {
 	type SecretEntry,
 } from "./lib/psst";
 import { Vault } from "psst-cli";
+import { requestApproval } from "./lib/approval";
+import { describeMcpCall, destructiveMcpReason, mcpCallOf } from "./lib/destructive-mcp";
 
 export default function (pi: ExtensionAPI) {
 	const limits = process.env.PI_READ_COMPACT ? COMPACT_LIMITS : NORMAL_LIMITS;
@@ -146,6 +148,19 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createGlobGithubTool());
 	pi.registerTool(createCommitSearchTool());
 	pi.registerTool(createDiffTool());
+
+	// bash asks in its own execute; MCP calls are someone else's tool, so they are asked here.
+	pi.on("tool_call", async (event, ctx) => {
+		const call = mcpCallOf(event.toolName, event.input);
+		const reason = call && destructiveMcpReason(call);
+		if (!call || !reason) return;
+		const answer = await requestApproval(
+			ctx,
+			{ tool: "mcp", command: describeMcpCall(call), reasons: [reason], hosts: [], where: `through MCP (${call.tool})` },
+			ctx.signal,
+		);
+		return answer.approved ? undefined : { block: true, reason: answer.message };
+	});
 
 	// ── psst secret management hooks ──────────────────────────
 

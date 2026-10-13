@@ -87,8 +87,6 @@ every request.
    workspace listing for that reason, and the sub-agent model list is built once
    at load.
 
----
-
 ## Patches and configs that must survive updates
 
 Run after **any** `pi update`, `pi install`, or package update:
@@ -197,8 +195,6 @@ peer and resolves to that same copy. **Never put `"*"` back** for those links �
 it installs stale pi copies. The live dir installs with `--no-package-lock`
 because the lockfile stores the links relative to the checkout.
 
----
-
 ## MCP servers
 
 Config: `~/.config/mcp/mcp.json` (backed up as `pi-setup/mcp.json`). Do not
@@ -227,8 +223,6 @@ with the `redirectUrl`. Tokens live in the macOS Keychain.
 
 Result rendering: `settings.toolResultRendering: "boxed"` restores the boxed
 row; `collapsedResultLines` (1–3) sets collapsed height.
-
----
 
 ## Extensions (`extensions/`)
 
@@ -288,19 +282,17 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
   or pastes silently insert the raw temp path. If the module cannot load, leave
   `onPasteImage` unset so pi's default path-insert takes over.
 
----
-
 ## Custom tools
 
-`web_search` and `agent_message` can be disabled in ext-config; both default on.
-
-`codemode` is a pi built-in, enabled by `defaultTools: ["+codemode"]` (a list
-of only `+name`/`-name` changes the inherited selection; `settings.md`, `cli.md`
-"Enable codemode"). It is not in the shim's `CORE_TOOL_NAMES`, so the shim
-aliases it on Anthropic OAuth.
+`codemode` is a pi built-in enabled by `defaultTools: ["+codemode"]`; it is not
+in the shim's `CORE_TOOL_NAMES`, so it is aliased on Anthropic OAuth. `read`
+declares `outputSchema: Type.String()`, so scripts get raw text. **Every tool
+result is redacted** (`psst.ts` `redactSecretPatterns`), scripts included; **cap
+every quantifier there**: an uncapped `[\w.-]*token[\w.-]*` took 284 s on 1 MB.
 
 `glob.ts` registers as `find`; there is no `glob` tool. The 7 GitHub tools are
 separate (`read_github` … `diff`); **there is no tool named `github`**.
+`web_search` and `agent_message` can be disabled in ext-config; both default on.
 
 ### Sub-agents
 
@@ -340,12 +332,18 @@ output/exec flags. A guardrail, not a sandbox.
 — **never reimplement matching**. The wrapper adds only: undo records (saved
 before the write; no record, no write), `permissions.json` checked on the path
 pi resolves and its realpath, `lib/mutex.ts`, Claude's field names, and errors
-with the closest line / duplicate lines / "identical, already done". UTF-8 text
+naming the first differing line, column and code point. `\uXXXX` sent as text
+is decoded only when that alone makes oldText match, refused in prose files
+without escapes; `[REDACTED]` is never written over a real value. UTF-8 text
 only; no `replace_all`, delete or move (`trash <path>` / `git mv` in bash).
 
-- **Nothing deletes a user file.** `permissions.json` blocks every delete route
-  (pinned by `lib/permissions.test.ts` against the shipped file); undo of a
-  creation goes through `lib/trash.ts`. Only harness temp files are removed.
+- **This Mac: no deletes. Over ssh: deletes run.** `lib/remote-command.ts`
+  splits out server parts (ssh args and heredocs, `rsync --delete` to a remote
+  dest); local-only rules carry `where: "local"`; text it cannot place stays
+  local; keep its real-bash oracle test green. Undo of a creation: `lib/trash.ts`.
+- **`ask` rules** (destructive SQL, Docker volumes, buckets, disks; MCP DELETE)
+  go through `lib/approval.ts`: a confirm dialog, refused with no UI (sub-agents,
+  `-p`), logged to `~/.pi/agent/approvals.jsonl`. Reject beats ask beats allow.
 - apply_patch is gone (envelope 9.6%, batch 6.8% failures vs ~2%; see
   `pi-setup/2026-10-11-edit-tool.md`). If GPT models return, gate it by model id.
 - Undo/redo refuse when a later still-applied change touches the path, or the
@@ -414,8 +412,6 @@ in `vision.test.ts`). Tiers: standard 1568px/1568 tokens, high-res (Claude
 - `permissions.json` blocks the capture binary in bash but deliberately does
   not match `sips`.
 
----
-
 ## TUI width — the invariant
 
 **Clamp with the same function pi-tui asserts with** (`visibleWidth` /
@@ -434,8 +430,6 @@ text is never modified).
 
 If it returns: `apply-pi-tui-width-patch.mjs --check` first, then
 `pi-setup/render-repro/`, then hunt for a control char in a single-line string.
-
----
 
 ## Sub-agent models
 
@@ -487,8 +481,6 @@ Gotchas: it's `ctx.hasUI`, not `ctx.canPrompt` (undefined, i.e. falsy, in a
 real TUI); `toLocaleString()` follows the en-IN system locale — always pass
 `"en-US"`.
 
----
-
 ## Skills
 
 `~/.config/agents/skills/` (source: `pi-setup/config-skills/`) plus
@@ -501,8 +493,6 @@ Ports with author prefixes — **`c-` cursor, `mat-` matt pocock, `dm-`
 dmmulroy** — had Claude-Code/Cursor machinery mapped to pi tools or cut; every
 subagent they spawn is read-only.
 
----
-
 ## Agent mention directives
 
 `@oracle @finder @codereview @task @chad` → hidden `display: false` directive
@@ -513,8 +503,6 @@ injected in the `context` hook telling the model to call that tool
   in `mentions.ts` — the barrel `export *` doesn't guarantee evaluation of a
   module with no named exports, and the sources register on load.
 - Don't add `/value` to agent mentions; the `@oracle` text is not stripped.
-
----
 
 ## Update workflow
 
@@ -542,7 +530,7 @@ injected in the `context` hook telling the model to call that tool
 6. **pi-tool-display** → verify `config.json` still exists. The rest are
    unpatched; check for new tool/skill name collisions.
 7. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
-   there; run `bun test` before deploying.
+   there; `npm ci` (node_modules is gitignored), then `bun test` before deploying.
 8. **After any pi update, make one real `edit` and `write`**: the wrapper rides
    on pi's `operations` and error strings.
 
@@ -562,6 +550,7 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 - `pi-setup/2026-07-30-bdsqqq-port.md` — sub-agent wiring, OAuth tool-filter
   trap. **Read before touching tools/subagents.**
 - `pi-setup/2026-10-11-edit-tool.md` — edit/write decision, data, scoreboard
+- `pi-setup/2026-10-13-permissions.md` — server deletes, approval dialog, secret redaction, edit hints
 - `pi-setup/2026-08-13-cloudflare-mcp.md` — the 16 Cloudflare servers, auth flow
 - `pi-setup/2026-10-04-you-should-know.md` — the `/ysk` side agent and its cache-cost maths
 - `pi-setup/2026-10-03-cache-playbook.md` — the Max-plan cache drain: measurement, root

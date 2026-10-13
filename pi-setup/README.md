@@ -118,7 +118,7 @@ gruvbox (active), nightowl, catppuccin-mocha, black-metal.
 
 ### Skills
 Config-level (`config-skills/` → `~/.config/agents/skills/`):
-`chrome-cdp`, `dataforseo`, `design-port`, `dig`, `git`, `jev`, `review`, `tmux`
+`chrome-cdp`, `dataforseo`, `design-port`, `dig`, `git`, `jev`, `review`, `server-ops`, `tmux`
 plus external skills adapted for pi (author-prefixed):
 `c-sqr` (cursor — strict quality review), `mat-design` / `mat-tdd` (matt pocock), `dm-antislop` (dmmulroy).
 Mnemonic: `c-` cursor, `mat-` matt, `dm-` dmmulroy.
@@ -133,7 +133,8 @@ and `install.sh` does not create them.
 ### Permissions
 - Blocks `git add -A` / `git add .` (forces explicit staging)
 - Blocks force push
-- Blocks every way to delete — `rm`, `rmdir`, `unlink`, `shred`, `find -delete`, `git rm`, `git clean`, delete calls in scripts (use `trash` instead)
+- Blocks every way to delete on this Mac — `rm`, `rmdir`, `unlink`, `shred`, `find -delete`, `git rm`, `git clean`, delete calls in scripts (use `trash` instead). Deletes inside `ssh host '...'` run normally.
+- Asks before destroying data, here or on a server: SQL `DROP`/`TRUNCATE`/`DELETE` without `WHERE`, Docker volumes, cloud buckets and databases, disks, and an MCP `DELETE`. No UI (a sub-agent) means refused; every answer goes to `~/.pi/agent/approvals.jsonl`.
 
 ### Pi Packages
 `settings.json` `packages` is the list: `pi-token-burden`, `@benvargas/pi-claude-code-use`,

@@ -24,6 +24,7 @@ import { Type } from "@sinclair/typebox";
 import { formatHeadTail } from "./lib/output-buffer";
 import { defaultOutDir, fitImageFile, fitResultBlocks, pruneOutDir } from "./lib/image-fit";
 import { planToolImages, recordReturnedImages, sessionNote } from "./lib/image-budget";
+import { markSeen } from "./lib/seen-files";
 
 // --- limits ---
 
@@ -114,6 +115,8 @@ export function listDirectory(dirPath: string, maxEntries: number): string {
 
 interface ReadResult {
 	text: string;
+	/** the same lines without numbers or truncation, for codemode scripts. */
+	raw: string;
 	totalLines: number;
 	shownStart: number;
 	shownEnd: number;
@@ -144,9 +147,10 @@ function readFileContent(
 	limits: ReadLimits,
 	readRange?: [number, number],
 ): ReadResult | { error: string } {
-	const allLines = splitFileLines(fs.readFileSync(filePath, "utf-8"));
+	const content = fs.readFileSync(filePath, "utf-8");
+	const allLines = splitFileLines(content);
 	const totalLines = allLines.length;
-	if (totalLines === 0) return { text: "(empty file)", totalLines: 0, shownStart: 0, shownEnd: 0 };
+	if (totalLines === 0) return { text: "(empty file)", raw: "", totalLines: 0, shownStart: 0, shownEnd: 0 };
 
 	if (readRange) {
 		const error = rangeError(readRange, totalLines);
@@ -154,6 +158,7 @@ function readFileContent(
 	}
 	const start = Math.max(1, Math.floor(readRange?.[0] ?? 1));
 	const end = Math.min(totalLines, Math.floor(readRange?.[1] ?? start + limits.maxLines - 1));
+	const raw = allLines.slice(start - 1, end).join("\n") + (end === totalLines && content.endsWith("\n") ? "\n" : "");
 
 	// number lines and truncate long lines
 	const numbered: string[] = [];
@@ -174,7 +179,7 @@ function readFileContent(
 	// if numbered output fits in byte limit, return as-is
 	const totalBytes = numbered.reduce((sum, l) => sum + Buffer.byteLength(l, "utf-8") + 1, 0);
 	if (totalBytes <= limits.maxFileBytes) {
-		return { text: numbered.join("\n"), totalLines, shownStart: start, shownEnd: end };
+		return { text: numbered.join("\n"), raw, totalLines, shownStart: start, shownEnd: end };
 	}
 
 	// otherwise apply head+tail truncation on the numbered lines
@@ -183,6 +188,7 @@ function readFileContent(
 
 	return {
 		text: formatted,
+		raw,
 		totalLines,
 		shownStart: start,
 		shownEnd: end,
@@ -204,6 +210,10 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 			"- This tool can read images (such as PNG, JPEG, and GIF files) and present them to the model visually.\n" +
 			"- When possible, call this tool in parallel for all files you will want to read.\n" +
 			"      - Avoid tiny repeated slices (e.g., 50‑line chunks). If you need more context from the same file, read a larger range or the full default window instead.",
+
+		// codemode scripts get the file's text, without line numbers (pi's read contract).
+		// a result with no structuredContent (an image, a directory) falls back to its text.
+		outputSchema: Type.String(),
 
 		parameters: Type.Object({
 			path: Type.String({
@@ -341,7 +351,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 						isError: true,
 					} as any;
 				}
-				const { text, totalLines, shownStart, shownEnd } = read;
+				const { text, raw, totalLines, shownStart, shownEnd } = read;
 
 				let output = text;
 				let notice: string | undefined;
@@ -350,10 +360,12 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 					notice = `showing lines ${shownStart}-${shownEnd} of ${totalLines}`;
 					output += `\n\n(${notice}. use read_range to see more.)`;
 				}
+				markSeen(ctx.sessionManager.getSessionId(), resolved);
 
 				return {
 					content: [{ type: "text" as const, text: output }],
 					details: { filePath: resolved, notice },
+					structuredContent: raw,
 				} as any;
 			} catch (err: any) {
 				return {

@@ -64,3 +64,9 @@ each grant product-specific scopes.
 - Public servers (`cloudflare-docs` etc.) use `"auth": false` — no OAuth probe on connect.
 - `protocolVersion: "auto"` for all Cloudflare servers (stateless 2026-07-28 servers with legacy
   fallback); the adapter default is `legacy` which also works but skips modern negotiation.
+- **`cloudflare.request()` inside `cloudflare_execute` throws on any non-2xx**, including an
+  ordinary 404 ("no cache rules yet") or one 9109 on a token-only endpoint, and the throw ends
+  the whole script. Wrap each request in `try`/`catch` when a later one must still run. The
+  token can list and create R2 buckets but cannot mint API tokens (9109).
+- An `execute` call whose code sends `method: 'DELETE'` opens an Allow/Deny dialog
+  (`extensions/tools/lib/destructive-mcp.ts`); a sub-agent cannot get approval and is refused.

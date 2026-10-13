@@ -12,6 +12,7 @@ import { createEditToolDefinition, createWriteToolDefinition } from "@mariozechn
 import { createEditTool, createWriteTool } from "./edit-write";
 import { createRedoEditTool, createUndoEditTool } from "./undo-edit";
 import * as ft from "./lib/file-tracker";
+import { createReadTool, NORMAL_LIMITS } from "./read";
 
 const editTool = createEditTool() as any;
 const writeTool = createWriteTool() as any;
@@ -427,5 +428,177 @@ describe("undo_edit / redo_edit through edit and write", () => {
 		expect(result.isError).toBeFalsy();
 		expect(fs.readFileSync(source, "utf8")).toBe("gold\n");
 		expect(fs.existsSync(destination)).toBe(false);
+	});
+});
+
+// every case below is a failure from the 2026-10-12 server session, reduced to its shape.
+describe("edit: a miss names the exact character", () => {
+	test("the first difference is found on a later line, not only the first", async () => {
+		const f = fixture("enum Cmd {\n    Interfaces,\n    RunSpeedTest,\n    Subscribe,\n}\n", ".rs");
+		const message = await refusal(
+			edit({ path: f, old_string: "    Interfaces,\n    RunSpeedTests,\n", new_string: "    Interfaces,\n" }),
+		);
+		expect(message).toContain("first difference: line 3, column 17.");
+		expect(message).toContain('You sent "s" (U+0073), the file has "," (U+002C).');
+		expect(message).toContain("> 3 |     RunSpeedTest,");
+	});
+
+	test("quotes typed where the file has \u2026 and \u2014 are named by code point", async () => {
+		const line = "**Old host** stopped. Any `docker exec profilephoto-db \u2026` command hits that frozen DB \u2014 never use it.";
+		const f = fixture(`# Playbook\n\n${line}\n`, ".md");
+		const sent = line.replace("\u2026", '""').replace("\u2014", '""');
+		const message = await refusal(edit({ path: f, old_string: sent, new_string: "x" }));
+		expect(message).toContain('first difference: line 3, column 56. You sent "\\"" (U+0022), the file has "\u2026" (U+2026).');
+		expect(read(f)).toBe(`# Playbook\n\n${line}\n`);
+	});
+
+	test("a short line with two mistyped characters is still found (seen live: no hint at all)", async () => {
+		const f = fixture("# Playbook\n\nAny `docker exec db \u2026` command hits that frozen DB \u2014 never.\n", ".md");
+		const message = await refusal(
+			edit({ path: f, old_string: 'Any `docker exec db ""` command hits that frozen DB "" never.', new_string: "x" }),
+		);
+		expect(message).toContain('first difference: line 3, column 21. You sent "\\"" (U+0022), the file has "\u2026" (U+2026).');
+	});
+
+	test("an unrelated oldText gets no made-up match", async () => {
+		const f = fixture("alpha beta gamma\ndelta epsilon\n");
+		const message = await refusal(edit({ path: f, old_string: "function render(props) {", new_string: "x" }));
+		expect(message).not.toContain("Closest match");
+	});
+
+	test("a very long line is shown around the difference, not whole", async () => {
+		const long = `${"word ".repeat(200)}needle ${"tail ".repeat(200)}`;
+		const f = fixture(`${long}\n`, ".md");
+		const message = await refusal(edit({ path: f, old_string: `${"word ".repeat(200)}needlE`, new_string: "x" }));
+		expect(message).toContain("first difference: line 1, column 1006.");
+		expect(message).toContain("you sent: \"\u2026word word word word word needlE\"");
+		expect(message.length).toBeLessThan(1500);
+	});
+});
+
+describe("edit / write: \\u escapes sent as text", () => {
+	test("oldText that only matches once decoded is decoded, and so is newText", async () => {
+		const f = fixture("would fix it \u2014 owner's dashboard\n", ".md");
+		const result = await edit({
+			path: f,
+			old_string: "would fix it \\u2014 owner's",
+			new_string: "would fix it \\u2014 the owner's",
+		});
+		expect(read(f)).toBe("would fix it \u2014 the owner's dashboard\n");
+		expect(result.content.map((c: any) => c.text).join("")).toContain("read as the characters they stand for");
+	});
+
+	test("a prose file is not given a literal escape it never had", async () => {
+		const f = fixture("| Push dumps to R2 on a cron |\n", ".md");
+		const message = await refusal(
+			edit({ path: f, old_string: "on a cron |", new_string: "on a cron; waiting on a token \\u2014 the MCP can't mint one |" }),
+		);
+		expect(message).toContain("contains \\u2014 as six characters of text");
+		expect(message).toContain("Send the character itself (\u2014)");
+		expect(read(f)).toBe("| Push dumps to R2 on a cron |\n");
+	});
+
+	test("escapes stay allowed in code, in code spans, and in prose that already uses them", async () => {
+		const code = fixture('const dash = "x";\n', ".ts");
+		await edit({ path: code, old_string: '"x"', new_string: '"\\u2014"' });
+		expect(read(code)).toBe('const dash = "\\u2014";\n');
+
+		const doc = fixture("Write the dash as an escape.\n", ".md");
+		await edit({ path: doc, old_string: "as an escape.", new_string: "as an escape: `\\u2014`." });
+		expect(read(doc)).toBe("Write the dash as an escape: `\\u2014`.\n");
+
+		const notes = fixture("Escapes like \\u00e9 appear here.\n", ".txt");
+		await edit({ path: notes, old_string: "appear here.", new_string: "appear here, and \\u2014 too." });
+		expect(read(notes)).toBe("Escapes like \\u00e9 appear here, and \\u2014 too.\n");
+	});
+
+	test("an edit inside an existing fenced or indented code block may add an escape", async () => {
+		const fenced = fixture("Example:\n\n```js\nconst a = \"x\";\n```\n", ".md");
+		await edit({ path: fenced, old_string: 'const a = "x";', new_string: 'const a = "\\u00e9";' });
+		expect(read(fenced)).toContain('const a = "\\u00e9";');
+
+		const indented = fixture("Example:\n\n    const a = \"x\";\n", ".md");
+		await edit({ path: indented, old_string: 'const a = "x";', new_string: 'const a = "\\u00e9";' });
+		expect(read(indented)).toContain('const a = "\\u00e9";');
+
+		const prose = fixture("Example:\n\n```js\nconst a = 1;\n```\n\nThen done.\n", ".md");
+		expect(await refusal(edit({ path: prose, old_string: "Then done.", new_string: "Then \\u2014 done." }))).toContain(
+			"Send the character itself",
+		);
+	});
+
+	test("write refuses the same mistake in a new prose file, but not inside a code fence", async () => {
+		const bad = freshName(".md");
+		expect(await refusal(write({ path: bad, content: "Waiting on a token \\u2014 soon.\n" }))).toContain("Send the character itself");
+		expect(exists(bad)).toBe(false);
+
+		const fenced = freshName(".md");
+		await write({ path: fenced, content: "Example:\n\n```json\n{\"dash\": \"\\u2014\"}\n```\n" });
+		expect(read(fenced)).toContain('"\\u2014"');
+	});
+});
+
+describe("edit / write: secrets hidden from the agent", () => {
+	const secretFile = "DB_PASSWORD=Hn38dkQ0zLm7Px\nPORT=5432\n";
+
+	test("oldText holding [REDACTED] is explained, not just reported missing", async () => {
+		const f = fixture(secretFile, ".conf");
+		const message = await refusal(edit({ path: f, old_string: "DB_PASSWORD=[REDACTED]\nPORT=5432", new_string: "PORT=6543" }));
+		expect(message).toContain("hidden from you because it looks like a secret");
+		expect(read(f)).toBe(secretFile);
+	});
+
+	test("neither tool writes the marker over a real value", async () => {
+		const f = fixture(secretFile, ".conf");
+		const viaWrite = await refusal(write({ path: f, content: "DB_PASSWORD=[REDACTED]\nPORT=6543\n" }));
+		expect(viaWrite).toContain("would replace the real value");
+		const viaEdit = await refusal(edit({ path: f, old_string: "PORT=5432", new_string: "DB_PASSWORD=[REDACTED]\nPORT=6543" }));
+		expect(viaEdit).toContain("would replace the real value");
+		expect(read(f)).toBe(secretFile);
+	});
+
+	test("a file with nothing hidden in it may gain the marker as text: docs and tests about redaction", async () => {
+		const fresh = freshName(".md");
+		await write({ path: fresh, content: "Secrets show up as [REDACTED].\n" });
+		expect(read(fresh)).toBe("Secrets show up as [REDACTED].\n");
+
+		const plain = fixture("export const MARKER = '';\n");
+		await edit({ path: plain, old_string: "MARKER = ''", new_string: "MARKER = '[REDACTED]'" });
+		expect(read(plain)).toBe("export const MARKER = '[REDACTED]';\n");
+	});
+
+	test("a file that already holds the marker as text can still be edited", async () => {
+		const f = fixture("Secrets show as [REDACTED] in tool output.\n", ".md");
+		await edit({ path: f, old_string: "in tool output.", new_string: "in every tool result." });
+		expect(read(f)).toBe("Secrets show as [REDACTED] in every tool result.\n");
+	});
+});
+
+describe("edit: the file changed after it was read", () => {
+	const readTool = createReadTool(NORMAL_LIMITS) as any;
+
+	test("a miss says so", async () => {
+		const f = fixture("const answer = 41;\n");
+		await readTool.execute("r", { path: f }, undefined, undefined, ctx);
+		fs.writeFileSync(abs(f), "const answer = 42; // formatted by someone else\n");
+		const later = new Date(Date.now() + 5000);
+		fs.utimesSync(abs(f), later, later);
+		const message = await refusal(edit({ path: f, old_string: "const answer = 41;", new_string: "const answer = 40;" }));
+		expect(message).toContain("The file changed after you last read it");
+	});
+
+	test("no such note when the file is as it was read", async () => {
+		const f = fixture("const answer = 41;\n");
+		await readTool.execute("r", { path: f }, undefined, undefined, ctx);
+		const message = await refusal(edit({ path: f, old_string: "const answer = 4;", new_string: "x" }));
+		expect(message).not.toContain("changed after you last read it");
+	});
+
+	test("the agent's own edit counts as seeing the file", async () => {
+		const f = fixture("a = 1;\nb = 2;\n");
+		await readTool.execute("r", { path: f }, undefined, undefined, ctx);
+		await edit({ path: f, old_string: "a = 1;", new_string: "a = 10;" });
+		const message = await refusal(edit({ path: f, old_string: "b = 3;", new_string: "x" }));
+		expect(message).not.toContain("changed after you last read it");
 	});
 });

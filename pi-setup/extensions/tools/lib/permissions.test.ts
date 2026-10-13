@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { evaluatePermission, withoutDataHeredocs, type PermissionRule } from "./permissions";
+import { evaluateCommand, evaluatePermission, type PermissionRule } from "./permissions";
 
 const RULES: PermissionRule[] = [
 	{
@@ -192,13 +192,15 @@ describe("evaluatePermission: within containment guard", () => {
 	});
 });
 
-// pins both halves of the shipped delete guard: every bypass is caught AND
-// ordinary commands that merely contain the letters "rm" are not.
-describe("the real permissions.json: nothing deletes, everything goes to trash", () => {
-	const rules: PermissionRule[] = JSON.parse(
-		fs.readFileSync(path.join(import.meta.dir, "../../../permissions.json"), "utf8"),
-	);
-	const verdict = (cmd: string) => evaluatePermission("Bash", { cmd }, rules).action;
+const shippedRules: PermissionRule[] = JSON.parse(
+	fs.readFileSync(path.join(import.meta.dir, "../../../permissions.json"), "utf8"),
+);
+
+// pins both halves of the shipped delete guard on this machine: every bypass is
+// caught AND ordinary commands that merely contain the letters "rm" are not.
+describe("the real permissions.json: nothing deletes on this machine", () => {
+	const rules = shippedRules;
+	const verdict = (cmd: string) => evaluateCommand(cmd, rules).action;
 
 	it("blocks rm at the start of a command", () => {
 		expect(verdict("rm f")).toBe("reject");
@@ -227,7 +229,7 @@ describe("the real permissions.json: nothing deletes, everything goes to trash",
 		for (const cmd of [
 			"/bin/rm f", "/usr/bin/rm -rf x", "\\rm f", '"rm" f', "command rm f", "builtin rm f", "sudo rm f",
 			"sudo -n rm f", "sudo -u root rm f", "env rm f", "env FOO=1 rm f", "FOO=1 rm f", "nohup rm f", "time rm f",
-			"exec rm f", "nice -n 5 rm f", "timeout 5 rm f", "ssh host rm f", "ssh host 'rm f'", "busybox rm f",
+			"exec rm f", "nice -n 5 rm f", "timeout 5 rm f", "busybox rm f",
 			"eval rm f", 'eval "rm f"', "$(which rm) f", "`which rm` f", "ls | xargs -I{} rm {}", "find . -exec /bin/rm {} +",
 		]) {
 			expect(verdict(cmd)).toBe("reject");
@@ -278,21 +280,231 @@ describe("the real permissions.json: nothing deletes, everything goes to trash",
 	});
 
 	it("a heredoc that is only data (commit message, file body) is not read as commands", () => {
-		const bash = (cmd: string) => evaluatePermission("Bash", { cmd: withoutDataHeredocs(cmd) }, rules).action;
-		expect(bash("git commit -F - <<'EOF'\nblock deletes:\nrsync --delete, rm -rf, git clean\nEOF")).toBe("allow");
-		expect(bash('cat > notes.md <<EOF\nrm f\nEOF\necho done')).toBe("allow");
-		expect(bash("cat > notes.md <<EOF\nrm f\nEOF\nrm g")).toBe("reject");
-		expect(bash("bash <<'EOF'\nrm f\nEOF")).toBe("reject");
-		expect(bash("python3 - <<'EOF'\nimport os; os.remove('f')\nEOF")).toBe("reject");
-		expect(bash("cat <<EOF | sh\nrm f\nEOF")).toBe("reject");
-		expect(bash("ssh host <<EOF\nrm f\nEOF")).toBe("reject");
+		expect(verdict("git commit -F - <<'EOF'\nblock deletes:\nrsync --delete, rm -rf, git clean\nEOF")).toBe("allow");
+		expect(verdict('cat > notes.md <<EOF\nrm f\nEOF\necho done')).toBe("allow");
+		expect(verdict("cat > notes.md <<EOF\nrm f\nEOF\nrm g")).toBe("reject");
+		expect(verdict("bash <<'EOF'\nrm f\nEOF")).toBe("reject");
+		expect(verdict("python3 - <<'EOF'\nimport os; os.remove('f')\nEOF")).toBe("reject");
+		expect(verdict("cat <<EOF | sh\nrm f\nEOF")).toBe("reject");
 	});
 
-	it("stays fast on a huge command full of wrapper and interpreter words", () => {
-		const huge = `cat <<EOF > x\n${"node bun python time sudo exec run call eval xargs ".repeat(8000)}\nEOF`;
-		const started = performance.now();
-		verdict(huge);
-		expect(performance.now() - started).toBeLessThan(200);
+	it("ssh to this machine is still this machine", () => {
+		for (const cmd of [
+			"ssh localhost rm f", "ssh 127.0.0.1 'rm -rf ~/x'", "ssh [::1] rm f", "ssh -o ProxyCommand='rm -rf ~' web true",
+			'ssh web "echo $(rm -rf ~)"', "ssh web 'ls'; rm -rf ~/x", "ssh web 'ls' && find . -delete",
+			"rsync -a --delete web:/srv/ ./backup/",
+		]) {
+			expect(verdict(cmd)).toBe("reject");
+		}
+	});
+
+	it("stays fast, and still decides, on commands built to make the rules backtrack", () => {
+		const assignments = (n: number) => Array.from({ length: n }, (_, i) => `K${i}=v${i}`).join(" ");
+		for (const [cmd, expected] of [
+			[`${assignments(60)} ; rm x`, "reject"],
+			[`${assignments(30)} make`, "allow"],
+			["sudo a ".repeat(40), "allow"],
+			[`ssh h '${assignments(30)} true'`, "allow"],
+			[`${"node bun python time sudo exec run call eval xargs ".repeat(8000)}`, "allow"],
+		] as const) {
+			const started = performance.now();
+			expect({ cmd: cmd.slice(0, 40), action: verdict(cmd) }).toEqual({ cmd: cmd.slice(0, 40), action: expected });
+			expect(performance.now() - started).toBeLessThan(300);
+		}
+	});
+
+	it("a `<<` that bash does not read as a heredoc hides nothing", () => {
+		for (const cmd of [
+			'echo "<<EOF"\nrm -rf x\nEOF', "echo '<<EOF'\nrm -rf x", "echo hi # <<EOF\nrm -rf x", "cat <<<EOF\nrm -rf x\nEOF",
+			"echo $((1<<2))\nrm -rf x",
+		]) {
+			expect({ cmd, action: verdict(cmd) }).toEqual({ cmd, action: "reject" });
+		}
+	});
+
+	it("rsync that removes the files it sent is a delete here", () => {
+		expect(verdict("rsync -a --remove-sent-files src/ h:dst/")).toBe("reject");
+	});
+});
+
+describe("the real permissions.json: server work", () => {
+	const verdict = (cmd: string) => evaluateCommand(cmd, shippedRules);
+
+	it("deleting files on a server just runs", () => {
+		for (const cmd of [
+			"ssh host rm f",
+			"ssh host 'rm f'",
+			"ssh profilephoto 'docker image prune -f; docker builder prune -af; rm -rf /root/profilephoto-rsync-strays-20261012'",
+			"ssh crawlapi 'diff /tmp/envf /tmp/envc; shred -u /tmp/envf /tmp/envc'",
+			"ssh -i ~/.ssh/k root@10.0.0.5 'find /var/log/app -name \"*.gz\" -mtime +30 -delete'",
+			"ssh crawlapi bash -s <<'EOF'\nrm -rf /root/.profilephoto-retired-20261002\ndf -h /\nEOF",
+			"rsync -az --delete ./dist/ deploy@web:/srv/app/",
+			"ssh web 'cd /srv/app && git add -A && git commit -m deploy'",
+		]) {
+			expect(verdict(cmd)).toEqual({ action: "allow" });
+		}
+	});
+
+	it("force push stays blocked everywhere", () => {
+		expect(verdict("ssh web 'cd /srv/app && git push --force'").action).toBe("reject");
+	});
+
+	it("a local delete next to server work is still blocked", () => {
+		expect(verdict("ssh web 'rm -rf /srv/old'; rm -rf ./build").action).toBe("reject");
+	});
+});
+
+describe("the real permissions.json: commands that destroy data ask first", () => {
+	const verdict = (cmd: string) => evaluateCommand(cmd, shippedRules);
+	const asks = (cmd: string) => verdict(cmd).action === "ask";
+
+	it("destructive SQL, here or on a server, with the server named", () => {
+		for (const cmd of [
+			'psql "$DB" -c "DROP TABLE users"',
+			"psql -c 'drop database app'",
+			'mysql -e "TRUNCATE TABLE sessions"',
+			'sqlite3 app.db "DELETE FROM jobs"',
+			'psql -c "ALTER TABLE users DROP COLUMN email"',
+			"psql -c 'alter table users drop email'",
+			'wrangler d1 execute prod --remote --command "DELETE FROM events"',
+			"psql \"$DB\" <<'SQL'\nBEGIN;\nDELETE FROM sessions;\nCOMMIT;\nSQL",
+		]) {
+			expect({ cmd, asks: asks(cmd) }).toEqual({ cmd, asks: true });
+		}
+		const remote = verdict("ssh crawlapi \"docker exec crawlapi-db psql -U app -c 'DELETE FROM request_log'\"");
+		expect(remote.action).toBe("ask");
+		expect(remote.asks).toEqual([{ host: "crawlapi", message: expect.stringContaining("SQL that deletes data") }]);
+	});
+
+	it("ordinary SQL and SQL that is only text do not ask", () => {
+		for (const cmd of [
+			'psql -c "DELETE FROM jobs WHERE finished_at < now() - interval \'30 days\'"',
+			"psql -c 'select count(*) from request_log'",
+			'psql -c "ALTER TABLE users ALTER COLUMN name DROP NOT NULL"',
+			'psql -c "ALTER TABLE users DROP CONSTRAINT users_email_key"',
+			'rg -n "DROP TABLE" migrations/',
+			"cat > notes.md <<'EOF'\npsql -c 'DROP TABLE x'\nEOF",
+			"truncate -s 0 app.log",
+		]) {
+			expect({ cmd, action: verdict(cmd).action }).toEqual({ cmd, action: "allow" });
+		}
+	});
+
+	it("wiping a whole database", () => {
+		for (const cmd of [
+			"dropdb app_prod", "ssh db 'sudo -u postgres dropdb app'", "redis-cli -n 0 FLUSHALL", "redis-cli flushdb",
+			"mongosh app --eval 'db.dropDatabase()'", "mongosh --eval 'db.users.drop()'", "npx prisma migrate reset --force",
+			"npx prisma db push --force-reset", "supabase db reset --linked", "bin/rails db:drop",
+		]) {
+			expect({ cmd, asks: asks(cmd) }).toEqual({ cmd, asks: true });
+		}
+		for (const cmd of ["redis-cli GET key", "npx prisma migrate deploy", "npx prisma db push", "bin/rails db:migrate"]) {
+			expect({ cmd, action: verdict(cmd).action }).toEqual({ cmd, action: "allow" });
+		}
+	});
+
+	it("Docker volumes and database data folders", () => {
+		for (const cmd of [
+			"docker volume rm pgdata", "docker volume prune -f", "docker system prune -af --volumes",
+			"docker compose down -v", "docker compose -f prod.yml down --volumes", "docker-compose down --rmi all -v",
+			"ssh crawlapi 'cd /opt/crawlapi && docker compose down -v'", "ssh db 'rm -rf /var/lib/postgresql/16/main'",
+		]) {
+			expect({ cmd, asks: asks(cmd) }).toEqual({ cmd, asks: true });
+		}
+		for (const cmd of [
+			"docker compose down", "docker compose down --remove-orphans", "docker rmi crawlapi-api:old",
+			"docker builder prune -af", "docker system prune -af", "docker image prune -f", "docker rm -f old-container",
+			"docker volume ls", "ssh web 'rm -rf /var/lib/app-cache'",
+		]) {
+			expect({ cmd, action: verdict(cmd).action }).toEqual({ cmd, action: "allow" });
+		}
+	});
+
+	it("cloud storage and cloud databases", () => {
+		for (const cmd of [
+			"aws s3 rb s3://backups --force", "aws s3 rm s3://backups/ --recursive", "aws s3api delete-bucket --bucket b",
+			"gsutil -m rm -r gs://b/dir", "gcloud storage buckets delete gs://b", "wrangler r2 bucket delete server-backups",
+			"wrangler d1 delete prod-db", "rclone purge r2:server-backups", "fly volumes destroy vol_123",
+		]) {
+			expect({ cmd, asks: asks(cmd) }).toEqual({ cmd, asks: true });
+		}
+		for (const cmd of ["aws s3 ls s3://b", "aws s3 cp f s3://b/f", "aws s3 rm s3://b/one-file.txt", "wrangler r2 bucket list"]) {
+			expect({ cmd, action: verdict(cmd).action }).toEqual({ cmd, action: "allow" });
+		}
+	});
+
+	it("erasing a disk", () => {
+		for (const cmd of ["ssh box 'mkfs.ext4 /dev/sdb1'", "ssh box 'wipefs -a /dev/sdb'", "ssh box 'dd if=/dev/zero of=/dev/sdb bs=1M'"]) {
+			expect({ cmd, asks: asks(cmd) }).toEqual({ cmd, asks: true });
+		}
+		for (const cmd of ["dd if=/dev/urandom of=./blob bs=1k count=4", "dd if=x of=/dev/null"]) {
+			expect({ cmd, action: verdict(cmd).action }).toEqual({ cmd, action: "allow" });
+		}
+	});
+
+	it("diskutil erases count as erasing a disk", () => {
+		for (const cmd of ["diskutil eraseDisk APFS X /dev/disk4", "diskutil apfs deleteVolume disk3s5", "diskutil zeroDisk disk4"]) {
+			expect({ cmd, asks: asks(cmd) }).toEqual({ cmd, asks: true });
+		}
+		expect(verdict("diskutil list").action).toBe("allow");
+	});
+
+	it("SQL: piped in, long, quoted names, WHERE on the next line", () => {
+		const longMigration = `psql "$DB" <<'SQL'\n${"INSERT INTO t VALUES (1);\n".repeat(500)}DROP TABLE old_t;\nSQL`;
+		for (const cmd of [`echo "DROP TABLE t" | psql "$DB"`, longMigration, `psql -c 'DELETE FROM users RETURNING *'`]) {
+			expect({ cmd: cmd.slice(0, 60), asks: asks(cmd) }).toEqual({ cmd: cmd.slice(0, 60), asks: true });
+		}
+		for (const cmd of [
+			"psql \"$DB\" <<'SQL'\nDELETE FROM users\nWHERE id = 1;\nSQL",
+			'psql -c \'DELETE FROM "users" WHERE id = 1\'',
+			"psql -c 'DELETE FROM users u WHERE u.id = 1'",
+			"psql -c 'DELETE FROM a USING b WHERE a.id = b.id'",
+			"rg -n d1 src; echo 'DROP TABLE'",
+		]) {
+			expect({ cmd, action: verdict(cmd).action }).toEqual({ cmd, action: "allow" });
+		}
+	});
+
+	it("a block beats an ask, and every ask on a line is listed", () => {
+		expect(verdict("psql -c 'DROP TABLE t'; rm -rf ./x").action).toBe("reject");
+		expect(verdict("psql -c 'DROP TABLE t'; amp --version").action).toBe("reject");
+		const both = verdict("ssh a 'docker volume rm v1' && ssh b 'redis-cli FLUSHALL'");
+		expect(both.action).toBe("ask");
+		expect(both.asks?.map((ask) => ask.host)).toEqual(["a", "b"]);
+	});
+});
+
+describe("evaluatePermission: an ask never hides a later reject", () => {
+	const rules: PermissionRule[] = [
+		{ tool: "Bash", matches: { cmd: "*drop*" }, action: "ask", message: "asks" },
+		{ tool: "Bash", matches: { cmd: "*launch*" }, action: "reject", message: "no" },
+		{ tool: "Bash", matches: { cmd: "*fine*" }, action: "allow" },
+		{ tool: "Bash", matches: { cmd: "*late*" }, action: "reject", message: "too late" },
+		{ tool: "*", action: "allow" },
+	];
+
+	it("reject listed after the ask still wins", () => {
+		expect(evaluatePermission("Bash", { cmd: "drop and launch" }, rules)).toEqual({ action: "reject", message: "no" });
+	});
+
+	it("an allow after the ask ends the search with the ask, as first-match order says", () => {
+		expect(evaluatePermission("Bash", { cmd: "drop fine late" }, rules)).toEqual({ action: "ask", message: "asks" });
+		expect(evaluatePermission("Bash", { cmd: "drop" }, rules)).toEqual({ action: "ask", message: "asks" });
+	});
+});
+
+describe("evaluatePermission: where", () => {
+	const rules: PermissionRule[] = [
+		{ tool: "Bash", matches: { cmd: "rm *", where: "local" }, action: "reject" },
+		{ tool: "Bash", matches: { cmd: "reboot*", where: "remote" }, action: "ask" },
+		{ tool: "*", action: "allow" },
+	];
+
+	it("a local rule skips server commands and a remote rule skips local ones", () => {
+		expect(evaluatePermission("Bash", { cmd: "rm f" }, rules).action).toBe("reject");
+		expect(evaluatePermission("Bash", { cmd: "rm f", host: "web" }, rules).action).toBe("allow");
+		expect(evaluatePermission("Bash", { cmd: "reboot", host: "web" }, rules).action).toBe("ask");
+		expect(evaluatePermission("Bash", { cmd: "reboot" }, rules).action).toBe("allow");
 	});
 });
 

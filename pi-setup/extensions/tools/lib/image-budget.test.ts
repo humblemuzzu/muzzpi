@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createRequire } from "node:module";
+import * as fs from "node:fs";
+import { join } from "node:path";
 import {
   limitsForModel,
   measureSession,
@@ -10,9 +11,12 @@ import {
 } from "./image-budget";
 import { MAX_IMAGES_PER_CALL } from "./vision";
 
-const require = createRequire(import.meta.url);
-const catalog = require(
-  "@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data/anthropic.json",
+// read by path: pi's package exports do not expose this file to require().
+const catalog = JSON.parse(
+  fs.readFileSync(
+    join(import.meta.dir, "../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data/anthropic.json"),
+    "utf8",
+  ),
 )["anthropic-messages"];
 const model = (id: string) => catalog[`chat:${id}`];
 

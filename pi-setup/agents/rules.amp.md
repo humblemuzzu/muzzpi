@@ -54,6 +54,10 @@ command, say what it destroys and whether it can be undone, and wait. One
 short paragraph. Finish everything you can safely finish first — never sit
 there asking while the rest of the work is undone.
 
+If I already asked for it or approved it, run it — do not ask again. Commands
+that destroy data (dropping tables, Docker volumes, buckets, disks) also open
+an Allow/Deny dialog for me, so asking in chat as well is asking twice.
+
 EVIDENCE. Every claim about the code names a file and line, a number, or the
 command that shows it. If you did not check something, say you did not check
 it. Never state a guess in the same voice as a fact.

@@ -5,10 +5,11 @@
       "cmd": [
         "*git add -A*",
         "*git add .*"
-      ]
+      ],
+      "where": "local"
     },
     "action": "reject",
-    "message": "stage files explicitly with 'git add <file>' \u2014 unstaged changes may not be yours"
+    "message": "stage files explicitly with 'git add <file>' — unstaged changes may not be yours"
   },
   {
     "tool": "Bash",
@@ -26,37 +27,91 @@
     "tool": "Bash",
     "matches": {
       "cmd": [
-        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:(?:\\w+=\\S*|do|then|else|sudo|doas|env|builtin|exec|nohup|time|nice|timeout|watch|xargs|busybox|eval|chroot|stdbuf|ionice|caffeinate|ssh|command(?!\\s+-[vV]))\\b[^\\n;&|]{0,200}?\\s+)*[\"']?\\\\?(?:\\S*/)?(?:rm|rmdir|unlink|shred|srm)(?=$|[\\s;&|)\"'\\x60])",
+        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:(?:\\w+=\\S*|do|then|else|sudo|doas|env|builtin|exec|nohup|time|nice|timeout|watch|xargs|busybox|eval|chroot|stdbuf|ionice|caffeinate|ssh|command(?!\\s+-[vV]))\\b[^\\n;&|]{0,200}?\\s+)?[\"']?\\\\?(?:\\S*/)?(?:rm|rmdir|unlink|shred|srm)(?=$|[\\s;&|)\"'\\x60])",
         "regex:(?:\\$\\(|\\x60)\\s*(?:which|type\\s+-p|command\\s+-v)\\s+(?:rm|rmdir|unlink|shred)\\b",
         "regex:(?:\\s-\\w*c|\\beval|\\bforeach|\\bsystem|\\bexecSync|\\bexec|\\bspawnSync|\\bspawn|\\bcheck_call|\\bcheck_output|\\brun|\\bPopen|\\bcall)\\s*\\(?\\s*\\[?\\s*[\"'\\x60]\\s*(?:sudo\\s+)?(?:\\S*/)?(?:rm|rmdir|unlink|shred|srm)(?=$|[\\s\"'\\x60,\\]])",
         "regex:(?:\\.(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync|rmtree)|\\bos\\.(?:remove|removedirs)|\\bDeno\\.remove|\\bFile\\.delete|\\bFileUtils\\.rm\\w*|\\bunlink|\\brmtree)\\s*\\(|\\bunlink\\s+[\"'$]|\\bfrom\\s+os\\s+import\\b[^\\n]{0,200}\\b(?:remove|unlink|rmdir|removedirs)\\b",
         "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:sudo\\s+)?git\\s+(?:-C\\s+\\S+\\s+|-c\\s+\\S+\\s+|--\\S+\\s+){0,6}(?:rm|clean)\\b(?![^\\n;&|#$()]{0,500}?(?:--cached|--dry-run|\\s-[a-zA-Z]*n[a-zA-Z]*(?=\\s|$)))",
         "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:sudo\\s+)?find\\b[^\\n;&|]{0,500}?\\s-delete\\b",
-        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:sudo\\s+)?rsync\\b[^\\n;&|]{0,500}?\\s--(?:delete\\S*|remove-source-files)\\b"
-      ]
+        "regex:(?:^|[\\n;&|(\\x60{]|\\$\\(|-exec(?:dir)?\\s|-ok(?:dir)?\\s|--exec(?:-batch)?\\s)\\s*(?:sudo\\s+)?rsync\\b[^\\n;&|]{0,500}?\\s--(?:delete\\S*|remove-source-files|remove-sent-files)\\b"
+      ],
+      "where": "local"
     },
     "action": "reject",
-    "message": "deleting is blocked \u2014 rm, rmdir, unlink, shred, find -delete, rsync --delete, git rm, git clean and delete calls in scripts. use 'trash <path>': it moves the file to the macOS Trash, where it can be recovered. (git rm --cached and dry runs are allowed.)"
+    "message": "deleting files on this Mac is blocked — rm, rmdir, unlink, shred, find -delete, rsync --delete, git rm, git clean and delete calls in scripts. use 'trash <path>': it moves the file to the macOS Trash, where it can be recovered. (git rm --cached and dry runs are allowed. deleting on a server over ssh is allowed.)"
+  },
+  {
+    "tool": "Bash",
+    "matches": {
+      "cmd": [
+        "regex:^(?=[\\s\\S]*?\\b(?:psql|pgcli|mysql|mariadb|mycli|sqlite3|duckdb|clickhouse(?:-client)?|cockroach|turso|wrangler\\s+d1)\\b)[\\s\\S]*?(?:\\bDROP\\s+(?:TABLE|DATABASE|SCHEMA|OWNED)\\b|\\bTRUNCATE\\s+(?:TABLE\\s+)?(?:ONLY\\s+)?[\"'\\x60\\w]|\\bDELETE\\s+FROM\\s+(?:ONLY\\s+)?(?=(\"[^\"\\n]+\"|\\x60[^\\x60\\n]+\\x60|[\\w.]+))\\1(?!\\s+(?:AS\\s+)?\\w+\\s+(?:WHERE|USING)\\b|\\s*(?:WHERE|USING)\\b)|\\bALTER\\s+TABLE\\b[^;]{0,300}?\\bDROP\\s+(?:COLUMN\\s+)?(?!CONSTRAINT\\b|DEFAULT\\b|NOT\\b|IDENTITY\\b|EXPRESSION\\b)\\w)"
+      ]
+    },
+    "action": "ask",
+    "message": "SQL that deletes data for good: DROP TABLE / DATABASE / SCHEMA, TRUNCATE, DELETE without WHERE, or dropping a column"
+  },
+  {
+    "tool": "Bash",
+    "matches": {
+      "cmd": [
+        "regex:(?:^|[\\s;&|(`'\"])dropdb\\s|\\bredis-cli\\b[^\\n;&|]{0,300}\\bFLUSH(?:ALL|DB)\\b|\\bdb\\.dropDatabase\\s*\\(|\\bdb\\.[\\w.]+\\.drop\\s*\\(\\s*\\)|\\bdeleteMany\\s*\\(\\s*\\{\\s*\\}\\s*\\)|\\bprisma\\s+(?:migrate\\s+reset|db\\s+push\\b[^\\n;&|]{0,300}--force-reset)\\b|\\bsupabase\\s+db\\s+reset\\b|\\b(?:rails|rake)\\s+db:(?:drop|reset|purge)\\b"
+      ]
+    },
+    "action": "ask",
+    "message": "wipes a whole database (dropdb, FLUSHALL, dropDatabase, a migration reset)"
+  },
+  {
+    "tool": "Bash",
+    "matches": {
+      "cmd": [
+        "regex:\\b(?:docker|podman)(?:-compose)?\\b[^\\n;&|]{0,300}?\\b(?:volume\\s+(?:rm|remove|prune)\\b|system\\s+prune\\b[^\\n;&|]{0,300}\\s--volumes\\b|down\\b[^\\n;&|]{0,300}\\s(?:--volumes|-v|-[a-zA-Z]*v[a-zA-Z]*)(?=[\\s\"']|$))",
+        "regex:\\brm\\b[^\\n;&|]{0,300}\\s[\"']?/var/lib/(?:docker/volumes|postgresql|pgsql|mysql|mongodb|redis|clickhouse)\\b"
+      ]
+    },
+    "action": "ask",
+    "message": "deletes Docker volumes or a database's data directory, where database data lives"
+  },
+  {
+    "tool": "Bash",
+    "matches": {
+      "cmd": [
+        "regex:\\baws\\s+s3\\s+rb\\b|\\baws\\s+s3\\s+rm\\b[^\\n;&|]{0,300}\\s--recursive\\b|\\baws\\s+s3api\\s+delete-bucket\\b|\\baws\\s+rds\\s+delete-db-\\w+|\\baws\\s+dynamodb\\s+delete-table\\b|\\bgsutil\\s+(?:-m\\s+)?(?:rb\\b|rm\\b[^\\n;&|]{0,300}\\s-[a-zA-Z]*r)|\\bgcloud\\s+(?:storage\\s+(?:rm|buckets\\s+delete)|sql\\s+(?:instances|databases)\\s+delete)\\b|\\bwrangler\\s+(?:r2\\s+bucket|d1|kv\\s+namespace|kv:namespace|queues|vectorize|hyperdrive)\\s+delete\\b|\\brclone\\s+(?:purge|delete)\\b|\\bmc\\s+(?:rb\\b|rm\\b[^\\n;&|]{0,300}\\s--recursive\\b)|\\bfly(?:ctl)?\\s+(?:volumes?\\s+(?:destroy|delete)|apps\\s+destroy|postgres\\s+destroy)\\b"
+      ]
+    },
+    "action": "ask",
+    "message": "deletes cloud storage or a cloud database (a bucket, its objects, a D1/KV/RDS database, a Fly volume)"
+  },
+  {
+    "tool": "Bash",
+    "matches": {
+      "cmd": [
+        "regex:(?:^|[\\s;&|(])(?:mkfs(?:\\.\\w+)?|wipefs)\\s|\\bdd\\b[^\\n;&|]{0,300}\\bof=/dev/(?!null\\b|zero\\b|stdout\\b|stderr\\b)|\\bdiskutil\\s+(?:erase\\w*|zeroDisk|secureErase|partitionDisk|apfs\\s+(?:deleteVolume|deleteContainer|eraseVolume))\\b"
+      ]
+    },
+    "action": "ask",
+    "message": "erases a disk or partition (mkfs, wipefs, diskutil erase, dd onto a device)"
   },
   {
     "tool": "Bash",
     "matches": {
       "cmd": [
         "regex:(?:^|(?<!\\\\)[;&|(]\\s*|\\bnohup\\s+|\\bxargs\\s+|-exec\\s+)amp\\s+[-\\w\"']"
-      ]
+      ],
+      "where": "local"
     },
     "action": "reject",
-    "message": "do not launch the amp CLI from bash \u2014 it is a separate program that runs outside this pi session. use the delegate / chad / oracle / finder / code_review / librarian tools, which run inside this pi session with your tools, permissions and visible output"
+    "message": "do not launch the amp CLI from bash — it is a separate program that runs outside this pi session. use the delegate / chad / oracle / finder / code_review / librarian tools, which run inside this pi session with your tools, permissions and visible output"
   },
   {
     "tool": "Bash",
     "matches": {
       "cmd": [
         "regex:(?:^|(?<!\\\\)[;&|(]\\s*|\\bnohup\\s+|\\bxargs\\s+|-exec\\s+)screencapture\\b"
-      ]
+      ],
+      "where": "local"
     },
     "action": "reject",
-    "message": "use the screenshot tool instead of capturing by hand \u2014 it takes the same shot and fits the image to the vision budget in ONE resample pass, where the hand-rolled way resizes to a guessed long edge that ignores the visual-token limit and makes the API resample a second time. displays, windows, regions and whole web pages are all supported; call screenshot({ list: true }) to see the targets"
+    "message": "use the screenshot tool instead of capturing by hand — it takes the same shot and fits the image to the vision budget in ONE resample pass, where the hand-rolled way resizes to a guessed long edge that ignores the visual-token limit and makes the API resample a second time. displays, windows, regions and whole web pages are all supported; call screenshot({ list: true }) to see the targets"
   },
   {
     "tool": "*",

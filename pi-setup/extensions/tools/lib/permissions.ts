@@ -9,8 +9,8 @@
  * format mirrors amp's amp.permissions schema:
  *   { tool, matches?, action, message? }
  *
- * only "allow" and "reject" actions for now — no "ask" or "delegate"
- * because pi's tool execute API has no confirmation mechanism.
+ * actions: "allow", "reject", and "ask" (the caller asks the user through
+ * ctx.ui and refuses when there is no UI, see approval.ts).
  *
  * these are product guardrails for tool routing and ergonomics, NOT a security
  * boundary — a determined caller can always shell out around them.
@@ -24,6 +24,8 @@
  *   within — containment guard. EVERY touched path must resolve inside one of
  *            the given roots. resolves to absolute first, so `../` escapes are
  *            caught rather than matched as text. fails closed.
+ *   where  — "local" or "remote": whether the command runs on this machine or
+ *            on a server over ssh (see remote-command.ts). absent = both.
  *
  * all matchers on a rule must pass for the rule to apply (AND); within each
  * matcher a list of patterns is an OR.
@@ -33,8 +35,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expandPath, isPathWithin, resolveToAbsolute } from "./fs";
+import { heredocTags, splitRemote } from "./remote-command";
 
 // --- types ---
+
+export type PermissionAction = "allow" | "reject" | "ask";
 
 type PermissionPattern = string | string[];
 
@@ -53,8 +58,9 @@ export interface PermissionRule {
 		 * paths are resolved to absolute first, so `../` escapes are caught.
 		 */
 		within?: PermissionPattern;
+		where?: "local" | "remote";
 	};
-	action: "allow" | "reject";
+	action: PermissionAction;
 	message?: string;
 }
 
@@ -66,10 +72,12 @@ export interface PermissionParams {
 	paths?: string[];
 	/** used to resolve relative paths/roots to absolute. */
 	sessionCwd?: string;
+	/** set when `cmd` runs on this server over ssh. */
+	host?: string;
 }
 
 export interface PermissionVerdict {
-	action: "allow" | "reject";
+	action: PermissionAction;
 	message?: string;
 }
 
@@ -153,8 +161,8 @@ function matchesWithin(params: PermissionParams, roots: PermissionPattern): bool
 	});
 }
 
-const RUNS_HEREDOC = /\b(?:sh|bash|zsh|dash|ksh|fish|python3?|node|bun|deno|perl|ruby|php|osascript|eval|source|ssh|xargs|exec)\b/;
-const HEREDOC_OPEN = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/g;
+const RUNS_HEREDOC =
+	/\b(?:sh|bash|zsh|dash|ksh|fish|python3?|node|bun|deno|perl|ruby|php|osascript|eval|source|ssh|xargs|exec|psql|mysql|mariadb|sqlite3|duckdb|clickhouse-client|redis-cli|mongosh|mongo)\b/;
 
 /**
  * Drops heredoc bodies that are only data (a commit message, `cat > file`), so a
@@ -167,7 +175,8 @@ export function withoutDataHeredocs(cmd: string): string {
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index]!;
 		kept.push(line);
-		const tags = [...line.matchAll(HEREDOC_OPEN)].map((match) => match[2]!);
+		// heredocTags reads `<<` the way bash does: not inside quotes, comments, `<<<` or `$(( ))`.
+		const tags = heredocTags(line) ?? [];
 		if (tags.length === 0 || RUNS_HEREDOC.test(line)) continue;
 		for (const tag of tags) {
 			while (index + 1 < lines.length && lines[index + 1]!.trim() !== tag) index++;
@@ -179,13 +188,21 @@ export function withoutDataHeredocs(cmd: string): string {
 
 // --- evaluation ---
 
+/**
+ * First matching rule wins, except that an "ask" keeps looking: a later
+ * "reject" for the same call still wins over it, and a later "allow" ends the
+ * search with the ask.
+ */
 export function evaluatePermission(
 	toolName: string,
 	params: PermissionParams,
 	rules: PermissionRule[],
 ): PermissionVerdict {
+	let asked: PermissionVerdict | undefined;
 	for (const rule of rules) {
 		if (!globToRegex(rule.tool).test(toolName)) continue;
+
+		if (rule.matches?.where && rule.matches.where !== (params.host ? "remote" : "local")) continue;
 
 		if (rule.matches?.cmd && !matchesGlob(params.cmd ?? "", rule.matches.cmd)) continue;
 
@@ -205,9 +222,35 @@ export function evaluatePermission(
 
 		if (rule.matches?.within && !matchesWithin(params, rule.matches.within)) continue;
 
-		return { action: rule.action, message: rule.message };
+		if (rule.action === "reject") return { action: "reject", message: rule.message };
+		if (asked) return asked;
+		if (rule.action === "allow") return { action: "allow", message: rule.message };
+		asked = { action: "ask", message: rule.message };
 	}
 
+	return asked ?? { action: "allow" };
+}
+
+interface CommandVerdict extends PermissionVerdict {
+	/** for "ask": every part that needs approval, with the server it runs on. */
+	asks?: { host?: string; message?: string }[];
+}
+
+/**
+ * Checks the part of a shell command that runs here and each part that runs
+ * on a server. Any reject wins, then any ask (all of them listed), then allow.
+ */
+export function evaluateCommand(cmd: string, rules: PermissionRule[]): CommandVerdict {
+	const split = splitRemote(withoutDataHeredocs(cmd));
+	const parts: { cmd: string; host?: string }[] = [
+		{ cmd: split.local },
+		...split.remote.map((part) => ({ cmd: withoutDataHeredocs(part.command), host: part.host })),
+	];
+	const verdicts = parts.map((part) => ({ host: part.host, ...evaluatePermission("Bash", part, rules) }));
+	const rejected = verdicts.find((verdict) => verdict.action === "reject");
+	if (rejected) return { action: "reject", message: rejected.message };
+	const asks = verdicts.filter((verdict) => verdict.action === "ask").map(({ host, message }) => ({ host, message }));
+	if (asks.length > 0) return { action: "ask", message: asks[0]!.message, asks };
 	return { action: "allow" };
 }
 

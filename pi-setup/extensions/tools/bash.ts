@@ -9,7 +9,8 @@ import { COLLAPSED_EXCERPTS, formatBoxesWindowed, normalizeForDisplay, type BoxS
 import { getText, getContainer } from "./lib/tui";
 import { Type } from "@sinclair/typebox";
 import { withFileLock } from "./lib/mutex";
-import { evaluatePermission, loadPermissions, withoutDataHeredocs } from "./lib/permissions";
+import { evaluateCommand, loadPermissions } from "./lib/permissions";
+import { requestApproval } from "./lib/approval";
 import { evaluateReadOnlyCommand, isReadOnlyBash, readOnlyRefusal } from "./lib/read-only-bash";
 import { resolveToAbsolute } from "./read";
 import { OutputBuffer, headTailChars } from "./lib/output-buffer";
@@ -521,7 +522,7 @@ export function createBashTool(): ToolDefinition {
 				}
 			}
 
-			const verdict = evaluatePermission("Bash", { cmd: withoutDataHeredocs(command) }, loadPermissions());
+			const verdict = evaluateCommand(command, loadPermissions());
 			if (verdict.action === "reject") {
 				const msg = verdict.message
 					? `command rejected: ${verdict.message}`
@@ -530,6 +531,22 @@ export function createBashTool(): ToolDefinition {
 					content: [{ type: "text" as const, text: msg }],
 					isError: true,
 				} as any;
+			}
+			if (verdict.action === "ask") {
+				const asks = verdict.asks ?? [];
+				const answer = await requestApproval(
+					ctx,
+					{
+						tool: "bash",
+						command,
+						reasons: [...new Set(asks.map((ask) => ask.message ?? "a permission rule asks for approval"))],
+						hosts: [...new Set(asks.flatMap((ask) => (ask.host ? [ask.host] : [])))],
+					},
+					signal,
+				);
+				if (!answer.approved) {
+					return { content: [{ type: "text" as const, text: answer.message }], isError: true } as any;
+				}
 			}
 
 			const sessionId = ctx.sessionManager.getSessionId();

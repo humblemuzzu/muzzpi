@@ -88,8 +88,8 @@ the tools it has. Pick by what you need back:
 - **codemode** batches dozens of tool calls in one script, and one **`mcp`** proxy
   reaches 19 MCP servers (Chrome DevTools, Cloudflare, Paper, Astro) that only
   connect when first used.
-- **12 skills** load on demand: debugging, code review, TDD, design ports, git,
-  SEO data, and more.
+- **13 skills** load on demand: debugging, code review, TDD, design ports, git,
+  SEO data, server work over ssh, and more.
 
 ## The TUI
 
@@ -125,6 +125,15 @@ the tools it has. Pick by what you need back:
 - **Working rules ship in the system prompt**, not in a hook: scope, evidence,
   no comments by default, and a hard stop before anything that deletes data,
   rewrites git history or publishes.
+- **Deletes are scoped, data loss asks.** Deleting files on your Mac is blocked
+  (`trash` instead); on a server over ssh it just works. Dropping a table, a
+  Docker volume, a bucket or a disk, or an MCP `DELETE`, stops for an Allow/Deny
+  dialog first. A sub-agent cannot approve one, and every answer is logged.
+- **Secrets stay out of the model's context.** Every tool result is scrubbed of
+  vault values, key formats (Stripe, GitHub, AWS, Anthropic
+  and more), private keys, bearer tokens, URL passwords, and random-looking
+  values next to secret names, while code that merely mentions a token stays
+  readable.
 
 ## Things that broke
 
@@ -184,11 +193,11 @@ As of October 2026:
 | First commit | 2026-03-10 |
 | Commits | 105, on 57 different days |
 | Lines changed | +97,381 / −37,598 |
-| Tests | 1,849 across 41 files, 0 failing |
+| Tests | 1,877 across 55 files, 0 failing |
 | pi releases lived through | 20+, from 0.67 to 1.1 |
 | Default-model changes | 17, across six providers: Opus 4.6 → GLM 5.1 → Kimi → GPT-5.5 → Grok 4.6 → Opus 5.5, and back again more than once |
 | MCP servers wired in | 19, none connected until first use |
-| Skills | 12 |
+| Skills | 13 |
 | Commits made on a Thursday | 34 |
 | Commits made between midnight and 5am | 20 |
 
@@ -247,9 +256,9 @@ muzzpi/
 │   │   └── tools/          the 30 tools and their tests (bun test)
 │   ├── agents/             system prompt, working rules, one prompt per sub-agent
 │   ├── agent-models.json   which model each sub-agent runs on
-│   ├── permissions.json    what bash may never do (rules can name edit/write too)
+│   ├── permissions.json    what bash may never do, and what needs your approval
 │   ├── pi-core-patches/    the 3 patched pi files + the pi-tui width patch
-│   ├── config-skills/      12 skills
+│   ├── config-skills/      13 skills
 │   └── *.md                migration records and investigations
 └── ghostty/                themes, fonts, switchers
 ```
