@@ -31,7 +31,7 @@ Write the one-line rule and delete whatever it supersedes.
 ## Providers and defaults
 
 ```
-pi CLI (v1.1.0) — @earendil-works/pi-coding-agent
+pi CLI (v1.2.0) — @earendil-works/pi-coding-agent
   ├─ anthropic + pi-claude-code-use   → Claude Max OAuth (/login)   [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
@@ -148,13 +148,11 @@ support. Not in the npm package; recreate it after a delete-and-reinstall.
 skills do not contain `mcp-scripting`. pi's built-in `mcp` extension is
 `replaceable`; `-builtin:mcp` in `extensions` makes the adapter's win explicit.
 
----
-
 ## Packages (npm)
 
 | Package | Ver | Purpose | Patched |
 |---|---|---|---|
-| `@earendil-works/pi-coding-agent` | 1.1.0 | pi itself | 3 core patches |
+| `@earendil-works/pi-coding-agent` | 1.2.0 | pi itself | 3 core patches |
 | `@benvargas/pi-claude-code-use` | **2.2.1 (pinned)** | Claude Max OAuth payload shim | no |
 | `pi-token-burden` | 0.6.5 | token usage display | no |
 | `@marckrenn/pi-sub-bar` | 1.5.0 | quota widget | **grok patch** |

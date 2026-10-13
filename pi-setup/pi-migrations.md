@@ -12,6 +12,49 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## 1.2.0 (2026-10-13) — from 1.1.0, `resource-loader.js` + `keybindings.js` re-derived
+
+**Patch drift (stock 1.1.0 vs stock 1.2.0, registry tarballs):**
+- `resource-loader.js`: upstream changed the AGENTS.md shadow check (symlinked
+  worktree fix, #10681), outside our hunk. Re-derived: stock 1.2.0 + our
+  conflict-diagnostics hunk only.
+- `keybindings.js`: restructured (`APP_KEYBINDINGS` table, per-value
+  `KeybindingValueSchema` check in `toKeybindingsConfig`, `$schema` skipped).
+  Re-derived: stock 1.2.0 + `app.session.pin` + `pinSession` mapping. Our
+  `isRecord` guard is dropped: `loadRawConfig` rejects non-objects and
+  `migrateKeybindingsConfig` always returns a plain object.
+- `session-selector.js`: byte-identical, copied.
+- pi-tui 1.2.0: `utils.js` changed only in segment extraction (APC markers
+  kept at slice boundaries); width patcher applied clean.
+
+**Changes checked against our setup:**
+- `before_agent_start` now also fires for `sendMessage(..., { triggerTurn })`
+  runs (`messageType: "custom"`, no `prompt`). Our four handlers (system-prompt,
+  psst, skill, local-model) only touch `systemPromptOptions`/`ctx.model`, so
+  `agent-message` runs now get our sections instead of losing them mid-run.
+- Busy-while-starting: `sendUserMessage` needs `deliverAs` during run start
+  too. command-palette sends from the idle editor; you-should-know passes it.
+- Themes now validated at startup: all 4 pass `ThemeJsonSchema`; `$schema`
+  moved to `https://pi.dev/schemas/theme.schema.json`.
+- Settings/models schemas: settings schema not enforced at runtime, defaults
+  unchanged; models.json loads; all 8 `enabledModels` listed, OpenRouter ones
+  included under the new per-key catalog.
+- `-p` exit 1 on `stopReason: "length"` is text mode only; children run json.
+- pi-ai Anthropic: `onPayload` now inside a loop that retries once with
+  `strict: "prefer"` tools non-strict on a grammar-size 400; the shim still
+  transforms each attempt. Payload diff 1.1.0 vs 1.2.0 (shim debug log): same
+  36 tools and aliases, same keys, system prompt identical; only upstream's
+  codemode description sentence changed.
+- `~` expansion in `!`/`+`/`-` resource patterns: we have none.
+- Verified: staged 1.2.0 in /tmp first (boot, payload diff, `finder`), then
+  `update-pi.sh`: `verify-patches.sh` 17/17 PASS, smoke reply, `bun test`
+  tools 1647 pass / 0 fail + 212 other extension tests, real write/edit/failed
+  edit, `chad` with `touch` blocked, TUI in tmux (Indic/CJK border aligned,
+  `/resume` shows `ctrl+b pin`).
+- Backup: `~/pi-update-backup-1.1.0-20261013-170759`.
+
+---
+
 ## pi-autoresearch removed; tool honesty pass (2026-10-08)
 
 - **pi-autoresearch deleted**, not just disabled: the git checkout under
