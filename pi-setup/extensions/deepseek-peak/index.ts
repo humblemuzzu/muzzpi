@@ -209,7 +209,7 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 	 * nothing and keeps firing against the dead runtime until it kills pi.
 	 *
 	 * pi emits session_shutdown BEFORE invalidating, which is the only window in
-	 * which this teardown is legal. `tools/agent-message.ts` does the same.
+	 * which this teardown is legal.
 	 */
 	pi.on("session_shutdown", async () => {
 		stop();

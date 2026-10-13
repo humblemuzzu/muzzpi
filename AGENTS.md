@@ -279,7 +279,9 @@ every quantifier there**: an uncapped `[\w.-]*token[\w.-]*` took 284 s on 1 MB.
 
 `glob.ts` registers as `find`; there is no `glob` tool. The 7 GitHub tools are
 separate (`read_github` … `diff`); **there is no tool named `github`**.
-`web_search` and `agent_message` can be disabled in ext-config; both default on.
+`web_search` can be disabled in ext-config; it defaults on. `agent_message`
+and its mailbox (`~/.pi/agent/agent-messages/`) are gone: every child process
+made a mailbox that was never cleaned up, and sub-agents could not receive.
 
 ### Sub-agents
 

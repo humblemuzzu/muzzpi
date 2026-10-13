@@ -74,7 +74,7 @@ for it; a call can pass `model` / `thinking` to override:
 - `read_web_page` — static web page reader; `prompt` / `objective` spawn a Q&A / excerpt child
 - `read_session` — past-session reader
 
-**Other tools:** `search_sessions`, `screenshot`, `web_search` (Parallel AI), `agent_message`.
+**Other tools:** `search_sessions`, `screenshot`, `web_search` (Parallel AI).
 
 **New GitHub tools** (GitHub API): `read_github`, `search_github`, `list_directory_github`,
 `glob_github`, `list_repositories`, `commit_search`, `diff`
