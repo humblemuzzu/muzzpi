@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Diff consecutive pi payloads captured by PI_CLAUDE_CODE_USE_DEBUG_LOG.
+"""Diff consecutive pi payloads captured by PI_ANTHROPIC_PAYLOAD_LOG (anthropic-sub).
 
-    PI_CLAUDE_CODE_USE_DEBUG_LOG=/tmp/pi-payload.jsonl pi
+    PI_ANTHROPIC_PAYLOAD_LOG=/tmp/pi-payload.jsonl pi
     python3 pi-setup/cache-diag.py /tmp/pi-payload.jsonl
 """
 import json

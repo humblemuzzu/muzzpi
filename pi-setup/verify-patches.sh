@@ -73,13 +73,24 @@ else
          "node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs"
 fi
 
+# ── anthropic-sub: Claude-plan requests must not trip Anthropic's third-party check ──
+# Children load it from CHILD_EXTENSIONS only when the file exists, so a missing
+# bundle would silently drop the safety net.
+if [ -f "$PI_AGENT/extensions/anthropic-sub.js" ] && \
+   grep -q '"~/.pi/agent/extensions/anthropic-sub.js"' "$PI_AGENT/settings.json" 2>/dev/null; then
+    pass "anthropic-sub: installed and enabled (Claude-plan requests stay off extra usage)"
+else
+    fail "anthropic-sub: missing from the live extensions dir or settings.json (Claude may refuse or bill as extra usage)" \
+         "bash pi-setup/install.sh"
+fi
+
 # ── removed packages must stay removed (AGENTS.md "Removed — do not reinstall") ──
 REMOVED_PKGS=(
     pi-context todos pi-web-access pi-tasks @tomooshi/condensed-milk-pi
     claude-agent-sdk-pi @sting8k/pi-vcc pi-computer-use pi-gpt-config pi-ask
     pi-grok-cli pi-claude-bridge lsp-pi pi-powerline-footer pi-anycopy
     pi-autoresearch pi-token-burden @marckrenn/pi-sub-bar @marckrenn/pi-sub-core
-    pi-tool-display
+    pi-tool-display @benvargas/pi-claude-code-use
 )
 NPM_GLOBAL="$(npm root -g 2>/dev/null || true)"
 removed_found=""

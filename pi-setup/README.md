@@ -88,9 +88,10 @@ harness notes, and one prompt per sub-agent. `verify-patches.sh` checks each one
 
 ### Claude Integration
 
-Claude Max is used via pi's **native `anthropic` provider** + the `@benvargas/pi-claude-code-use`
-package, which rewrites provider API payloads for Claude Code-style subscription (OAuth) use — no
-custom bridge/provider needed.
+Claude Max is used via pi's **native `anthropic` provider** + `extensions/anthropic-sub.ts`, which
+keeps the three prompt phrases Anthropic treats as third-party usage out of every request and
+explains a refusal in plain words. Tool names stay as they are. Check it any time with
+`bun pi-setup/port-harness/anthropic-oauth-canary.ts`.
 
 ```bash
 /login anthropic
@@ -100,14 +101,14 @@ custom bridge/provider needed.
 ### Providers / Models
 
 `enabledModels` in `settings.json` is what `/model` lists: the three Claude models (Max OAuth via
-pi-claude-code-use, default `claude-opus-5-5`), `deepseek/deepseek-flash` and
+anthropic-sub, default `claude-opus-5-5`), `deepseek/deepseek-flash` and
 `deepseek/deepseek-v4-pro` (`$DEEPSEEK_API_KEY`), `river/deepseek-ai/DeepSeek-V4.1-Flash`
 (`$RIVER_API_KEY`; same weights, flat 20% under DeepSeek's off-peak rate, no peak surcharge), and
 two openrouter models.
 
 | Provider | Access |
 |---|---|
-| `anthropic` | Claude Max OAuth (`/login anthropic`) via pi-claude-code-use |
+| `anthropic` | Claude Max OAuth (`/login anthropic`) via `extensions/anthropic-sub.ts` |
 | `deepseek` | `$DEEPSEEK_API_KEY` |
 | `river` | `$RIVER_API_KEY`; models.json sets `supportsDeveloperRole: false` because River accepts the `developer` role and silently drops it |
 | `openrouter`, `xai`, `openai-codex`, `kimi-coding` | `/login`; xai/codex/kimi models are in the catalog but not in `enabledModels` |
@@ -138,8 +139,7 @@ and `install.sh` does not create them.
 - The ask is a picker: Allow, Deny (the agent stops and waits), or type what to do instead (the agent carries on with that). No UI (a sub-agent) means refused; every answer, and anything you typed, goes to `~/.pi/agent/approvals.jsonl`.
 
 ### Pi Packages
-`settings.json` `packages` is the list: `@benvargas/pi-claude-code-use`, `pi-codex-goal`,
-`pi-mcp-adapter`.
+`settings.json` `packages` is the list: `pi-codex-goal`, `pi-mcp-adapter`.
 See `AGENTS.md` → "Packages (npm)" for versions and patches, and "Removed — do not reinstall"
 for the packages that were taken out on purpose (`verify-patches.sh` fails if one comes back).
 

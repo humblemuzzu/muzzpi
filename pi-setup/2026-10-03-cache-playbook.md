@@ -270,30 +270,24 @@ Two things that trip people up:
 ### 3.4 The payload logger
 
 pi's session files record usage but not the request. To see what was actually
-sent you need the shim's debug log.
+sent you need the payload log. It was the shim's debug log when this was
+written; since the shim's removal it lives in `extensions/anthropic-sub.ts`:
 
-`~/.pi/agent/npm/node_modules/@benvargas/pi-claude-code-use/extensions/index.ts`
-
-- `:804` reads `process.env.PI_CLAUDE_CODE_USE_DEBUG_LOG` **at module load**, so
-  the variable must be set before pi starts
-- `:1253` writes `{ stage: "before", payload }`
-- `:1256` writes `{ stage: "after", payload }` — the transformed request, which is
-  what actually goes on the wire
-- the writer is `JSON.stringify(payload, null, 2)` appended after an ISO
-  timestamp, records separated by a line containing only `---`
+- `PI_ANTHROPIC_PAYLOAD_LOG` is read on every request
+- it writes `{ stage: "after", payload }`, the request as it goes on the wire
+- one JSON line after an ISO timestamp, records separated by a line containing
+  only `---` (the format `cache-diag.py` reads)
 
 Turn it on for one run:
 
 ```bash
-PI_CLAUDE_CODE_USE_DEBUG_LOG=/tmp/pi-payload.jsonl pi --provider anthropic --model claude-opus-5-5
+PI_ANTHROPIC_PAYLOAD_LOG=/tmp/pi-payload.jsonl pi --provider anthropic --model claude-opus-5-5
 ```
 
-**It only fires on Anthropic over OAuth.** The gate is at `:1235`:
+**It only fires on Anthropic over OAuth.** The gate:
 
 ```ts
-if (model?.provider !== "anthropic" || !ctx.modelRegistry.isUsingOAuth(model)) {
-    return undefined;
-}
+if (model?.provider !== "anthropic" || !ctx.modelRegistry.isUsingOAuth(model)) return undefined;
 ```
 
 Run the diagnostic session on grok and you get an empty file and a wasted hour.
@@ -1190,10 +1184,10 @@ context. Codemode just makes it possible to do that across many files at once.
 ### Turn the payload logger on for one run
 
 ```bash
-PI_CLAUDE_CODE_USE_DEBUG_LOG=/tmp/pi-payload.jsonl pi --provider anthropic --model claude-opus-5-5
+PI_ANTHROPIC_PAYLOAD_LOG=/tmp/pi-payload.jsonl pi --provider anthropic --model claude-opus-5-5
 ```
 
-Must be Anthropic over OAuth (gate at `.../pi-claude-code-use/extensions/index.ts:1235`).
+Must be Anthropic over OAuth (the gate in `extensions/anthropic-sub.ts`).
 
 ### Analyse a capture
 
@@ -1399,14 +1393,13 @@ Things I could not establish. Do not treat them as settled.
 | enabling codemode | `docs/cli.md:148-162` |
 | codemode inline budget, 3000 tokens | `docs/codemode.md:49` |
 
-### The shim (`~/.pi/agent/npm/node_modules/@benvargas/pi-claude-code-use`)
+### The payload logger (`pi-setup/extensions/anthropic-sub.ts`, replaced the shim)
 
 | what | where |
 |---|---|
-| debug log path read at module load | `extensions/index.ts:804` |
-| Anthropic + OAuth gate | `extensions/index.ts:1235` |
-| writes `stage: "before"` | `extensions/index.ts:1253` |
-| writes `stage: "after"` | `extensions/index.ts:1256` |
+| log path, read per request | `PI_ANTHROPIC_PAYLOAD_LOG` |
+| Anthropic + OAuth gate | the `before_provider_request` handler |
+| writes `stage: "after"` | `writePayloadLog` |
 
 ### pi-autoresearch (`~/.pi/agent/git/github.com/davebcn87/pi-autoresearch`)
 

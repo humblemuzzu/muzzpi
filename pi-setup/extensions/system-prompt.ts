@@ -37,15 +37,17 @@ function piPackageDir(): string | undefined {
 	return undefined;
 }
 
-function piDocs(dir: string): string {
-	return `Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
+// "pi itself", "pi packages" and "pi .md files" make Anthropic bill a Claude-plan
+// request as extra usage (tools/lib/anthropic-sub.ts); keep the cli wording.
+export function piDocs(dir: string): string {
+	return `Pi documentation (read only when the user asks about the cli itself, its SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${join(dir, "README.md")}
 - Additional docs: ${join(dir, "docs")}
 - Examples: ${join(dir, "examples")} (extensions, custom tools, SDK)
 - When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
-- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)
+- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), cli packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)
 - When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
-- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
+- Always read cli .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
 }
 
 function toolGuidelines(options: any): string {

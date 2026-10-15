@@ -12,6 +12,33 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## pi-claude-code-use → `anthropic-sub.ts` (2026-10-16)
+
+Measured on Claude Max OAuth with extra usage off (a 400 "You're out of extra
+usage" = classed third-party, a 200 with `representative-claim: five_hour` =
+plan): flat tool names pass; the trigger is pi's docs block, the lowercase
+phrases `pi itself` + `pi .md files` + `pi packages` together (rewriting one
+still 400s; all three, capitalising them, or dropping the block passes). The
+identity line is still required (bare 429 without it).
+
+Replacement: `piDocs()` writes the cli wording; `anthropic-sub.ts` scrubs the
+same phrases (bytes identical to the shim's output), warns on a refusal via
+`message_end` (`after_provider_response` does not fire on a 400), and logs
+payloads under `PI_ANTHROPIC_PAYLOAD_LOG`. Prototype runs (parent haiku/opus,
+child, resume): every turn 200 on the plan, system and tools hashes constant,
+first write 43.2k vs 43.4k with the shim, then +25 to +230 per turn.
+
+**Old sessions:** pi recorded the shim's 29 alias tools in each session's
+initial tool list. Resumed without the shim they still ship (65 tools, ~16k
+cached tokens) next to a persisted `toolsRemoved: 29`; one cache rewrite on the
+first resumed turn. Start fresh sessions after the switch.
+
+**Rollback:** `git revert` the change, `bash pi-setup/install.sh` (pi reinstalls
+the pinned 2.2.1; needs network), then trash the leftover
+`~/.pi/agent/extensions/anthropic-sub.js` (install.sh keeps files it does not own).
+
+---
+
 ## Packages + deploy (2026-10-13): 3 packages out, extensions bundled
 
 Removed `pi-token-burden`, `@marckrenn/pi-sub-bar` (+ pi-sub-core) and

@@ -4,6 +4,7 @@
  * and the result shape.
  */
 
+import { describeAnthropicRejection } from "./anthropic-sub";
 import { piSpawn, zeroUsage, type PiSpawnConfig } from "./pi-spawn";
 import {
 	applySpawnResult,
@@ -53,7 +54,9 @@ export async function runSubAgent(run: SubAgentRun): Promise<any> {
 
 	const output = getFinalOutput(result.messages) || "(no output)";
 	if (result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted") {
-		return subAgentResult(result.errorMessage || result.stderr || output, details, true);
+		const error = result.errorMessage || result.stderr || output;
+		const hint = describeAnthropicRejection(error, undefined);
+		return subAgentResult(hint ? `${error}\n\n${hint}` : error, details, true);
 	}
 	return subAgentResult(output, details, false, run.returnImages ? collectSubAgentImages(result.messages) : []);
 }

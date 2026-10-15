@@ -33,7 +33,7 @@ Write the one-line rule and delete whatever it supersedes.
 
 ```
 pi CLI (v1.2.0) — @earendil-works/pi-coding-agent
-  ├─ anthropic + pi-claude-code-use   → Claude Max OAuth (/login)   [DEFAULT]
+  ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)   [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
   ├─ deepseek                         → DEEPSEEK_API_KEY in ~/.zshrc
@@ -53,9 +53,11 @@ use DeepSeek's own API). The catalog still has
 xai, openai-codex, kimi and llama models; a model must be in `enabledModels`
 for `/model` to see it.
 
-**Do not set `PI_CLAUDE_CODE_USE_DISABLE_TOOL_FILTER`.** pi-claude-code-use
-2.2.1 aliases non-core tools to `mcp__tools__*` on anthropic+OAuth; that env
-skips the remap and sends flat names and aliases together.
+**Claude-plan billing.** An OAuth request whose system prompt holds the phrases
+in `tools/lib/anthropic-sub.ts` bills as extra usage (here a 400). Never write
+them into a prompt or drop `anthropic-sub`; after any pi update run
+`bun pi-setup/port-harness/anthropic-oauth-canary.ts`. pi's extra-usage banner
+(`warnings.anthropicExtraUsage: false`) is not a billing signal.
 
 ### System prompt assembly
 
@@ -131,7 +133,6 @@ skills do not contain `mcp-scripting`. pi's built-in `mcp` extension is
 | Package | Ver | Purpose | Patched |
 |---|---|---|---|
 | `@earendil-works/pi-coding-agent` | 1.2.0 | pi itself | 3 core patches |
-| `@benvargas/pi-claude-code-use` | **2.2.1 (pinned)** | Claude Max OAuth payload shim | no |
 | `pi-codex-goal` | 0.6.0 (pinned) | `/goal` | no |
 | `pi-mcp-adapter` | 5.1.0 (pinned) | one `mcp` proxy tool, lazy servers | **config** |
 
@@ -139,9 +140,6 @@ skills do not contain `mcp-scripting`. pi's built-in `mcp` extension is
 change both. To move a pin: edit the source in both, then
 `pi install npm:<pkg>@<ver>` (a bare `pi update <source>` reported success
 without installing), then re-check the settings entry kept its shape.
-
-`warnings.anthropicExtraUsage: false` silences pi's Max-OAuth extra-usage
-banner; it is UI, not a billing signal.
 
 ### Removed — do not reinstall
 
@@ -154,7 +152,8 @@ commands as successes**), `claude-agent-sdk-pi`, `@sting8k/pi-vcc`,
 `pi-token-burden` (+143 ms on every start for one command),
 `@marckrenn/pi-sub-bar` (+324 ms, every provider off, two patches to stop it
 crashing pi), `pi-tool-display` (rewrote stored messages, then spliced the
-whole context on every LLM call to undo it).
+whole context on every LLM call to undo it), `@benvargas/pi-claude-code-use`
+(`mcp__` aliasing Anthropic no longer needs; see `anthropic-sub.ts`).
 `verify-patches.sh` `REMOVED_PKGS` must match this list; it fails on any trace.
 
 ### One install, no duplicates
@@ -217,6 +216,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | Extension | Purpose |
 |---|---|
 | `system-prompt.ts` | parent template / sub-agent generated prompt |
+| `anthropic-sub.ts` | Claude-plan billing: scrubs the trigger phrases, warns on a refusal, `PI_ANTHROPIC_PAYLOAD_LOG` feeds `cache-diag.py`. Parent and children |
 | `mentions.ts` | @mentions + agent directives |
 | `session-name.ts` | auto session naming (haiku, deliberately; a direct model call, not a sub-agent) |
 | `stats/` | `/stats`, Ctrl+Shift+S — analytics over pi, Claude Code, Codex and OpenCode sessions + git. Per-harness ledgers in `<agent dir>/cache/stats` keep sessions whose source is gone (Claude prunes after 30 days): never delete them casually. Bump `ledger.ts` `VERSION` when a parser's output changes. OpenCode is read via the `sqlite3` CLI, read-only. Nothing may reach the model: no tools, no `sendMessage`. The widget reads pi's ledger only, never a cold parse |
@@ -272,8 +272,7 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
 
 ## Custom tools
 
-`codemode` is a pi built-in enabled by `defaultTools: ["+codemode"]`; it is not
-in the shim's `CORE_TOOL_NAMES`, so it is aliased on Anthropic OAuth. `read`
+`codemode` is a pi built-in enabled by `defaultTools: ["+codemode"]`. `read`
 declares `outputSchema: Type.String()`, so scripts get raw text. **Every tool
 result is redacted** (`psst.ts` `redactSecretPatterns`), scripts included; **cap
 every quantifier there**: an uncapped `[\w.-]*token[\w.-]*` took 284 s on 1 MB.
@@ -302,7 +301,7 @@ made a mailbox that was never cleaned up, and sub-agents could not receive.
 - **Don't use `--no-tools`** for sub-agents: it empties the registry and
   nothing can be re-activated.
 - **Children load only `CHILD_EXTENSIONS`** (`pi-spawn.ts`: tools,
-  system-prompt, guardrails, claude-code-use) via `--no-extensions -e`, plus
+  system-prompt, guardrails, anthropic-sub) via `--no-extensions -e`, plus
   `-e builtin:codemode` when the child's tools include `codemode` (chad,
   delegate, code_review): `--no-extensions` also drops pi's built-ins. A
   script reaches only the child's listed tools, through the same hooks. An

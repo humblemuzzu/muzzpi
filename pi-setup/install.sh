@@ -250,7 +250,6 @@ fi
 info "Installing pi packages..."
 # Mirror of settings.json "packages"; never re-add one AGENTS.md lists as removed.
 packages=(
-    "npm:@benvargas/pi-claude-code-use@2.2.1"
     "npm:pi-codex-goal@0.6.0"
     "npm:pi-mcp-adapter@5.1.0"
 )
@@ -259,6 +258,16 @@ for pkg in "${packages[@]}"; do
     run pi install "$pkg" 2>/dev/null || warn "Failed to install $pkg (install manually with: pi install $pkg)"
 done
 ok "Pi packages installed (${#packages[@]} packages)"
+
+# Replaced by extensions/anthropic-sub.ts.
+SHIM_DIR="$PI_AGENT/npm/node_modules/@benvargas/pi-claude-code-use"
+if [ -d "$SHIM_DIR" ]; then
+    run pi remove "npm:@benvargas/pi-claude-code-use@2.2.1" || true
+    if [ -d "$SHIM_DIR" ]; then
+        run mv "$SHIM_DIR" "$PI_AGENT/pi-claude-code-use$BACKUP_SUFFIX"
+    fi
+    ok "Removed pi-claude-code-use (replaced by extensions/anthropic-sub.ts)"
+fi
 
 # ── pi entrypoint ──
 # pi ships `pi` → dist/bundle/cli.js, which never loads the patched dist/ files.

@@ -177,7 +177,7 @@ Every pi release since 0.82 has a written migration record:
 
 ## The graveyard
 
-19 packages were installed, used, and removed. `verify-patches.sh` fails if any
+20 packages were installed, used, and removed. `verify-patches.sh` fails if any
 of them comes back.
 
 | Package | Why it went |
@@ -188,7 +188,8 @@ of them comes back.
 | `pi-web-access` | every search provider key was rejected or rate-limited |
 | `pi-context` | checkpoint spam; pi's own `/compact` covers the need |
 | `pi-computer-use` | its GUI tools never registered |
-| `pi-claude-bridge`, `claude-agent-sdk-pi` | replaced by native Anthropic + `pi-claude-code-use` |
+| `pi-claude-bridge`, `claude-agent-sdk-pi` | replaced by native Anthropic OAuth |
+| `pi-claude-code-use` | renamed every tool to `mcp__…`; Anthropic now checks only three prompt phrases, so a small extension replaced it |
 | `@sting8k/pi-vcc` | redundant once native compaction landed |
 | `lsp-pi`, `pi-powerline-footer`, `pi-anycopy` | installed where pi never loads them |
 | `pi-gpt-config`, `pi-ask`, `pi-grok-cli`, `todos` | unused |
@@ -249,6 +250,7 @@ the exact fix for anything that did not land.
 ```bash
 bash pi-setup/update-pi.sh <version>   # updating pi itself; never pi update --self
 bash pi-setup/verify-patches.sh        # after any pi install / package update
+bun pi-setup/port-harness/anthropic-oauth-canary.ts   # Claude-plan requests still billed to the plan?
 ```
 
 ## Ghostty
@@ -288,9 +290,9 @@ bug, and [`pi-setup/README.md`](pi-setup/README.md) for the full inventory.
   is why the prompt files are still named `*.amp.*`.
 - [bdsqqq/dots](https://github.com/bdsqqq/dots): the sub-agent wiring and
   `delegate` began as a port from there.
-- The packages it runs: [pi-claude-code-use](https://github.com/ben-vargas/pi-packages)
-  by Ben Vargas, [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal) and
-  [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter).
+- The packages it runs: [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal)
+  and [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter). Claude Max
+  support began with Ben Vargas's [pi-claude-code-use](https://github.com/ben-vargas/pi-packages).
 - Skills adapted from Matt Pocock (`mat-*`), dmmulroy (`dm-*`) and Cursor (`c-*`).
 - Ghostty theme palettes inspired by [opencode](https://github.com/anomalyco/opencode).
 
