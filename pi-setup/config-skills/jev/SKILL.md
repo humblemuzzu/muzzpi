@@ -1,6 +1,6 @@
 ---
 name: jev
-description: "call TypeSafe's Jev classifier from codemode for typed decisions — yes/no, pick-one, or score, each with probabilities. use when code must make the same judgement over many items (triage, filter, sort, route, rank, flag) fast and cheap. not for one judgement you can make yourself. has the exact pi call, question and answer shapes, and the rules that decide accuracy, so no docs reading is needed."
+description: "call TypeSafe's Jev classifier from codemode for typed decisions — yes/no, pick-one, or score, each with probabilities — over text or images, plus a bounding box over an image. use when code must make the same judgement over many items (triage, filter, sort, route, rank, flag, sort screenshots/photos) fast and cheap. not for one judgement you can make yourself. has the exact pi call, question and answer shapes, and the rules that decide accuracy, so no docs reading is needed."
 ---
 
 # jev
@@ -69,6 +69,52 @@ return rs
 
 Return only what you will use: the script's result enters your context, Jev's
 tokens do not.
+
+## Images and box (danger zone)
+
+pi's `models.classify` is text-only (it refuses images and has no `box`), so
+images go through `scripts/jev-image.mjs`, which calls TypeSafe directly with
+`TYPESAFE_API_KEY` and the `TypeSafe-Danger-Zone-Images` opt-in. Same request
+shape as above plus an `images` map; write `{{name}}` wherever an image goes —
+in `state`, `instructions`, or a `criteria` value (never a key).
+
+```js
+const jevImage = async (req) => {
+  const r = await tools.bash({ cmd: `node ~/.config/agents/skills/jev/scripts/jev-image.mjs <<'JEV_JSON'\n${JSON.stringify(req)}\nJEV_JSON`, timeout: 300 });
+  return JSON.parse(r.output);
+};
+return await jevImage({
+  images: { shot: "/abs/or/~/path.png", ref: "~/Downloads/logo.png" },
+  state: { img: "{{shot}}" },
+  questions: {
+    has_logo: { type: "bool", instructions: "Does `img` contain this logo: {{ref}}?" },
+    logo: { type: "box", instructions: "the logo in `img`" },
+  },
+});
+```
+
+- Result: `{ model, answers, usage, prepared? }` or `{ error }`. `bool` answers
+  come back as `{ probability }` like pi's. Pass an **array** of requests to get
+  an array back (4 in flight); one bad item is an `{ error }`, not a throw.
+- **`box`** → `{ box: { top, bottom, left, right }, confidence }`, fractions of
+  the image from its top-left. It needs Jev 1.14: the script switches to
+  `jev-preview` when a `box` is present. It always returns a box, so pair it
+  with a `bool` "is it there?" and ignore the box when that is low. Box
+  `confidence` runs low (~0.2) even on correct boxes; never threshold it high.
+- `model` is optional: `jev-latest` (1.13 until ~Oct 21, 2026, then 1.14) or
+  `jev-preview`/`jev-1.14.0`. pi's catalog has no 1.14, so text-only requests
+  that want it (better multilingual) can go through this script too.
+- The script makes images valid: rotates EXIF-sideways photos upright, scales
+  to 280–1568 px per side, converts HEIC/WebP/GIF, and lists what it did in
+  `prepared`. **Padding** (very thin images) shifts box fractions; `prepared`
+  says so.
+- Each `{{name}}` use sends the image again and bills it again. An image
+  several questions need goes in `state` once, referenced by path.
+- Cost: a 1568×1014 image is ~4.4k input tokens (~$0.0002), 512² ~1k, 280² ~500.
+- Images leave the machine. Ask before sending IDs, documents or private
+  photos.
+- Accuracy drops on images. Ask the simplest question per call; compare against
+  a reference picture rather than describing it in words.
 
 ## Rules that decide accuracy
 

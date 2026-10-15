@@ -198,54 +198,54 @@ const shippedRules: PermissionRule[] = JSON.parse(
 
 // pins both halves of the shipped delete guard on this machine: every bypass is
 // caught AND ordinary commands that merely contain the letters "rm" are not.
-describe("the real permissions.json: nothing deletes on this machine", () => {
+describe("the real permissions.json: every delete on this machine asks first", () => {
 	const rules = shippedRules;
 	const verdict = (cmd: string) => evaluateCommand(cmd, rules).action;
 
-	it("blocks rm at the start of a command", () => {
-		expect(verdict("rm f")).toBe("reject");
-		expect(verdict("rm -rf /tmp/x")).toBe("reject");
+	it("asks before rm at the start of a command", () => {
+		expect(verdict("rm f")).toBe("ask");
+		expect(verdict("rm -rf /tmp/x")).toBe("ask");
 	});
 
-	it("blocks rm after any separator, with or without spaces", () => {
+	it("asks before rm after any separator, with or without spaces", () => {
 		for (const cmd of [
 			"echo hi && rm f", "echo hi ; rm f", "echo hi; rm f", "echo hi;rm f", "true || rm f", "(rm f)",
 			"echo $(rm f)", "echo `rm f`", "{ rm f; }", "echo hi\nrm f",
 		]) {
-			expect(verdict(cmd)).toBe("reject");
+			expect(verdict(cmd)).toBe("ask");
 		}
 	});
 
-	it("blocks rm inside loops/conditionals and via xargs / find -exec", () => {
-		expect(verdict("for f in *; do rm $f; done")).toBe("reject");
-		expect(verdict("if x; then rm f; fi")).toBe("reject");
-		expect(verdict("find . -exec rm {} +")).toBe("reject");
-		expect(verdict("find . -execdir rm {} +")).toBe("reject");
-		expect(verdict("xargs rm < list")).toBe("reject");
-		expect(verdict("ls | xargs -0 rm")).toBe("reject");
+	it("asks before rm inside loops/conditionals and via xargs / find -exec", () => {
+		expect(verdict("for f in *; do rm $f; done")).toBe("ask");
+		expect(verdict("if x; then rm f; fi")).toBe("ask");
+		expect(verdict("find . -exec rm {} +")).toBe("ask");
+		expect(verdict("find . -execdir rm {} +")).toBe("ask");
+		expect(verdict("xargs rm < list")).toBe("ask");
+		expect(verdict("ls | xargs -0 rm")).toBe("ask");
 	});
 
-	it("blocks rm behind a path, a quote, a backslash or a wrapper", () => {
+	it("asks before rm behind a path, a quote, a backslash or a wrapper", () => {
 		for (const cmd of [
 			"/bin/rm f", "/usr/bin/rm -rf x", "\\rm f", '"rm" f', "command rm f", "builtin rm f", "sudo rm f",
 			"sudo -n rm f", "sudo -u root rm f", "env rm f", "env FOO=1 rm f", "FOO=1 rm f", "nohup rm f", "time rm f",
 			"exec rm f", "nice -n 5 rm f", "timeout 5 rm f", "busybox rm f",
 			"eval rm f", 'eval "rm f"', "$(which rm) f", "`which rm` f", "ls | xargs -I{} rm {}", "find . -exec /bin/rm {} +",
 		]) {
-			expect(verdict(cmd)).toBe("reject");
+			expect(verdict(cmd)).toBe("ask");
 		}
 	});
 
-	it("blocks rm inside a shell string or a script's process call", () => {
+	it("asks before rm inside a shell string or a script's process call", () => {
 		for (const cmd of [
 			'sh -c "rm f"', "bash -c 'rm f'", "bash -lc 'rm f'", 'find . -exec sh -c "rm {}" \\;', 'git submodule foreach "rm f"',
 			`python3 -c "import os; os.system('rm f')"`, `python3 -c "import subprocess; subprocess.run(['rm','f'])"`,
 		]) {
-			expect(verdict(cmd)).toBe("reject");
+			expect(verdict(cmd)).toBe("ask");
 		}
 	});
 
-	it("blocks every other way to delete", () => {
+	it("asks before every other way to delete", () => {
 		for (const cmd of [
 			"rmdir empty", "unlink f", "shred -u f", "find . -name '*.log' -delete", "sudo find / -delete",
 			"git rm f", "git -C repo rm -r dir", "git clean -fd", "git rm $(git ls-files --cached)", "git rm foo # --cached",
@@ -257,7 +257,7 @@ describe("the real permissions.json: nothing deletes on this machine", () => {
 			`perl -MFile::Path -e 'rmtree("d")'`, `deno eval "Deno.remove('f')"`, `ruby -e 'Dir.rmdir("d")'`,
 			`ruby -e 'FileUtils.rm_rf("d")'`, "python3 - <<'EOF'\nfrom pathlib import Path\nPath('f').unlink()\nEOF",
 		]) {
-			expect(verdict(cmd)).toBe("reject");
+			expect(verdict(cmd)).toBe("ask");
 		}
 	});
 
@@ -282,10 +282,10 @@ describe("the real permissions.json: nothing deletes on this machine", () => {
 	it("a heredoc that is only data (commit message, file body) is not read as commands", () => {
 		expect(verdict("git commit -F - <<'EOF'\nblock deletes:\nrsync --delete, rm -rf, git clean\nEOF")).toBe("allow");
 		expect(verdict('cat > notes.md <<EOF\nrm f\nEOF\necho done')).toBe("allow");
-		expect(verdict("cat > notes.md <<EOF\nrm f\nEOF\nrm g")).toBe("reject");
-		expect(verdict("bash <<'EOF'\nrm f\nEOF")).toBe("reject");
-		expect(verdict("python3 - <<'EOF'\nimport os; os.remove('f')\nEOF")).toBe("reject");
-		expect(verdict("cat <<EOF | sh\nrm f\nEOF")).toBe("reject");
+		expect(verdict("cat > notes.md <<EOF\nrm f\nEOF\nrm g")).toBe("ask");
+		expect(verdict("bash <<'EOF'\nrm f\nEOF")).toBe("ask");
+		expect(verdict("python3 - <<'EOF'\nimport os; os.remove('f')\nEOF")).toBe("ask");
+		expect(verdict("cat <<EOF | sh\nrm f\nEOF")).toBe("ask");
 	});
 
 	it("ssh to this machine is still this machine", () => {
@@ -294,14 +294,14 @@ describe("the real permissions.json: nothing deletes on this machine", () => {
 			'ssh web "echo $(rm -rf ~)"', "ssh web 'ls'; rm -rf ~/x", "ssh web 'ls' && find . -delete",
 			"rsync -a --delete web:/srv/ ./backup/",
 		]) {
-			expect(verdict(cmd)).toBe("reject");
+			expect(verdict(cmd)).toBe("ask");
 		}
 	});
 
 	it("stays fast, and still decides, on commands built to make the rules backtrack", () => {
 		const assignments = (n: number) => Array.from({ length: n }, (_, i) => `K${i}=v${i}`).join(" ");
 		for (const [cmd, expected] of [
-			[`${assignments(60)} ; rm x`, "reject"],
+			[`${assignments(60)} ; rm x`, "ask"],
 			[`${assignments(30)} make`, "allow"],
 			["sudo a ".repeat(40), "allow"],
 			[`ssh h '${assignments(30)} true'`, "allow"],
@@ -318,12 +318,12 @@ describe("the real permissions.json: nothing deletes on this machine", () => {
 			'echo "<<EOF"\nrm -rf x\nEOF', "echo '<<EOF'\nrm -rf x", "echo hi # <<EOF\nrm -rf x", "cat <<<EOF\nrm -rf x\nEOF",
 			"echo $((1<<2))\nrm -rf x",
 		]) {
-			expect({ cmd, action: verdict(cmd) }).toEqual({ cmd, action: "reject" });
+			expect({ cmd, action: verdict(cmd) }).toEqual({ cmd, action: "ask" });
 		}
 	});
 
 	it("rsync that removes the files it sent is a delete here", () => {
-		expect(verdict("rsync -a --remove-sent-files src/ h:dst/")).toBe("reject");
+		expect(verdict("rsync -a --remove-sent-files src/ h:dst/")).toBe("ask");
 	});
 });
 
@@ -349,8 +349,10 @@ describe("the real permissions.json: server work", () => {
 		expect(verdict("ssh web 'cd /srv/app && git push --force'").action).toBe("reject");
 	});
 
-	it("a local delete next to server work is still blocked", () => {
-		expect(verdict("ssh web 'rm -rf /srv/old'; rm -rf ./build").action).toBe("reject");
+	it("a local delete next to server work still asks", () => {
+		const mixed = evaluateCommand("ssh web 'rm -rf /srv/old'; rm -rf ./build", shippedRules);
+		expect(mixed.action).toBe("ask");
+		expect(mixed.asks?.map((ask) => ask.host)).toEqual([undefined]);
 	});
 });
 
@@ -466,7 +468,7 @@ describe("the real permissions.json: commands that destroy data ask first", () =
 	});
 
 	it("a block beats an ask, and every ask on a line is listed", () => {
-		expect(verdict("psql -c 'DROP TABLE t'; rm -rf ./x").action).toBe("reject");
+		expect(verdict("psql -c 'DROP TABLE t'; rm -rf ./x").action).toBe("ask");
 		expect(verdict("psql -c 'DROP TABLE t'; amp --version").action).toBe("reject");
 		const both = verdict("ssh a 'docker volume rm v1' && ssh b 'redis-cli FLUSHALL'");
 		expect(both.action).toBe("ask");

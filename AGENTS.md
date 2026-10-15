@@ -20,8 +20,9 @@ Anything added must pass all four:
    anything `ls`/`grep` answers in one call do not go here.
 3. **It is a rule or a fact, not a story.** One or two lines. No dates, test
    counts, measurement tables or reproduction steps.
-4. **It has no better home.** Per-incident detail goes in `pi-setup/*.md`,
-   per-update detail in `pi-setup/pi-migrations.md`, never in a code comment.
+4. **It has no better home.** Per-update detail goes in `pi-setup/pi-migrations.md`,
+   never in a code comment. **Do not write a new .md file for a fix**: the
+   commit message holds the story.
 
 **Never append a changelog entry** — `git log -p AGENTS.md` is the changelog.
 Write the one-line rule and delete whatever it supersedes.
@@ -185,7 +186,7 @@ load twice. Lazy: nothing connects until a tool is called.
 | `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.7.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
 | `astro` | `127.0.0.1:8089/mcp`, `auth: false`; runs inside the Astro Mac app (Settings → MCP Server) |
 | `paper` | `127.0.0.1:29979/mcp`, `auth: false`; inside Paper Desktop, **read+write** on the open file |
-| `cloudflare*` | remote HTTP, `protocolVersion: "auto"`. See `pi-setup/2026-08-13-cloudflare-mcp.md` |
+| `cloudflare*` | remote HTTP, `protocolVersion: "auto"` |
 
 **chrome-devtools flags are load-bearing.** `--isolated` (the default profile
 is persistent, single-browser and readable by the agent),
@@ -334,15 +335,15 @@ is decoded only when that alone makes oldText match, refused in prose files
 without escapes; `[REDACTED]` is never written over a real value. UTF-8 text
 only; no `replace_all`, delete or move (`trash <path>` / `git mv` in bash).
 
-- **This Mac: no deletes. Over ssh: deletes run.** `lib/remote-command.ts`
+- **This Mac: deletes ask first (`ask` rule; `trash` is the default). Over ssh: deletes run.** `lib/remote-command.ts`
   splits out server parts (ssh args and heredocs, `rsync --delete` to a remote
   dest); local-only rules carry `where: "local"`; text it cannot place stays
   local; keep its real-bash oracle test green. Undo of a creation: `lib/trash.ts`.
 - **`ask` rules** (destructive SQL, Docker volumes, buckets, disks; MCP DELETE)
   go through `lib/approval.ts`: a confirm dialog, refused with no UI (sub-agents,
   `-p`), logged to `~/.pi/agent/approvals.jsonl`. Reject beats ask beats allow.
-- apply_patch is gone (envelope 9.6%, batch 6.8% failures vs ~2%; see
-  `pi-setup/2026-10-11-edit-tool.md`). If GPT models return, gate it by model id.
+- apply_patch is gone (envelope 9.6%, batch 6.8% failures vs ~2%). If GPT
+  models return, gate it by model id.
 - Undo/redo refuse when a later still-applied change touches the path, or the
   file drifted outside the tool (`force: true` overrides and reports the loss).
   Ordering comes from position in `activeIds`, **never `Date.now()`**. Redo
@@ -535,18 +536,10 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 
 ## Where the detail lives
 
-- `pi-setup/2026-05-17-migration-log.md` — v0.74.0 migration, architecture
-- `pi-setup/2026-07-30-bdsqqq-port.md` — sub-agent wiring, OAuth tool-filter
-  trap. **Read before touching tools/subagents.**
-- `pi-setup/2026-10-11-edit-tool.md` — edit/write decision, data, scoreboard
-- `pi-setup/2026-10-13-performance.md` — keystroke and boot profiling, the bundled
-  deploy, what was removed and why
-- `pi-setup/2026-10-13-permissions.md` — server deletes, approval dialog, secret redaction, edit hints
-- `pi-setup/2026-08-13-cloudflare-mcp.md` — the 16 Cloudflare servers, auth flow
-- `pi-setup/2026-10-04-you-should-know.md` — the `/ysk` side agent and its cache-cost maths
 - `pi-setup/2026-10-03-cache-playbook.md` — the Max-plan cache drain: measurement, root
   cause, fix, every wrong turn. **Read before touching anything that shapes the prompt.**
 - `pi-setup/2026-06-15-anthropic-login-analysis.md` — `/login anthropic` vs Claude Code OAuth
 - `pi-setup/pi-migrations.md` — per-update record. **Read before `pi update`.**
 - `pi-setup/README.md` — setup docs
 - `git log -p AGENTS.md` — everything ever cut from this file
+- `git log --diff-filter=D --name-only -- pi-setup/` — deleted incident write-ups

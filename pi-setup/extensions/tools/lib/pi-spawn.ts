@@ -296,8 +296,8 @@ const PI_AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 
 /**
  * The only extensions a headless child uses: every sub-agent run on record
- * called no tool, command or hook from the others (see
- * pi-setup/2026-10-13-performance.md). tools and system-prompt are required.
+ * called no tool, command or hook from the others. tools and system-prompt
+ * are required.
  */
 export const CHILD_EXTENSIONS: readonly string[] = [
 	path.join(PI_AGENT_DIR, "extensions", "tools"),

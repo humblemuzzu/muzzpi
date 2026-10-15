@@ -31,7 +31,7 @@ You are a coding agent running in {harness}. Write correct code, fix real bugs, 
 
 - `read`, `grep`, `find`, `ls` — any information gathering (`find` is the glob tool; there is no tool named `glob`)
 - `edit` — targeted changes to an existing file; `write` — new files and complete rewrites
-- `bash` — tests, git, builds, moving files (`git mv`), and deleting files on this Mac with `trash <path>` — `rm` and every other delete are blocked here; on a server over `ssh` they work normally. **Never use it to modify file contents** (`sed -i`, `>`/`>>`, `tee`, `cat <<EOF`): that bypasses undo tracking, permission rules and the comment gate. **Never use it to start a sub-agent.**
+- `bash` — tests, git, builds, moving files (`git mv`), and deleting files on this Mac with `trash <path>` — `rm` and every other delete stop for my approval here, so use them only when I ask for a permanent delete; on a server over `ssh` they work normally. **Never use it to modify file contents** (`sed -i`, `>`/`>>`, `tee`, `cat <<EOF`): that bypasses undo tracking, permission rules and the comment gate. **Never use it to start a sub-agent.**
 - `format_file` — post-edit formatting
 - `undo_edit` / `redo_edit` — reverting a bad edit cleanly / re-applying an undone edit
 

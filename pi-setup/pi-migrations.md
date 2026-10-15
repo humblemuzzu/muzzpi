@@ -18,7 +18,7 @@ Removed `pi-token-burden`, `@marckrenn/pi-sub-bar` (+ pi-sub-core) and
 `pi-tool-display` with `pi remove`; trashed their configs, `pi-sub-patches/`
 and `install-pi-server.sh`. Extensions now deploy as Bun bundles
 (`build-extensions.ts`); `settings.json` lists `.js`. Boot 1135 to 443 ms,
-keystroke at 700k 180 to 10 ms. Detail: `2026-10-13-performance.md`.
+keystroke at 700k 180 to 10 ms.
 Backup: `~/.pi/agent/extensions.backup-20261013-180008`.
 
 ---

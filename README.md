@@ -77,7 +77,7 @@ the tools it has. Pick by what you need back:
 
 - **`edit`** and **`write`** are pi's own tools with a thin layer on top: every
   change is recorded so `undo_edit` / `redo_edit` walk it back, even after a
-  restart. Why not a patch format: [the edit-tool record](pi-setup/2026-10-11-edit-tool.md).
+  restart.
 - **`web_search`** and **`read_web_page`**: fetch a page, or ask a question about
   it and get an answer from a child agent.
 - **7 GitHub tools** read, search and diff any repo you can see, without cloning.

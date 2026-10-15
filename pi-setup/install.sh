@@ -143,7 +143,7 @@ elif ! gh auth status &>/dev/null; then
     warn "gh is not logged in: run gh auth login for the GitHub tools"
 fi
 command -v rg &>/dev/null || warn "rg (ripgrep) not found: grep and find need it (brew install ripgrep)"
-command -v trash &>/dev/null || warn "trash not found: permissions.json blocks rm and points the agent at trash (brew install trash)"
+command -v trash &>/dev/null || warn "trash not found: permissions.json makes rm ask first and points the agent at trash (brew install trash)"
 if ! command -v bun &>/dev/null; then
     warn "bun not found. The installer bundles the extensions with it: brew install oven-sh/bun/bun"
     exit 1

@@ -37,8 +37,8 @@
       ],
       "where": "local"
     },
-    "action": "reject",
-    "message": "deleting files on this Mac is blocked — rm, rmdir, unlink, shred, find -delete, rsync --delete, git rm, git clean and delete calls in scripts. use 'trash <path>': it moves the file to the macOS Trash, where it can be recovered. (git rm --cached and dry runs are allowed. deleting on a server over ssh is allowed.)"
+    "action": "ask",
+    "message": "deletes files on this Mac for good, skipping the Trash (rm, rmdir, unlink, shred, find -delete, rsync --delete, git rm, git clean, or a script's delete call). 'trash <path>' does the same and can be undone"
   },
   {
     "tool": "Bash",
