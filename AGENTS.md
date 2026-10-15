@@ -413,8 +413,12 @@ in `vision.test.ts`). Tiers: standard 1568px/1568 tokens, high-res (Claude
 - `collectSubAgentImages` returns the **2 most recent** images from
   oracle/delegate/code_review/chad.
 - macOS: every tab is its own `NSWindow`; `CGWindowListCopyWindowInfo` option
-  `0`, never `1`; off-Space capture usually works, so try and explain, never
-  pre-refuse. Screen Recording must be granted to the terminal running pi.
+  `0`, never `1`. A window is captured where it is first; only after a failure,
+  or for a Stage Manager thumbnail (it captures as a tiny preview), is its app
+  activated, **by pid**, and focus is handed back only if that app still has
+  it. `port-harness/screenshot-live.ts` is the only check against real macOS:
+  run it after touching `lib/capture.ts`. Screen Recording must be granted to
+  the terminal running pi.
 - `permissions.json` blocks the capture binary in bash but deliberately does
   not match `sips`.
 

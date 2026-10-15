@@ -67,6 +67,7 @@ export interface WebCaptureOptions {
 	deviceScaleFactor?: number;
 	waitMs?: number;
 	timeoutMs?: number;
+	signal?: AbortSignal;
 }
 
 export interface WebCaptureResult {
@@ -134,6 +135,9 @@ export async function captureWebPage(
 		);
 	}
 
+	const abort = () => void browser.close().catch(() => {});
+	if (opts.signal?.aborted) abort();
+	opts.signal?.addEventListener("abort", abort, { once: true });
 	const pageErrors: string[] = [];
 	try {
 		const context = await browser.newContext({
@@ -201,6 +205,7 @@ export async function captureWebPage(
 			...(clipped ? { clipped } : {}),
 		};
 	} finally {
+		opts.signal?.removeEventListener("abort", abort);
 		await browser.close().catch(() => {});
 	}
 }

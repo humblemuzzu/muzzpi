@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { describeWindow, groupLikelyTabs, type WindowInfo } from "./lib/capture";
+import { appWindows, describeWindow, groupLikelyTabs, type WindowInfo, withoutGhosts } from "./lib/capture";
 import fs from "node:fs";
 import path from "node:path";
 import {
 	createScreenshotTool,
 	displayedSibling,
 	normalizeRegion,
+	parseTarget,
+	prepareScreenshotArguments,
 	renderOpenWindows,
 	resolveWindow,
 	tabRescueAdvice,
@@ -16,7 +18,7 @@ const tool = createScreenshotTool() as any;
 
 describe("the window list shows app windows and counts the rest", () => {
 	const w = (id: number, app: string, regularApp: boolean): WindowInfo => ({
-		id, app, title: "", layer: 0, onScreen: false, x: 0, y: 0, width: 500, height: 500, regularApp,
+		id, app, pid: id, title: "", layer: 0, onScreen: false, x: 0, y: 0, width: 500, height: 500, regularApp,
 	});
 	const pool = [w(1, "Ghostty", true), w(2, "WindowManager", false), w(3, "WindowManager", false), w(4, "Raycast", false)];
 
@@ -25,11 +27,11 @@ describe("the window list shows app windows and counts the rest", () => {
 		expect(text).toStartWith("1 open windows:");
 		expect(text).toContain("Ghostty");
 		expect(text).not.toContain("WindowManager");
-		expect(text).toContain("(3 window(s) of background/helper apps not listed; `app` still matches them)");
+		expect(text).toContain("(3 helper or never-shown window(s) not listed)");
 	});
 
-	test("matching by app still reaches a hidden helper app's window", () => {
-		expect(resolveWindow({ app: "raycast" }, pool).window.id).toBe(4);
+	test("a target still reaches a hidden helper app's window", () => {
+		expect(resolveWindow({ kind: "windowQuery", query: "raycast" }, pool).window.id).toBe(4);
 	});
 });
 
@@ -106,24 +108,16 @@ describe("tool contract", () => {
 		expect(tool.description).toMatch(/Example: screenshot\(\{.*\}\)/);
 	});
 
-	test("the description steers away from the shell workaround", () => {
-		expect(tool.description).toContain("sips -Z");
-		expect(tool.description).toContain("screencapture");
-	});
-
-	test("exposes the full targeting surface", () => {
-		const props = Object.keys(tool.parameters.properties ?? {});
-		for (const expected of ["app", "window_title", "window_id", "region", "display", "list"]) {
-			expect(props).toContain(expected);
-		}
-	});
-
-	test("tier is constrained to the two real tiers", () => {
-		const tier = (tool.parameters.properties as any).tier;
-		const literals = JSON.stringify(tier);
-		expect(literals).toContain("standard");
-		expect(literals).toContain("high");
-		expect(literals).not.toContain("highRes");
+	test("one target plus what refines it, and nothing else", () => {
+		expect(Object.keys(tool.parameters.properties ?? {}).sort()).toEqual([
+			"activate",
+			"list",
+			"region",
+			"selector",
+			"target",
+			"viewport_width",
+			"wait_ms",
+		]);
 	});
 
 	test("nothing in the spec nudges the model to economise", () => {
@@ -137,12 +131,6 @@ describe("tool contract", () => {
 			),
 		].join(" ");
 		expect(surface).not.toMatch(/token cost|cheaper|\dx the cost|expensive/i);
-	});
-
-	test("the tier parameter states that high is the default", () => {
-		const tier = String((tool.parameters.properties as any).tier.description);
-		expect(tier).toMatch(/default/i);
-		expect(tier).toContain("high");
 	});
 
 	test("the description warns that a very long page is truncated", () => {
@@ -256,6 +244,7 @@ describe("window listing tells identical-looking windows apart", () => {
 	const w = (over: Partial<WindowInfo>): WindowInfo => ({
 		id: 1,
 		app: "Ghostty",
+		pid: 7,
 		title: "…/Documents/Code stuff/my-app",
 		layer: 0,
 		onScreen: true,
@@ -284,18 +273,18 @@ describe("window listing tells identical-looking windows apart", () => {
 	});
 });
 
-describe("ambiguous window matches give advice that can actually work", () => {
+const query = (text: string) => ({ kind: "windowQuery" as const, query: text });
+
+describe("an ambiguous target captures the best window and names the rest", () => {
 	/*
-	 * From a live test run: `app:"ghostty"` matched 12 windows and captured one
-	 * SILENTLY, while `app` + `window_title` matched 5 and refused — with the
-	 * message "Narrow it with window_title, or pass window_id" even though a
-	 * window_title had just been supplied and all five candidates had identical
-	 * titles. No window_title value could ever have worked. That is the shape of
-	 * advice that sends a model into a retry loop.
+	 * The old tool refused ambiguous matches and asked for a window_id, which
+	 * cost a second call every time. A capture plus the alternatives costs one,
+	 * and the model can see from the picture whether it got the right window.
 	 */
 	const w = (over: Partial<WindowInfo>): WindowInfo => ({
 		id: 1,
 		app: "Ghostty",
+		pid: 7,
 		title: "…/Documents/Code stuff/my-app",
 		layer: 0,
 		onScreen: false,
@@ -305,59 +294,35 @@ describe("ambiguous window matches give advice that can actually work", () => {
 		height: 1040,
 		...over,
 	});
-	const identical = [
-		w({ id: 15251 }),
-		w({ id: 14093 }),
-		w({ id: 16303 }),
-		w({ id: 14408 }),
-		w({ id: 13707 }),
-	];
 
-	test("identical titles: it says window_title CANNOT help, and asks for window_id", () => {
-		try {
-			resolveWindow({ app: "ghostty", window_title: "my-app" }, identical);
-			throw new Error("should have refused");
-		} catch (e: any) {
-			expect(e.message).toContain("window_id");
-			expect(e.message).toMatch(/cannot separate them|same title/i);
-			// The impossible instruction must be gone.
-			expect(e.message).not.toMatch(/Narrow it with window_title/);
-		}
+	test("identical titles in separate frames: the most recent is captured, the others named by id", () => {
+		const pool = [w({ id: 15251 }), w({ id: 14093, x: 100 }), w({ id: 16303, x: 200 })];
+		const choice = resolveWindow(query("ghostty my-app"), pool);
+		expect(choice.window.id).toBe(15251);
+		expect(choice.alsoMatched.map((m) => m.id)).toEqual([14093, 16303]);
 	});
 
-	test("distinct titles: refining window_title is offered, because it would work", () => {
-		const distinct = [w({ id: 1, title: "alpha" }), w({ id: 2, title: "beta" })];
-		try {
-			resolveWindow({ app: "ghostty" }, distinct);
-			throw new Error("should have refused");
-		} catch (e: any) {
-			expect(e.message).toMatch(/window_title/);
-			expect(e.message).toContain("window_id");
-		}
+	test("an on-screen window beats a more recent one that is not on screen", () => {
+		const pool = [w({ id: 1 }), w({ id: 2, x: 900, onScreen: true })];
+		expect(resolveWindow(query("ghostty"), pool).window.id).toBe(2);
 	});
 
-	test("a single on-screen match is auto-picked, and the choice is DISCLOSED", () => {
-		const pool = [...identical, w({ id: 99, onScreen: true })];
-		const choice = resolveWindow({ app: "ghostty" }, pool);
-		expect(choice.window.id).toBe(99);
-		expect(choice.autoPicked).toBeDefined();
-		expect(choice.autoPicked!.total).toBe(6);
-	});
-
-	test("an unambiguous match reports no auto-pick at all", () => {
-		const choice = resolveWindow({ app: "ghostty" }, [w({ id: 7, onScreen: true })]);
+	test("an unambiguous match names nothing else", () => {
+		const choice = resolveWindow(query("ghostty"), [w({ id: 7, onScreen: true })]);
 		expect(choice.window.id).toBe(7);
-		expect(choice.autoPicked).toBeUndefined();
+		expect(choice.alsoMatched).toEqual([]);
 	});
 
-	test("the candidate list carries the ids needed to act on the advice", () => {
-		try {
-			resolveWindow({ app: "ghostty", window_title: "my-app" }, identical);
-		} catch (e: any) {
-			for (const id of [15251, 14093, 16303, 14408, 13707]) {
-				expect(e.message).toContain(String(id));
-			}
-		}
+	test("the app's own name outranks a title that merely mentions it", () => {
+		const pool = [
+			w({ id: 1, app: "Dia", pid: 3, title: "Discord | Dia", onScreen: true }),
+			w({ id: 2, app: "Discord", pid: 4, title: "#general" }),
+		];
+		expect(resolveWindow(query("discord"), pool).window.id).toBe(2);
+	});
+
+	test("no match lists the windows that do exist", () => {
+		expect(() => resolveWindow(query("zzz"), [w({ id: 15251 })])).toThrow(/no window matches "zzz"[\s\S]*15251/);
 	});
 });
 
@@ -371,6 +336,7 @@ describe("tab-heavy apps are counted honestly", () => {
 	const tab = (id: number, x: number, title: string): WindowInfo => ({
 		id,
 		app: "Ghostty",
+		pid: 7,
 		title,
 		layer: 0,
 		onScreen: false,
@@ -389,15 +355,14 @@ describe("tab-heavy apps are counted honestly", () => {
 		expect(groupLikelyTabs(pool)).toHaveLength(2);
 	});
 
-	test("the ambiguity message explains the inflated count", () => {
-		try {
-			resolveWindow({ app: "ghostty" }, pool);
-			throw new Error("should have refused");
-		} catch (e: any) {
-			expect(e.message).toContain("15 windows match");
-			expect(e.message).toContain("2 distinct window frame");
-			expect(e.message).toMatch(/tab/i);
-		}
+	test("15 tabs in 2 frames name one alternative, not 14", () => {
+		expect(resolveWindow(query("ghostty"), pool).alsoMatched).toHaveLength(1);
+	});
+
+	test("the list folds each frame into one entry that still exposes every id", () => {
+		const text = renderOpenWindows(pool);
+		expect(text).toContain("15 open windows in 2 frames");
+		for (const id of [1, 7, 8, 15]) expect(text).toContain(String(id));
 	});
 
 	test("genuinely separate windows are NOT collapsed", () => {
@@ -407,6 +372,7 @@ describe("tab-heavy apps are counted honestly", () => {
 			{ ...tab(3, 0, "c"), x: 100, y: 900 },
 		];
 		expect(groupLikelyTabs(separate)).toHaveLength(3);
+		expect(renderOpenWindows(separate)).not.toContain("frames");
 	});
 
 	test("windows of different apps never group together", () => {
@@ -423,10 +389,11 @@ describe("tab-heavy apps are counted honestly", () => {
 	});
 });
 
-describe("feedback: one-shot capture, folded lists, tab rescue", () => {
+describe("a background tab that fails to capture gets a next step", () => {
 	const tab = (id: number, over: Partial<WindowInfo> = {}): WindowInfo => ({
 		id,
 		app: "Ghostty",
+		pid: 7,
 		title: `tab ${id}`,
 		layer: 0,
 		onScreen: false,
@@ -437,140 +404,163 @@ describe("feedback: one-shot capture, folded lists, tab rescue", () => {
 		...over,
 	});
 
-	describe("(a) one call, not two", () => {
-		test("exactly one on-screen candidate is captured, not refused", () => {
-			const pool = [tab(1), tab(2), tab(3), tab(9, { onScreen: true })];
-			const choice = resolveWindow({ app: "ghostty" }, pool);
-			expect(choice.window.id).toBe(9);
-		});
-
-		test("and the choice is said out loud", () => {
-			const pool = [tab(1), tab(2), tab(9, { onScreen: true })];
-			expect(resolveWindow({ app: "ghostty" }, pool).autoPicked).toEqual({
-				total: 3,
-				query: 'app "ghostty"',
-			});
-		});
-
-		test("it only refuses when the on-screen set is genuinely ambiguous", () => {
-			// two separate frames, both visible: nothing justifies choosing for you
-			const pool = [tab(1, { onScreen: true }), tab(2, { onScreen: true, x: 900 })];
-			expect(() => resolveWindow({ app: "ghostty" }, pool)).toThrow();
-		});
+	test("the on-screen sibling of a background tab is found", () => {
+		const target = tab(13707);
+		const pool = [target, tab(16543, { onScreen: true })];
+		expect(displayedSibling(target, pool)?.id).toBe(16543);
 	});
 
-	describe("(b) the list folds by frame", () => {
-		const many = [
-			...[1, 2, 3, 4, 5, 6, 7].map((i) => tab(i, { x: 0, width: 1920 })),
-			...[8, 9, 10, 11, 12, 13, 14, 15].map((i) => tab(i)),
-		];
-
-		test("17 rows become one entry per frame", () => {
-			let msg = "";
-			try {
-				resolveWindow({ app: "ghostty" }, many);
-			} catch (e: any) {
-				msg = e.message;
-			}
-			// one "capture id" line per frame, not per tab
-			expect((msg.match(/capture id/g) ?? []).length).toBe(2);
-			expect(msg).toContain("15 across 2 window frame(s)");
-		});
-
-		test("the folded entry still exposes every id", () => {
-			let msg = "";
-			try {
-				resolveWindow({ app: "ghostty" }, many);
-			} catch (e: any) {
-				msg = e.message;
-			}
-			for (const id of [1, 8, 15]) expect(msg).toContain(String(id));
-		});
-
-		test("apps without tabs still render as a plain flat list", () => {
-			const plain = [
-				tab(1, { app: "Safari", x: 0, y: 0 }),
-				tab(2, { app: "Safari", x: 800, y: 200 }),
-			];
-			let msg = "";
-			try {
-				resolveWindow({ app: "safari" }, plain);
-			} catch (e: any) {
-				msg = e.message;
-			}
-			expect(msg).not.toContain("window frame(s)");
-			expect(msg).toContain("id 1");
-		});
+	test("a window that is already on screen needs no rescue", () => {
+		const target = tab(1, { onScreen: true });
+		expect(displayedSibling(target, [target, tab(2, { onScreen: true })])).toBeUndefined();
 	});
 
-	describe("(c) a dead end becomes a next step", () => {
-		test("the on-screen sibling of a background tab is found", () => {
-			const target = tab(13707);
-			const pool = [target, tab(16543, { onScreen: true })];
-			expect(displayedSibling(target, pool)?.id).toBe(16543);
-		});
+	test("a different frame is not offered as a substitute", () => {
+		// same app, different geometry: not the same window, so not a rescue
+		const target = tab(1);
+		expect(displayedSibling(target, [target, tab(2, { onScreen: true, x: 900 })])).toBeUndefined();
+	});
 
-		test("a window that is already on screen needs no rescue", () => {
-			const target = tab(1, { onScreen: true });
-			expect(displayedSibling(target, [target, tab(2, { onScreen: true })])).toBeUndefined();
-		});
-
-		test("a different frame is not offered as a substitute", () => {
-			// same app, different geometry: not the same window, so not a rescue
-			const target = tab(1);
-			expect(displayedSibling(target, [target, tab(2, { onScreen: true, x: 900 })])).toBeUndefined();
-		});
-
-		test("the advice names the id to use and does not pretend it is the same content", () => {
-			const msg = tabRescueAdvice(tab(13707), tab(16543, { onScreen: true, title: "live" }));
-			expect(msg).toContain("16543");
-			expect(msg).toContain("13707");
-			expect(msg).toMatch(/switch to that tab/i);
-			// Must not assert impossibility — background tabs often DO capture.
-			expect(msg).not.toMatch(/can never be captured|impossible/i);
-		});
+	test("the advice names the id to use and does not pretend it is the same content", () => {
+		const msg = tabRescueAdvice(tab(13707), tab(16543, { onScreen: true, title: "live" }));
+		expect(msg).toContain("16543");
+		expect(msg).toContain("13707");
+		expect(msg).toMatch(/switch to that tab/i);
+		expect(msg).toMatch(/will succeed/i);
+		expect(msg).toMatch(/ACTIVE tab/);
+		// Measured: a background tab captured fine at 3840×2080. Absolute claims
+		// about macOS behaviour have been wrong every time they were made here.
+		expect(msg).not.toMatch(/never|impossible|cannot be captured/i);
 	});
 });
 
-describe("the tool never claims a capture is impossible", () => {
-	/*
-	 * Measured: window_id 13861 — a BACKGROUND tab — captured fine at 3840×2080
-	 * (exactly bounds×2, without the group's tab bar). An earlier draft of the
-	 * rescue message said "a background tab can never be captured on its own",
-	 * and one live test disproved it. Absolute claims about macOS behaviour have
-	 * been wrong every time they were made in this file.
-	 */
-	const w = (over: Partial<WindowInfo> = {}): WindowInfo => ({
+describe("one target string covers every kind of target", () => {
+	test("nothing, or a screen word, is the main display; a number after it picks another", () => {
+		for (const raw of [undefined, "", "  ", "screen", "Display", "desktop"]) {
+			expect(parseTarget(raw)).toEqual({ kind: "screen" });
+		}
+		for (const raw of ["screen 2", "display:2", "Screen #2"]) {
+			expect(parseTarget(raw)).toEqual({ kind: "screen", display: 2 });
+		}
+	});
+
+	test("a URL with a scheme is used as written; a bare localhost gets http://", () => {
+		expect(parseTarget("https://example.com/a")).toEqual({ kind: "url", url: "https://example.com/a" });
+		expect(parseTarget("file:///tmp/a.html")).toEqual({ kind: "url", url: "file:///tmp/a.html" });
+		expect(parseTarget("localhost:3000/docs")).toEqual({ kind: "url", url: "http://localhost:3000/docs" });
+		expect(parseTarget("127.0.0.1")).toEqual({ kind: "url", url: "http://127.0.0.1" });
+	});
+
+	test("digits are a window id, with or without an id prefix", () => {
+		for (const raw of ["1446", "id:1446", "id 1446", "ID#1446"]) {
+			expect(parseTarget(raw)).toEqual({ kind: "windowId", id: 1446 });
+		}
+	});
+
+	test("anything else is matched against app names and window titles", () => {
+		expect(parseTarget("Dia Instagram")).toEqual({ kind: "windowQuery", query: "Dia Instagram" });
+		expect(parseTarget("1Password")).toEqual({ kind: "windowQuery", query: "1Password" });
+		expect(parseTarget("localhostess")).toEqual({ kind: "windowQuery", query: "localhostess" });
+	});
+});
+
+describe("the retired parameters still work", () => {
+	test("arguments already in the new shape pass through untouched", () => {
+		const args = { target: "Dia", region: [0, 0, 10, 10], wait_ms: 5 };
+		expect(prepareScreenshotArguments(args)).toBe(args);
+	});
+
+	test("app and window_title become one target", () => {
+		expect(prepareScreenshotArguments({ app: "Ghostty", window_title: "my-app" })).toEqual({ target: "Ghostty my-app" });
+	});
+
+	test("the old precedence holds: url, then window_id, then app, then display", () => {
+		expect(prepareScreenshotArguments({ url: "https://a.b", window_id: 7, app: "Dia" })).toEqual({ target: "https://a.b" });
+		expect(prepareScreenshotArguments({ window_id: 7, app: "Dia", display: 2 })).toEqual({ target: "7" });
+		expect(prepareScreenshotArguments({ app: "Dia", display: 2 })).toEqual({ target: "Dia" });
+		expect(prepareScreenshotArguments({ display: 2 })).toEqual({ target: "screen 2" });
+	});
+
+	test("delay_ms becomes wait_ms unless wait_ms was also sent", () => {
+		expect(prepareScreenshotArguments({ delay_ms: 500 })).toEqual({ wait_ms: 500 });
+		expect(prepareScreenshotArguments({ delay_ms: 500, wait_ms: 100 })).toEqual({ wait_ms: 100 });
+	});
+
+	test("options that no longer exist are dropped, not passed to the schema", () => {
+		expect(prepareScreenshotArguments({ target: "Dia", tier: "high", cursor: true, shadow: true, full_page: false }))
+			.toEqual({ target: "Dia" });
+	});
+
+	test("a numeric target, which a model may send for an id, becomes a string", () => {
+		expect(prepareScreenshotArguments({ target: 1446 })).toEqual({ target: "1446" });
+	});
+});
+
+describe("which windows count, and which one a target picks", () => {
+	const w = (over: Partial<WindowInfo>): WindowInfo => ({
 		id: 1,
-		app: "Ghostty",
-		title: "t",
+		app: "Discord",
+		pid: 20,
+		title: "#general",
 		layer: 0,
 		onScreen: false,
 		x: 0,
-		y: 40,
-		width: 1920,
-		height: 1040,
+		y: 0,
+		width: 1458,
+		height: 859,
 		...over,
 	});
 
-	test("the rescue advice describes what will work, not what cannot", () => {
-		const msg = tabRescueAdvice(w({ id: 13707 }), w({ id: 16543, onScreen: true }));
-		expect(msg).not.toMatch(/never|impossible|cannot be captured/i);
-		expect(msg).toMatch(/will succeed/i);
+	test("under Stage Manager a thumbnail-sized window is marked, and a full-size one is not", () => {
+		const [thumb, full] = appWindows([w({ id: 1, width: 139, height: 138 }), w({ id: 2 })], true);
+		expect(thumb!.inStageStrip).toBe(true);
+		expect(full!.inStageStrip).toBe(false);
 	});
 
-	test("it warns that the content differs, which is the real trap", () => {
-		const msg = tabRescueAdvice(w({ id: 13707 }), w({ id: 16543, onScreen: true }));
-		expect(msg).toMatch(/not id 13707|ACTIVE tab/i);
+	test("without Stage Manager nothing is a thumbnail", () => {
+		expect(appWindows([w({ width: 139, height: 138 })], false)[0]!.inStageStrip).toBe(false);
 	});
 
-	test("the folded list does not promise a failure either", () => {
-		let msg = "";
-		try {
-			resolveWindow({ app: "ghostty" }, [w({ id: 1 }), w({ id: 2 }), w({ id: 3, x: 900 })]);
-		} catch (e: any) {
-			msg = e.message;
-		}
-		expect(msg).not.toMatch(/cannot be captured/i);
+	test("tab bars, overlays and tiny untitled windows are dropped; a titled small thumbnail is kept", () => {
+		const raw = [
+			w({ id: 1, width: 1728, height: 33, title: "" }),
+			w({ id: 2, layer: 25 }),
+			w({ id: 3, width: 60, height: 60, title: "" }),
+			w({ id: 4, width: 60, height: 60 }),
+		];
+		expect(appWindows(raw, true).map((x) => x.id)).toEqual([4]);
+		expect(appWindows(raw, false).map((x) => x.id)).toEqual([]);
+	});
+
+	test("an untitled off-screen window is a ghost when its app has a titled one", () => {
+		const ghost = w({ id: 2, title: "", width: 500, height: 500 });
+		expect(withoutGhosts([w({ id: 1 }), ghost]).map((x) => x.id)).toEqual([1]);
+	});
+
+	test("without Screen Recording every title is blank, so nothing is dropped as a ghost", () => {
+		const blank = [w({ id: 1, title: "" }), w({ id: 2, title: "" })];
+		expect(withoutGhosts(blank)).toHaveLength(2);
+	});
+
+	test("a window capturable in place beats a thumbnail of the same app", () => {
+		const pool = [w({ id: 1, inStageStrip: true, onScreen: true }), w({ id: 2, x: 300, onScreen: true })];
+		expect(resolveWindow({ kind: "windowQuery", query: "discord" }, pool).window.id).toBe(2);
+	});
+
+	test("an invisible mark in the app name does not stop a match", () => {
+		const pool = [w({ app: "\u200eWhatsApp", title: "\u200eWhatsApp" })];
+		expect(resolveWindow({ kind: "windowQuery", query: "whatsapp" }, pool).window.id).toBe(1);
+	});
+
+	test("an app name beats an app that merely starts with it", () => {
+		const pool = [w({ id: 1, app: "Notes Pro", pid: 3, title: "x" }), w({ id: 2, app: "Notes", pid: 4, title: "y" })];
+		expect(resolveWindow({ kind: "windowQuery", query: "notes" }, pool).window.id).toBe(2);
+	});
+});
+
+describe("a region is checked before anything is captured", () => {
+	test("zero or negative size is refused for window and screen targets alike", () => {
+		expect(() => normalizeRegion([0, 0, 0, 10])).toThrow(/positive width and height/);
+		expect(() => normalizeRegion([0, 0, 10, -1])).toThrow(/positive width and height/);
 	});
 });
