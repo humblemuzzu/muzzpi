@@ -55,8 +55,8 @@ for `/model` to see it.
 
 **Claude-plan billing.** An OAuth request whose system prompt holds the phrases
 in `tools/lib/anthropic-sub.ts` bills as extra usage (here a 400). Never write
-them into a prompt or drop `anthropic-sub`; after any pi update run
-`bun pi-setup/port-harness/anthropic-oauth-canary.ts`. pi's extra-usage banner
+them into a prompt or drop `anthropic-sub`; `update-pi.sh` runs
+`bun pi-setup/port-harness/anthropic-oauth-canary.ts`, run it by hand otherwise. pi's extra-usage banner
 (`warnings.anthropicExtraUsage: false`) is not a billing signal.
 
 ### System prompt assembly

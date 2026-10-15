@@ -1,8 +1,3 @@
-/**
- * Anthropic bills a Claude-plan (OAuth) request as extra usage when its system
- * prompt carries pi's docs wording: these three phrases, lowercase, together.
- */
-
 export const ANTHROPIC_TRIGGER_PHRASES: ReadonlyArray<readonly [phrase: string, replacement: string]> = [
 	["pi itself", "the cli itself"],
 	["pi .md files", "cli .md files"],
@@ -75,10 +70,6 @@ export function isAnthropicRejection(errorMessage: string | undefined): boolean 
 	return REJECTION_MARKERS.some((marker) => text.includes(marker));
 }
 
-/**
- * `hadSuccess`: an earlier turn worked (likely the plan limit), nothing has
- * worked yet (likely the third-party check), or unknown (a sub-agent).
- */
 export function describeAnthropicRejection(
 	errorMessage: string | undefined,
 	hadSuccess: boolean | undefined,

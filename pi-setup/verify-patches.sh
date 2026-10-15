@@ -73,14 +73,14 @@ else
          "node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs"
 fi
 
-# ── anthropic-sub: Claude-plan requests must not trip Anthropic's third-party check ──
+# ── anthropic-sub extension ──
 # Children load it from CHILD_EXTENSIONS only when the file exists, so a missing
 # bundle would silently drop the safety net.
 if [ -f "$PI_AGENT/extensions/anthropic-sub.js" ] && \
    grep -q '"~/.pi/agent/extensions/anthropic-sub.js"' "$PI_AGENT/settings.json" 2>/dev/null; then
-    pass "anthropic-sub: installed and enabled (Claude-plan requests stay off extra usage)"
+    pass "anthropic-sub: installed and enabled"
 else
-    fail "anthropic-sub: missing from the live extensions dir or settings.json (Claude may refuse or bill as extra usage)" \
+    fail "anthropic-sub: missing from the live extensions dir or settings.json" \
          "bash pi-setup/install.sh"
 fi
 

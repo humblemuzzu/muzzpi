@@ -37,8 +37,6 @@ function piPackageDir(): string | undefined {
 	return undefined;
 }
 
-// "pi itself", "pi packages" and "pi .md files" make Anthropic bill a Claude-plan
-// request as extra usage (tools/lib/anthropic-sub.ts); keep the cli wording.
 export function piDocs(dir: string): string {
 	return `Pi documentation (read only when the user asks about the cli itself, its SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${join(dir, "README.md")}

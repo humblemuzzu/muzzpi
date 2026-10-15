@@ -1,8 +1,3 @@
-/**
- * anthropic-sub — keeps Claude-plan (OAuth) requests off extra usage and
- * explains a refusal. Touches system text only, never tools or history.
- */
-
 import { appendFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describeAnthropicRejection, scrubAnthropicPayload } from "./tools/lib/anthropic-sub";

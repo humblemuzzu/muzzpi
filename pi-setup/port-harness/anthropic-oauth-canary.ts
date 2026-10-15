@@ -1,12 +1,9 @@
 #!/usr/bin/env bun
 /**
- * anthropic-oauth-canary — is pi still billed to the Claude plan?
- *
  *   bun pi-setup/port-harness/anthropic-oauth-canary.ts
  *
- * Run after any pi update, or when Claude starts refusing requests. Sends four
- * tiny Haiku requests on your Claude-plan login (a sliver of plan usage) and
- * never prints the token. Exit 0 = fine, 1 = act, 2 = no login.
+ * Four tiny Haiku requests; never prints the token. Exit 0 = fine, 1 = act,
+ * 2 = no Claude login.
  */
 
 import { spawnSync } from "node:child_process";

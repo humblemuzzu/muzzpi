@@ -44,6 +44,7 @@ fi
 BACKUP="$HOME/pi-update-backup-$CURRENT-$(date +%Y%m%d-%H%M%S)"
 cp -R "$PI_DIR" "$BACKUP"
 echo "backup: $BACKUP"
+ROLLBACK="rollback: trash '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../lib/node_modules/$PKG/dist/cli.js $PREFIX/bin/pi"
 
 npm install --prefix "$PREFIX" -g --ignore-scripts "$PKG@$VERSION"
 ln -sfn "../lib/node_modules/$PKG/dist/cli.js" "$PREFIX/bin/pi"
@@ -57,9 +58,20 @@ bash "$SCRIPT_DIR/verify-patches.sh"
 reply="$(pi --mode json -p --thinking low "Reply with exactly UPDATE_OK and nothing else." 2>/dev/null)"
 if ! grep -q '"text":"UPDATE_OK"' <<<"$reply"; then
     echo "FAIL  headless smoke test did not reply UPDATE_OK"
-    echo "rollback: trash '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../lib/node_modules/$PKG/dist/cli.js $PREFIX/bin/pi"
+    echo "$ROLLBACK"
+    exit 1
+fi
+
+# exit 2 = no Claude-plan login, which is fine for anyone not using Claude.
+canary=0
+bun "$SCRIPT_DIR/port-harness/anthropic-oauth-canary.ts" || canary=$?
+if [ "$canary" -eq 2 ]; then
+    echo "skip  Claude-plan canary: no /login anthropic"
+elif [ "$canary" -ne 0 ]; then
+    echo "FAIL  Claude-plan requests are no longer billed to the plan (canary output above)"
+    echo "$ROLLBACK"
     exit 1
 fi
 
 echo "pi $(pi --version) installed and patched. Now call one sub-agent (finder/chad) from a live session."
-echo "rollback: trash '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../lib/node_modules/$PKG/dist/cli.js $PREFIX/bin/pi"
+echo "$ROLLBACK"
