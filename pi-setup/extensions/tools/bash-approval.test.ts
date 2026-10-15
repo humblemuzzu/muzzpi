@@ -96,6 +96,74 @@ describe("bash asks before a command that needs approval", () => {
 	});
 });
 
+function picker(keys: string[]) {
+	const theme = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s };
+	return {
+		cwd: dir,
+		sessionManager: { getSessionId: () => "approval-test" },
+		hasUI: true,
+		mode: "tui",
+		ui: {
+			custom: (factory: any) =>
+				new Promise((resolve) => {
+					const dialog = factory({ requestRender() {} }, theme, {}, resolve);
+					dialog.focused = true;
+					prompts.push({ title: "picker", message: dialog.render(200).join("\n") });
+					for (const key of keys) dialog.handleInput(key);
+				}),
+		},
+	};
+}
+
+describe("the approval picker", () => {
+	test("it shows the reasons and the command, and Allow runs it", async () => {
+		const result = await run(`touch ${marker}`, picker(["\x1b[A", "\r"]));
+		expect(result.isError).toBeFalsy();
+		expect(fs.existsSync(marker)).toBe(true);
+		expect(prompts[0]!.message).toContain("- destroys the test marker");
+		expect(prompts[0]!.message).toContain(`touch ${marker}`);
+	});
+
+	test("the cursor starts on Deny, so a stray Enter cannot approve", async () => {
+		const result = await run(`touch ${marker}`, picker(["\r"]));
+		expect(result.isError).toBe(true);
+		expect(fs.existsSync(marker)).toBe(false);
+	});
+
+	test("a reason that starts with a digit is text, never a shortcut to Allow", async () => {
+		const result = await run(`touch ${marker}`, picker([..."1st move it to trash", "\r"]));
+		expect(fs.existsSync(marker)).toBe(false);
+		expect(text(result)).toContain("said what to do instead:\n1st move it to trash\n");
+	});
+
+	test("Deny and Esc stop the turn", async () => {
+		for (const keys of [["\r"], ["\x1b"]]) {
+			const result = await run(`touch ${marker}`, picker(keys));
+			expect(text(result)).toContain("Stop and wait for the user's next message");
+			expect(result.terminate).toBe(true);
+			expect(lastLog().decision).toBe("denied");
+		}
+	});
+
+	test("typing instead denies, hands the words to the agent, lets it continue, and logs them", async () => {
+		const result = await run(`touch ${marker}`, picker([..."move it to trash instead", "\r"]));
+		expect(fs.existsSync(marker)).toBe(false);
+		expect(result.isError).toBe(true);
+		expect(result.terminate).toBe(false);
+		expect(text(result)).toBe(
+			"not run: the user denied this command and said what to do instead:\nmove it to trash instead\nDo that. Do not retry the denied command.",
+		);
+		expect(lastLog()).toMatchObject({ decision: "denied", feedback: "move it to trash instead" });
+	});
+
+	test("a secret typed into the reason is scrubbed in the log", async () => {
+		const fakePassword = "tr0ub4dor-fake-pw";
+		await run(`touch ${marker}`, picker([...`use postgres://app:${fakePassword}@db/app`, "\r"]));
+		expect(fs.readFileSync(logFile, "utf8")).not.toContain(fakePassword);
+		expect(lastLog().feedback).toContain("postgres://app:");
+	});
+});
+
 describe("approval log", () => {
 	test("a secret in the command is scrubbed before it is written, and only the owner can read the log", async () => {
 		const password = "Xk29fLp0qZ7m";

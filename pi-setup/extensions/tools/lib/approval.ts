@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { canShowChoiceDialog, openChoiceDialog } from "./choice-dialog";
 import { makeScrubber } from "./psst";
 
 export interface ApprovalRequest {
@@ -22,11 +23,16 @@ export interface ApprovalRequest {
 	where?: string;
 }
 
-export type ApprovalAnswer = { approved: true } | { approved: false; message: string };
+/** `stop` ends the turn: a plain deny means "wait for me", a deny with instructions lets the agent carry on. */
+export type ApprovalAnswer = { approved: true } | { approved: false; message: string; stop: boolean };
 
 interface UiContext {
 	hasUI?: boolean;
-	ui?: { confirm(title: string, message: string, opts?: { signal?: AbortSignal }): Promise<boolean> };
+	mode?: string;
+	ui?: {
+		confirm(title: string, message: string, opts?: { signal?: AbortSignal }): Promise<boolean>;
+		custom?<T>(factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any): Promise<T>;
+	};
 	cwd?: string;
 	sessionManager?: { getSessionId(): string };
 }
@@ -36,7 +42,12 @@ function approvalLogPath(): string {
 }
 
 /** The command is scrubbed like any tool output: a `psql postgres://user:pass@…` must not land on disk in clear. */
-async function record(ctx: UiContext, request: ApprovalRequest, decision: "approved" | "denied" | "no-ui"): Promise<void> {
+async function record(
+	ctx: UiContext,
+	request: ApprovalRequest,
+	decision: "approved" | "denied" | "no-ui",
+	feedback?: string,
+): Promise<void> {
 	try {
 		const scrub = await makeScrubber();
 		const entry = {
@@ -48,6 +59,7 @@ async function record(ctx: UiContext, request: ApprovalRequest, decision: "appro
 			reasons: request.reasons,
 			command: scrub(request.command),
 			decision,
+			...(feedback ? { feedback: scrub(feedback) } : {}),
 		};
 		fs.mkdirSync(path.dirname(approvalLogPath()), { recursive: true });
 		fs.appendFileSync(approvalLogPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 });
@@ -61,6 +73,55 @@ function where(request: ApprovalRequest): string {
 	return request.hosts.length > 0 ? `on ${request.hosts.join(", ")}` : "on this machine";
 }
 
+const TITLE = "Allow this command? It destroys data.";
+const ALLOW = "Allow";
+const DENY = "Deny";
+
+const DENIED: ApprovalAnswer = {
+	approved: false,
+	stop: true,
+	message:
+		"not run: the user denied this command. Do not retry it or find another way to do the same thing. " +
+		"Stop and wait for the user's next message.",
+};
+
+function redirected(feedback: string): ApprovalAnswer {
+	return {
+		approved: false,
+		stop: false,
+		message: `not run: the user denied this command and said what to do instead:\n${feedback}\nDo that. Do not retry the denied command.`,
+	};
+}
+
+type Decision = { approved: boolean; feedback?: string };
+
+async function ask(ctx: UiContext, request: ApprovalRequest, body: string, signal?: AbortSignal): Promise<Decision> {
+	if (canShowChoiceDialog(ctx)) {
+		const answers = await openChoiceDialog(
+			ctx,
+			{
+				title: TITLE,
+				body,
+				questions: [
+					{
+						question: "",
+						options: [{ label: ALLOW }, { label: DENY }],
+						typeLabel: "Deny, and tell the agent what to do instead",
+					},
+				],
+				initialRow: 1,
+				digitsPick: false,
+				notify: `Approval needed: ${request.reasons[0] ?? request.command}`,
+			},
+			signal,
+		);
+		const answer = answers?.[0];
+		if (answer?.typed) return { approved: false, feedback: answer.typed };
+		return { approved: answer?.picked[0] === ALLOW };
+	}
+	return { approved: await ctx.ui!.confirm(TITLE, body, { signal }) };
+}
+
 export async function requestApproval(
 	ctx: UiContext | undefined,
 	request: ApprovalRequest,
@@ -71,25 +132,19 @@ export async function requestApproval(
 		await record(context, request, "no-ui");
 		return {
 			approved: false,
+			stop: false,
 			message:
 				`not run: this needs the user's approval (${request.reasons.join("; ")}), and this session cannot ask them ` +
 				"(a sub-agent or a non-interactive run). Do not try another way to do it. Finish the rest of the task, " +
 				`then report this exact command so the user can approve it:\n${request.command}`,
 		};
 	}
-	const message = [...request.reasons.map((reason) => `- ${reason}`), "", `Runs ${where(request)}:`, request.command].join("\n");
-	let approved = false;
+	const body = [...request.reasons.map((reason) => `- ${reason}`), "", `Runs ${where(request)}:`, request.command].join("\n");
+	let decision: Decision = { approved: false };
 	try {
-		approved = await context.ui.confirm("Allow this command? It destroys data.", message, { signal });
-	} catch {
-		approved = false;
-	}
-	await record(context, request, approved ? "approved" : "denied");
-	if (approved) return { approved: true };
-	return {
-		approved: false,
-		message:
-			"not run: the user denied this command. Do not retry it or find another way to do the same thing; " +
-			"ask the user what they want instead.",
-	};
+		decision = await ask(context, request, body, signal);
+	} catch {}
+	await record(context, request, decision.approved ? "approved" : "denied", decision.feedback);
+	if (decision.approved) return { approved: true };
+	return decision.feedback ? redirected(decision.feedback) : DENIED;
 }

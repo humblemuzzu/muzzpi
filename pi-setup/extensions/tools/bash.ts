@@ -545,7 +545,11 @@ export function createBashTool(): ToolDefinition {
 					signal,
 				);
 				if (!answer.approved) {
-					return { content: [{ type: "text" as const, text: answer.message }], isError: true } as any;
+					return {
+						content: [{ type: "text" as const, text: answer.message }],
+						isError: true,
+						terminate: answer.stop,
+					} as any;
 				}
 			}
 

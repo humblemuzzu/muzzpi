@@ -339,9 +339,17 @@ only; no `replace_all`, delete or move (`trash <path>` / `git mv` in bash).
   splits out server parts (ssh args and heredocs, `rsync --delete` to a remote
   dest); local-only rules carry `where: "local"`; text it cannot place stays
   local; keep its real-bash oracle test green. Undo of a creation: `lib/trash.ts`.
-- **`ask` rules** (destructive SQL, Docker volumes, buckets, disks; MCP DELETE)
-  go through `lib/approval.ts`: a confirm dialog, refused with no UI (sub-agents,
-  `-p`), logged to `~/.pi/agent/approvals.jsonl`. Reject beats ask beats allow.
+- **`ask` rules** (rm and other local deletes, destructive SQL, Docker volumes,
+  buckets, disks; MCP DELETE) go through `lib/approval.ts`: the picker (cursor on
+  Deny; Deny ends the turn with `terminate`, typed instructions deny but let the
+  agent continue), plain confirm in RPC, refused with no UI (sub-agents, `-p`),
+  logged to `~/.pi/agent/approvals.jsonl`. Reject beats ask beats allow.
+- **The `ask` tool and the approval prompt share `lib/choice-dialog.ts`.** `ask`
+  is parent-only: never add it to a sub-agent allowlist (`ask.test.ts` pins it).
+  While a picker is open it emits `herdr:blocked` on `pi.events`, which herdr's
+  own extension turns into the pane's `blocked` state and its "needs you" sound.
+  Its `prepareArguments` must keep parsing stringified arrays: that is what made
+  pi-ask's `ask_user` unusable.
 - apply_patch is gone (envelope 9.6%, batch 6.8% failures vs ~2%). If GPT
   models return, gate it by model id.
 - Undo/redo refuse when a later still-applied change touches the path, or the

@@ -32,16 +32,17 @@ stock pi. Nothing is forked.
 
 | | vanilla pi 1.1 | muzzpi |
 |---|---|---|
-| Tools the model gets | 4 on by default | 29 of its own, plus codemode and one lazy MCP proxy |
+| Tools the model gets | 4 on by default | 30 of its own, plus codemode and one lazy MCP proxy |
 | Sub-agents | none, by design | 6, each with its own model and thinking level, resumable |
 | Editing | `edit` + `write` | the same `edit` + `write`, plus undo/redo that refuses to clobber drift, permission rules, a comment gate, and errors that show the closest line |
 | Bash | timeout optional, no default | timeout required (1–600s), killed after 300s of no output and no CPU |
-| Command rules | none | `permissions.json`: no `git add -A`, no force push, no deleting (`trash` only), no shelling out to other agents |
+| Command rules | none | `permissions.json`: no `git add -A`, no force push, no shelling out to other agents; deletes and data loss ask first |
 | Secrets | in the clear | scrubbed from every tool result before the model sees it |
 | Web | none | `web_search`, `read_web_page` with a Q&A child |
 | GitHub | none | 7 tools over `gh api`: read, search, glob, list, commits, diff |
 | Screen | none | `screenshot` of any window, region or URL, sized to Claude's vision limits |
 | History | session picker | `search_sessions`, `read_session` |
+| Questions | none | `ask`: the agent puts its open questions to you in a picker; you pick or type your own answer |
 | Session list | stock | pinning (`Ctrl+B` in `/resume`) |
 | Comments | whatever the model writes | a gate that refuses a patch that is mostly commentary |
 
@@ -125,10 +126,11 @@ the tools it has. Pick by what you need back:
 - **Working rules ship in the system prompt**, not in a hook: scope, evidence,
   no comments by default, and a hard stop before anything that deletes data,
   rewrites git history or publishes.
-- **Deletes are scoped, data loss asks.** Deleting files on your Mac is blocked
-  (`trash` instead); on a server over ssh it just works. Dropping a table, a
-  Docker volume, a bucket or a disk, or an MCP `DELETE`, stops for an Allow/Deny
-  dialog first. A sub-agent cannot approve one, and every answer is logged.
+- **Deletes are scoped, data loss asks.** On your Mac the agent uses `trash`;
+  `rm`, dropping a table, a Docker volume, a bucket or a disk, or an MCP
+  `DELETE`, stops for a picker first: Allow, Deny (the agent stops and waits), or
+  type what to do instead (the agent carries on with that). On a server over ssh
+  deletes just work. A sub-agent cannot approve one, and every answer is logged.
 - **Secrets stay out of the model's context.** Every tool result is scrubbed of
   vault values, key formats (Stripe, GitHub, AWS, Anthropic
   and more), private keys, bearer tokens, URL passwords, and random-looking
@@ -263,7 +265,7 @@ muzzpi/
 ├── AGENTS.md               the rules and facts every agent reads first
 ├── pi-setup/
 │   ├── extensions/         editor, sub-agent inspector, theme studio, guardrails, …
-│   │   └── tools/          the 29 tools and their tests (bun test)
+│   │   └── tools/          the 30 tools and their tests (bun test)
 │   ├── agents/             system prompt, working rules, one prompt per sub-agent
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do, and what needs your approval

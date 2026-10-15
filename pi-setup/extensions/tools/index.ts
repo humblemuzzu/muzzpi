@@ -34,6 +34,7 @@ import { createReadWebPageTool } from "./read-web-page";
 import { createConfiguredWebSearchTool } from "./web-search";
 import { createSearchSessionsTool } from "./search-sessions";
 import { createReadSessionTool } from "./read-session";
+import { createAskTool } from "./ask";
 import { readAgentPrompt } from "./lib/pi-spawn";
 import { AGENT_MODELS_FILE, auditAgentModels, loadAgentModels } from "./lib/agent-models";
 import {
@@ -57,6 +58,7 @@ import {
 } from "./lib/psst";
 import { Vault } from "psst-cli";
 import { requestApproval } from "./lib/approval";
+import { setBlockedReporter } from "./lib/choice-dialog";
 import { describeMcpCall, destructiveMcpReason, mcpCallOf } from "./lib/destructive-mcp";
 
 export default function (pi: ExtensionAPI) {
@@ -123,6 +125,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool(createSearchSessionsTool());
 	pi.registerTool(createReadSessionTool({ models }));
+	pi.registerTool(createAskTool());
+	// herdr's own pi extension listens for this; without herdr nobody does.
+	setBlockedReporter((active, label) => pi.events.emit("herdr:blocked", { active, label }));
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
@@ -153,7 +158,7 @@ export default function (pi: ExtensionAPI) {
 			{ tool: "mcp", command: describeMcpCall(call), reasons: [reason], hosts: [], where: `through MCP (${call.tool})` },
 			ctx.signal,
 		);
-		return answer.approved ? undefined : { block: true, reason: answer.message };
+		return answer.approved ? undefined : { block: true, reason: answer.message, terminate: answer.stop };
 	});
 
 	// ── psst secret management hooks ──────────────────────────
