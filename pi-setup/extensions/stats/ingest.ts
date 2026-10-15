@@ -1,173 +1,144 @@
-import { createReadStream, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { emptyRecord, type FileRecord, ingestLine } from "./parse";
+import { type Ledger, readLedger, writeLedger } from "./ledger";
+import type { PriceBook } from "./pricing";
+import { HARNESSES, type Harness, type SessionRecord } from "./record";
+import { claudeArchive, claudeHome, claudeSpec } from "./sources/claude";
+import { codexHome, codexSpec } from "./sources/codex";
+import { type FileSpec, ingestFiles, type Progress } from "./sources/files";
+import { ingestOpencode, type OpencodeExtra, opencodeHome } from "./sources/opencode";
+import { piSpec } from "./sources/pi";
 
-const CACHE_VERSION = 4;
-const cacheFile = (dir: string) => path.join(dir, `index-v${CACHE_VERSION}.json`);
-let saves = 0;
+export type SourceState = "waiting" | "reading" | "done" | "absent" | "failed";
 
-interface CacheFile {
-	version: number;
-	/** Day keys are local dates, so a timezone change invalidates every bucket. */
-	timeZone: string;
-	records: FileRecord[];
+export interface SourceStatus extends Progress {
+	state: SourceState;
+	error?: string;
 }
 
-export interface IngestProgress {
-	files: number;
-	parsed: number;
-	bytes: number;
-	totalBytes: number;
+export type IngestProgress = Record<Harness, SourceStatus>;
+
+export interface Loaded {
+	records: SessionRecord[];
+	status: IngestProgress;
 }
 
-function timeZone(): string {
-	return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "local";
+export interface IngestOptions {
+	piSessions: string;
+	cacheDir: string;
+	prices: PriceBook;
+	onProgress?: (p: IngestProgress) => void;
+	signal?: AbortSignal;
 }
 
-async function walk(root: string): Promise<string[]> {
-	const out: string[] = [];
-	const stack = [root];
-	while (stack.length) {
-		const dir = stack.pop()!;
-		let entries;
-		try {
-			entries = await fs.readdir(dir, { withFileTypes: true });
-		} catch {
-			continue;
+const LEGACY_CACHE = "index-v4.json";
+
+function blank(): SourceStatus {
+	return { state: "waiting", files: 0, parsed: 0, bytes: 0, totalBytes: 0 };
+}
+
+function firstDay(records: SessionRecord[]): string | undefined {
+	let first: string | undefined;
+	for (const r of records) {
+		for (const k of [...Object.keys(r.usage), ...Object.keys(r.agents)]) {
+			const day = k.slice(0, 10);
+			if (!first || day < first) first = day;
 		}
-		for (const e of entries) {
-			const p = path.join(dir, e.name);
-			if (e.isDirectory()) stack.push(p);
-			else if (e.isFile() && e.name.endsWith(".jsonl")) out.push(p);
-		}
 	}
-	return out;
+	return first;
 }
 
-async function loadCache(dir: string): Promise<Map<string, FileRecord> | undefined> {
-	try {
-		const raw = JSON.parse(await fs.readFile(cacheFile(dir), "utf8")) as CacheFile;
-		if (raw.version !== CACHE_VERSION || raw.timeZone !== timeZone()) return undefined;
-		return new Map(raw.records.map((r) => [r.path, r]));
-	} catch {
-		return undefined;
-	}
+interface SourceResult {
+	records: SessionRecord[];
+	changed: boolean;
+	extra?: unknown;
 }
 
-async function saveCache(dir: string, records: FileRecord[]): Promise<void> {
-	await fs.mkdir(dir, { recursive: true });
-	const file = cacheFile(dir);
-	const tmp = `${file}.${process.pid}-${++saves}.tmp`;
-	const body: CacheFile = { version: CACHE_VERSION, timeZone: timeZone(), records };
-	await fs.writeFile(tmp, JSON.stringify(body));
-	await fs.rename(tmp, file);
+type Reader = (ledger: Ledger | undefined, report: (p: Progress) => void) => Promise<SourceResult>;
+
+const files = (spec: FileSpec, opts: IngestOptions): Reader => (ledger, report) => ingestFiles(spec, ledger, opts.prices, report, opts.signal);
+
+/** Where each harness keeps its sessions; a harness with none of these present is shown as not installed. */
+function sourcePaths(piSessions: string): Record<Harness, string[]> {
+	return {
+		pi: [piSessions],
+		claude: [path.join(claudeHome(), "projects"), path.join(claudeHome(), "stats-cache.json")],
+		codex: [path.join(codexHome(), "sessions"), path.join(codexHome(), "archived_sessions")],
+		opencode: [opencodeHome()],
+	};
 }
 
-/** pi only appends, so a cached record resumes where it stopped unless the file shrank or was rewritten. */
-async function canResume(rec: FileRecord, size: number): Promise<boolean> {
-	if (rec.offset === 0) return true;
-	if (size < rec.offset) return false;
-	const fh = await fs.open(rec.path, "r").catch(() => undefined);
-	if (!fh) return false;
-	try {
-		const buf = Buffer.alloc(1);
-		await fh.read(buf, 0, 1, rec.offset - 1);
-		return buf[0] === 0x0a;
-	} finally {
-		await fh.close();
+/** pi sessions imported from another harness whose original turns are still in that harness's ledger. */
+export function dropImports(records: SessionRecord[]): SessionRecord[] {
+	const originals = new Map<Harness, Set<string>>();
+	for (const r of records) {
+		if (r.importOf || r.harness === "pi") continue;
+		const set = originals.get(r.harness) ?? originals.set(r.harness, new Set()).get(r.harness)!;
+		for (const k in r.dedup) set.add(k);
 	}
-}
-
-async function parseFrom(rec: FileRecord, parentExists: (p: string) => boolean, onBytes: (n: number) => void, signal?: AbortSignal): Promise<void> {
-	const stream = createReadStream(rec.path, { start: rec.offset, highWaterMark: 1 << 20 });
-	let pending: Buffer[] = [];
-	let consumed = rec.offset;
-	try {
-		for await (const chunk of stream as AsyncIterable<Buffer>) {
-			if (signal?.aborted) return;
-			let start = 0;
-			let nl = chunk.indexOf(0x0a, start);
-			while (nl !== -1) {
-				const piece = chunk.subarray(start, nl);
-				const line = pending.length ? Buffer.concat([...pending, piece]) : piece;
-				pending = [];
-				consumed += line.length + 1;
-				if (line.length) ingestLine(rec, line.toString("utf8"), parentExists);
-				start = nl + 1;
-				nl = chunk.indexOf(0x0a, start);
-			}
-			if (start < chunk.length) pending.push(chunk.subarray(start));
-			onBytes(chunk.length);
-		}
-	} finally {
-		stream.destroy();
-	}
-	rec.offset = consumed;
+	return records.filter((r) => {
+		const keys = r.importOf ? Object.keys(r.dedup) : [];
+		if (!keys.length) return true;
+		const set = originals.get(r.importOf!);
+		const found = set ? keys.filter((k) => set.has(k)).length : 0;
+		return found * 2 < keys.length;
+	});
 }
 
 /**
- * Every session file under `root`, parsed incrementally against the on-disk
- * cache. A partially written last line is left for the next run.
+ * Every harness at once, each against its own ledger. A source that fails
+ * keeps its last ledger, so one broken harness never blanks the others.
  */
-export async function ingest(root: string, cacheDir: string, onProgress?: (p: IngestProgress) => void, signal?: AbortSignal): Promise<FileRecord[]> {
-	const [paths, cache] = await Promise.all([walk(root), loadCache(cacheDir)]);
-	return update(paths, cache ?? new Map(), cacheDir, onProgress, signal);
-}
+export async function ingestAll(opts: IngestOptions): Promise<Loaded> {
+	const status = Object.fromEntries(HARNESSES.map((h) => [h, blank()])) as IngestProgress;
+	const emit = () => opts.onProgress?.(status);
+	const where = sourcePaths(opts.piSessions);
 
-/** Like `ingest`, but only on top of a usable cache: without one it returns undefined instead of reading everything. */
-export async function ingestWarm(root: string, cacheDir: string): Promise<FileRecord[] | undefined> {
-	const [paths, cache] = await Promise.all([walk(root), loadCache(cacheDir)]);
-	return cache && update(paths, cache, cacheDir);
-}
-
-async function update(paths: string[], cache: Map<string, FileRecord>, cacheDir: string, onProgress?: (p: IngestProgress) => void, signal?: AbortSignal): Promise<FileRecord[]> {
-	const stats = await Promise.all(paths.map((p) => fs.stat(p).catch(() => undefined)));
-
-	const parentCache = new Map<string, boolean>();
-	const parentExists = (p: string): boolean => {
-		let hit = parentCache.get(p);
-		if (hit === undefined) parentCache.set(p, (hit = existsSync(p)));
-		return hit;
+	const run = async (h: Harness, read: Reader): Promise<SessionRecord[]> => {
+		const s = status[h];
+		const installed = where[h].some((p) => existsSync(p));
+		const ledger = await readLedger(opts.cacheDir, h);
+		if (!installed && !ledger?.records.length) {
+			s.state = "absent";
+			emit();
+			return [];
+		}
+		s.state = "reading";
+		emit();
+		try {
+			const out = await read(ledger, (p) => {
+				Object.assign(s, p);
+				emit();
+			});
+			if (out.changed && !opts.signal?.aborted) await writeLedger(opts.cacheDir, h, out.records, out.extra);
+			s.state = "done";
+			emit();
+			return out.records;
+		} catch (err) {
+			s.state = "failed";
+			s.error = err instanceof Error ? err.message.split("\n")[0] : String(err);
+			emit();
+			return ledger?.records ?? [];
+		}
 	};
 
-	const work: Array<{ rec: FileRecord; size: number; mtimeMs: number }> = [];
-	const records: FileRecord[] = [];
-	let totalBytes = 0;
-	for (let i = 0; i < paths.length; i++) {
-		const st = stats[i];
-		if (!st) continue;
-		let rec = cache.get(paths[i]);
-		if (rec && rec.size === st.size && rec.mtimeMs === st.mtimeMs) {
-			records.push(rec);
-			continue;
-		}
-		if (!rec || !(await canResume(rec, st.size))) rec = emptyRecord(paths[i]);
-		work.push({ rec, size: st.size, mtimeMs: st.mtimeMs });
-		totalBytes += st.size - rec.offset;
-	}
+	const [pi, claude, codex, opencode] = await Promise.all([
+		run("pi", files(piSpec(opts.piSessions), opts)),
+		run("claude", files(claudeSpec(), opts)),
+		run("codex", files(codexSpec(), opts)),
+		run("opencode", (ledger, report) => ingestOpencode(ledger as Ledger<OpencodeExtra> | undefined, opts.prices, report, opts.signal)),
+	]);
+	const archive = status.claude.state === "absent" ? undefined : await claudeArchive(opts.prices, firstDay(claude));
+	if (!opts.signal?.aborted) await fs.unlink(path.join(opts.cacheDir, LEGACY_CACHE)).catch(() => {});
+	return { records: dropImports([...pi, ...claude, ...(archive ? [archive] : []), ...codex, ...opencode]), status };
+}
 
-	const progress: IngestProgress = { files: paths.length, parsed: 0, bytes: 0, totalBytes };
-	onProgress?.(progress);
-	for (const item of work) {
-		if (signal?.aborted) break;
-		try {
-			await parseFrom(item.rec, parentExists, (n) => {
-				progress.bytes += n;
-				onProgress?.(progress);
-			}, signal);
-		} catch {
-			// deleted or unreadable since the walk: left out, and out of the cache, so the next run starts it fresh
-			continue;
-		}
-		if (signal?.aborted) break;
-		item.rec.size = item.size;
-		item.rec.mtimeMs = item.mtimeMs;
-		records.push(item.rec);
-		progress.parsed++;
-		onProgress?.(progress);
-	}
-
-	if (work.length && !signal?.aborted) await saveCache(cacheDir, records);
-	return records.filter((r) => r.id);
+/** pi's sessions only, and only on top of an existing ledger: the widget must never trigger a first full read. */
+export async function ingestPiWarm(piSessions: string, cacheDir: string, prices: PriceBook): Promise<SessionRecord[] | undefined> {
+	const ledger = await readLedger(cacheDir, "pi");
+	if (!ledger || ledger.stale) return undefined;
+	const out = await ingestFiles(piSpec(piSessions), ledger, prices, () => {});
+	if (out.changed) await writeLedger(cacheDir, "pi", out.records);
+	return out.records;
 }

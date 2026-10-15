@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Commit, GitData } from "./git";
-import { A, A_LEN, dayKey, type FileRecord, providerOf, T_LEN, U, U_LEN } from "./parse";
+import { A, A_LEN, dayKey, HARNESSES, type Harness, providerOf, type SessionRecord, T_LEN, U, U_LEN } from "./record";
 
 export const RANGES = [
 	{ id: "7d", label: "Last 7 days", days: 7 },
@@ -17,6 +17,7 @@ export const AGENTS_SERIES = "agents";
 export type Span = [number, number];
 
 export interface Filter {
+	harness?: Harness;
 	/** A project root: sessions, agents, spans and commits of that repo only. */
 	project?: string;
 	/** Main-session turns of that provider only; sub-agent rows carry no provider, so agents are left out. */
@@ -39,7 +40,7 @@ export interface DayStat {
 	agentRuns: number;
 	activeMs: number;
 	commits: number;
-	piCommits: number;
+	aiCommits: number;
 	cacheRead: number;
 	cacheDenom: number;
 	busts: number;
@@ -48,9 +49,11 @@ export interface DayStat {
 	/** series → [cost, tokens, turns]; sub-agents under AGENTS_SERIES. */
 	byModel: Map<string, number[]>;
 	byProject: Map<string, number[]>;
+	byHarness: Map<string, number[]>;
 }
 
 export interface SessionStat {
+	harness: Harness;
 	id: string;
 	name?: string;
 	project: string;
@@ -86,9 +89,19 @@ export interface ProjectStat {
 	activeDays: number;
 	lastMs: number;
 	commits: number;
-	piCommits: number;
+	aiCommits: number;
 	added: number;
 	deleted: number;
+	harnesses: Set<Harness>;
+}
+
+export interface HarnessStat {
+	cost: number;
+	agentCost: number;
+	tokens: number;
+	turns: number;
+	sessions: number;
+	estimated: number;
 }
 
 export interface Streaks {
@@ -104,16 +117,18 @@ export interface Lifetime extends Streaks {
 	modelRank: string[];
 	providerRank: string[];
 	projectRank: string[];
+	/** Harnesses with any usage, by lifetime cost. */
+	harnessRank: Harness[];
 }
 
 export interface Dataset {
-	records: FileRecord[];
+	records: SessionRecord[];
 	git: GitData;
 	today: string;
 	generatedAt: number;
-	projectOf: Map<FileRecord, string>;
+	projectOf: Map<SessionRecord, string>;
 	projectName: Map<string, string>;
-	union: Span[];
+	/** Active spans of every session in each repo, for commits made while an agent was at work. */
 	rootSpans: Map<string, Span[]>;
 	sessionIds: Set<string>;
 	/** Session id → the model with the largest main-session cost in it (ties: most turns). */
@@ -133,10 +148,15 @@ export interface Summary {
 	models: Map<string, number[]>;
 	providers: Map<string, number[]>;
 	thinking: Map<string, number[]>;
+	harnesses: Map<Harness, HarnessStat>;
 	agents: Map<string, number[]>;
 	agentModels: Map<string, number[]>;
 	/** `${agent}\t${model}` → agent row. */
 	agentPairs: Map<string, number[]>;
+	/** Agent name → the harnesses that ran it. */
+	agentHarness: Map<string, Set<Harness>>;
+	/** Model → the harnesses that used it. */
+	modelHarness: Map<string, Set<Harness>>;
 	tools: Map<string, number[]>;
 	agentTools: Map<string, number[]>;
 	bash: Map<string, number>;
@@ -164,9 +184,9 @@ export interface Summary {
 	sessionMs: number;
 	commits: Commit[];
 	/** Commits tagged with one of our session ids, or made while a session was active in that repo. */
-	piCommits: number;
+	aiCommits: number;
 	/** Lines added plus removed by those commits. */
-	piLines: number;
+	aiLines: number;
 	taggedCommits: number;
 	/** Tagged commits per lead model of the tagging session; untagged commits are in no model's count. */
 	modelCommits: Map<string, number>;
@@ -195,6 +215,12 @@ function addRow(map: Map<string, number[]>, key: string, row: number[], len: num
 
 function addNum<K>(map: Map<K, number>, key: K, n: number): void {
 	map.set(key, (map.get(key) ?? 0) + n);
+}
+
+function addTo<K, V>(map: Map<K, Set<V>>, key: K, v: V): void {
+	const set = map.get(key);
+	if (set) set.add(v);
+	else map.set(key, new Set([v]));
 }
 
 /** `day\tprovider\tvalue` → [provider, value]; the value may itself hold tabs. */
@@ -310,46 +336,66 @@ function uniqueNames(roots: string[]): Map<string, string> {
 	return out;
 }
 
-export function prepare(records: FileRecord[], git: GitData, now = Date.now()): Dataset {
+/** Where a record's spend is grouped as one session: its harness and the session it belongs to. */
+export const sessionKey = (r: { harness: Harness; id: string }) => `${r.harness}\t${r.id}`;
+
+const active = (u: number[]) => u[U.turns] > 0 || tokensOf(u) > 0;
+
+export function prepare(records: SessionRecord[], git: GitData, now = Date.now()): Dataset {
 	const today = dayKey(now);
-	const projectOf = new Map<FileRecord, string>();
+	const projectOf = new Map<SessionRecord, string>();
 	const rootSpanLists = new Map<string, Span[]>();
-	const all: Span[] = [];
-	const active = new Set<string>();
+	const activeDays = new Set<string>();
 	const modelCost = new Map<string, number>();
 	const providerCost = new Map<string, number>();
 	const projectCost = new Map<string, number>();
+	const harnessCost = new Map<Harness, number>();
+	const used = new Set<Harness>();
 	const sessionModels = new Map<string, Map<string, [number, number]>>();
 	let firstDay = today;
 
 	for (const rec of records) {
 		const root = git.roots.get(rec.cwd) ?? rec.cwd;
 		projectOf.set(rec, root);
-		const spans = rootSpanLists.get(root) ?? [];
-		spans.push(...rec.spans);
-		rootSpanLists.set(root, spans);
-		all.push(...rec.spans);
+		if (rec.role !== "archive") {
+			const spans = rootSpanLists.get(root) ?? [];
+			spans.push(...rec.spans);
+			rootSpanLists.set(root, spans);
+		}
 		let perModel = sessionModels.get(rec.id);
 		if (!perModel) sessionModels.set(rec.id, (perModel = new Map()));
 		for (const [key, v] of Object.entries(rec.usage)) {
 			const day = key.slice(0, 10);
 			const model = key.split("\t")[1];
-			if (v[U.turns] > 0) active.add(day);
+			if (active(v)) {
+				activeDays.add(day);
+				used.add(rec.harness);
+			}
 			if (day < firstDay) firstDay = day;
 			addNum(modelCost, model, v[U.cost]);
 			addNum(providerCost, providerOf(model), v[U.cost]);
-			addNum(projectCost, root, v[U.cost]);
+			addNum(harnessCost, rec.harness, v[U.cost]);
+			if (rec.role !== "archive") addNum(projectCost, root, v[U.cost]);
 			const acc = perModel.get(model) ?? [0, 0];
 			acc[0] += v[U.cost];
 			acc[1] += v[U.turns];
 			perModel.set(model, acc);
 		}
-		for (const v of Object.values(rec.agents)) addNum(projectCost, root, v[A.cost]);
+		for (const [key, v] of Object.entries(rec.agents)) {
+			const day = key.slice(0, 10);
+			if (v[A.turns] > 0 || v[A.runs] > 0) {
+				activeDays.add(day);
+				used.add(rec.harness);
+			}
+			if (day < firstDay) firstDay = day;
+			addNum(projectCost, root, v[A.cost]);
+			addNum(harnessCost, rec.harness, v[A.cost]);
+		}
 	}
 
 	const rootSpans = new Map<string, Span[]>();
 	for (const [root, spans] of rootSpanLists) rootSpans.set(root, mergeSpans(spans));
-	const rank = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+	const rank = <K>(m: Map<K, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([k]) => k);
 	const leadModel = new Map<string, string>();
 	for (const [id, perModel] of sessionModels) {
 		let best: [string, number, number] | undefined;
@@ -365,18 +411,18 @@ export function prepare(records: FileRecord[], git: GitData, now = Date.now()): 
 		today,
 		generatedAt: now,
 		projectOf,
-		projectName: uniqueNames([...rootSpanLists.keys()]),
-		union: mergeSpans(all),
+		projectName: uniqueNames([...new Set(records.filter((r) => r.role !== "archive").map((r) => projectOf.get(r)!))]),
 		rootSpans,
 		sessionIds: new Set(records.map((r) => r.id)),
 		leadModel,
 		lifetime: {
 			firstDay,
-			activeDays: active,
-			...streaks(active, today),
+			activeDays,
+			...streaks(activeDays, today),
 			modelRank: rank(modelCost),
 			providerRank: rank(providerCost),
-			projectRank: rank(projectCost),
+			projectRank: rank(projectCost).filter((p) => p),
+			harnessRank: HARNESSES.filter((h) => used.has(h)).sort((a, b) => (harnessCost.get(b) ?? 0) - (harnessCost.get(a) ?? 0)),
 		},
 	};
 }
@@ -392,13 +438,14 @@ function emptyDay(day: string): DayStat {
 		agentRuns: 0,
 		activeMs: 0,
 		commits: 0,
-		piCommits: 0,
+		aiCommits: 0,
 		cacheRead: 0,
 		cacheDenom: 0,
 		busts: 0,
 		parts: [0, 0, 0, 0],
 		byModel: new Map(),
 		byProject: new Map(),
+		byHarness: new Map(),
 	};
 }
 
@@ -425,6 +472,10 @@ export function summarize(ds: Dataset, rangeId: RangeId, filter: Filter = {}): S
 	return summarizeWindow(ds, rangeWindow(ds, rangeId), filter, RANGES.find((r) => r.id === rangeId)!.label);
 }
 
+function emptyHarness(): HarnessStat {
+	return { cost: 0, agentCost: 0, tokens: 0, turns: 0, sessions: 0, estimated: 0 };
+}
+
 export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Filter = {}, label = `${start} → ${end}`): Summary {
 	const days: string[] = [];
 	for (let d = start; d <= end; d = addDays(d, 1)) days.push(d);
@@ -433,7 +484,6 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 	const toMs = parseDay(addDays(end, 1)).getTime();
 	const byProvider = filter.provider !== undefined;
 	const providerOk = (provider: string) => !byProvider || provider === filter.provider;
-	const union = byProvider ? [] : filter.project !== undefined ? (ds.rootSpans.get(filter.project) ?? []) : ds.union;
 
 	const daily = new Map(days.map((d) => [d, emptyDay(d)]));
 	const weekdayOf = new Map(days.map((d) => [d, weekday(d)]));
@@ -449,9 +499,12 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 		models: new Map(),
 		providers: new Map(),
 		thinking: new Map(),
+		harnesses: new Map(),
 		agents: new Map(),
 		agentModels: new Map(),
 		agentPairs: new Map(),
+		agentHarness: new Map(),
+		modelHarness: new Map(),
 		tools: new Map(),
 		agentTools: new Map(),
 		bash: new Map(),
@@ -472,11 +525,11 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 		goalsSet: 0,
 		goalsDone: 0,
 		goalSeconds: 0,
-		activeMs: clippedMs(union, fromMs, toMs),
+		activeMs: 0,
 		sessionMs: 0,
 		commits: [],
-		piCommits: 0,
-		piLines: 0,
+		aiCommits: 0,
+		aiLines: 0,
 		taggedCommits: 0,
 		modelCommits: new Map(),
 		activeDays: 0,
@@ -486,23 +539,38 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 	const project = (root: string) => {
 		let p = projects.get(root);
 		if (!p) {
-			p = { root, name: ds.projectName.get(root) ?? root, cost: 0, turns: 0, tokens: 0, sessions: 0, activeDays: 0, lastMs: 0, commits: 0, piCommits: 0, added: 0, deleted: 0, dayset: new Set() };
+			p = { root, name: ds.projectName.get(root) ?? root, cost: 0, turns: 0, tokens: 0, sessions: 0, activeDays: 0, lastMs: 0, commits: 0, aiCommits: 0, added: 0, deleted: 0, harnesses: new Set(), dayset: new Set() };
 			projects.set(root, p);
 		}
 		return p;
 	};
+	const harness = (h: Harness) => s.harnesses.get(h) ?? s.harnesses.set(h, emptyHarness()).get(h)!;
 	const goals = new Map<string, [string, number, number]>();
 	const push = <K, V>(map: Map<K, V[]>, key: K, v: V) => {
 		const list = map.get(key);
 		if (list) list.push(v);
 		else map.set(key, [v]);
 	};
+	const sessions = new Map<string, { ss: SessionStat; days: Set<string>; spans: Span[]; busts: BustRow[] }>();
+	const allSpans: Span[] = [];
 
 	for (const rec of ds.records) {
+		if (filter.harness !== undefined && rec.harness !== filter.harness) continue;
 		const root = ds.projectOf.get(rec)!;
 		if (filter.project !== undefined && root !== filter.project) continue;
-		const sessionDays = new Set<string>();
-		const ss: SessionStat = { id: rec.id, name: rec.name ?? rec.title, project: root, cost: 0, turns: 0, tokens: 0, agentRuns: 0, firstMs: 0, lastMs: 0, activeMs: 0, peakContext: 0, peakModel: "", compactions: 0 };
+		const archive = rec.role === "archive";
+		const sk = sessionKey(rec);
+		let entry = archive ? undefined : sessions.get(sk);
+		if (!archive && !entry) {
+			const ss: SessionStat = { harness: rec.harness, id: rec.id, project: root, cost: 0, turns: 0, tokens: 0, agentRuns: 0, firstMs: 0, lastMs: 0, activeMs: 0, peakContext: 0, peakModel: "", compactions: 0 };
+			sessions.set(sk, (entry = { ss, days: new Set(), spans: [], busts: [] }));
+		}
+		const ss = entry?.ss;
+		if (ss && rec.role === "session") {
+			ss.name ??= rec.name ?? rec.title;
+			if (root) ss.project = root;
+		}
+		const hs = harness(rec.harness);
 
 		for (const [key, v] of Object.entries(rec.usage)) {
 			const day = key.slice(0, 10);
@@ -514,6 +582,11 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 			addRow(s.models, model, v, U_LEN);
 			addRow(s.providers, providerOf(model), v, U_LEN);
 			addRow(s.thinking, thinking, v, U_LEN);
+			addTo(s.modelHarness, model, rec.harness);
+			hs.cost += v[U.cost];
+			hs.tokens += tokens;
+			hs.turns += v[U.turns];
+			hs.estimated += v[U.estimated];
 			const d = daily.get(day)!;
 			d.cost += v[U.cost];
 			d.tokens += tokens;
@@ -525,12 +598,16 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 			d.parts[1] += v[U.costOutput];
 			d.parts[2] += v[U.costCacheRead];
 			d.parts[3] += v[U.costCacheWrite];
-			addRow(d.byModel, model, [v[U.cost], tokens, v[U.turns]], 3);
-			addRow(d.byProject, root, [v[U.cost], tokens, v[U.turns]], 3);
-			ss.cost += v[U.cost];
-			ss.turns += v[U.turns];
-			ss.tokens += tokens;
-			if (v[U.turns] > 0) sessionDays.add(day);
+			const row = [v[U.cost], tokens, v[U.turns]];
+			addRow(d.byModel, model, row, 3);
+			addRow(d.byHarness, rec.harness, row, 3);
+			if (!archive) addRow(d.byProject, root, row, 3);
+			if (ss) {
+				ss.cost += v[U.cost];
+				ss.turns += v[U.turns];
+				ss.tokens += tokens;
+				if (active(v)) entry!.days.add(day);
+			}
 		}
 
 		for (const [key, v] of byProvider ? [] : Object.entries(rec.agents)) {
@@ -542,15 +619,24 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 			addRow(s.agents, agent, v, A_LEN);
 			addRow(s.agentModels, model, v, A_LEN);
 			addRow(s.agentPairs, `${agent}\t${model}`, v, A_LEN);
+			addTo(s.agentHarness, agent, rec.harness);
+			hs.agentCost += v[A.cost];
+			hs.estimated += v[A.estimated];
+			hs.tokens += tokens;
 			const d = daily.get(day)!;
 			d.agentCost += v[A.cost];
 			d.agentRuns += v[A.runs];
 			d.tokens += tokens;
-			addRow(d.byModel, AGENTS_SERIES, [v[A.cost], tokens, v[A.turns]], 3);
-			addRow(d.byProject, root, [v[A.cost], tokens, v[A.turns]], 3);
-			ss.cost += v[A.cost];
-			ss.tokens += tokens;
-			ss.agentRuns += v[A.runs];
+			const row = [v[A.cost], tokens, v[A.turns]];
+			addRow(d.byModel, AGENTS_SERIES, row, 3);
+			addRow(d.byHarness, rec.harness, row, 3);
+			addRow(d.byProject, root, row, 3);
+			if (ss) {
+				ss.cost += v[A.cost];
+				ss.tokens += tokens;
+				ss.agentRuns += v[A.runs];
+				if (v[A.turns] > 0 || v[A.runs] > 0) entry!.days.add(day);
+			}
 		}
 
 		for (const [key, v] of Object.entries(rec.hours)) {
@@ -594,42 +680,48 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 			s.compactions++;
 			s.compactionMax = Math.max(s.compactionMax, before);
 			push(s.compactionTokens, model, before);
-			ss.compactions++;
+			if (ss) ss.compactions++;
 		}
 		for (const [key, list] of Object.entries(rec.contexts)) {
 			const model = key.slice(11);
 			if (!inRange(key.slice(0, 10)) || !providerOk(providerOf(model))) continue;
 			for (const c of list) {
 				push(s.contexts, model, c);
-				if (c > ss.peakContext) {
+				if (ss && c > ss.peakContext) {
 					ss.peakContext = c;
 					ss.peakModel = model;
 				}
 			}
 		}
-		const busts: BustRow[] = [];
-		for (const [ms, model, context, cost, gapMs, idle] of rec.busts) {
-			if (inRange(dayKey(ms)) && providerOk(providerOf(model))) busts.push({ ms, model, context, cost, gapMs, idle, session: ss });
+		if (ss) {
+			for (const [ms, model, context, cost, gapMs, idle] of rec.busts) {
+				if (inRange(dayKey(ms)) && providerOk(providerOf(model))) entry!.busts.push({ ms, model, context, cost, gapMs, idle, session: ss });
+			}
+			for (const sp of rec.spans) if (sp[1] >= fromMs && sp[0] < toMs) entry!.spans.push(sp);
 		}
 		if (!byProvider) for (const [id, g] of Object.entries(rec.goals)) if (!goals.has(id) || goals.get(id)![2] < g[2]) goals.set(id, g);
+	}
 
+	for (const { ss, days: sessionDays, spans, busts } of sessions.values()) {
+		if (ss.turns === 0 && ss.agentRuns === 0 && ss.cost === 0) continue;
+		const merged = mergeSpans(spans);
+		ss.firstMs = merged[0]?.[0] ?? 0;
+		ss.lastMs = merged[merged.length - 1]?.[1] ?? 0;
+		ss.activeMs = byProvider ? 0 : clippedMs(merged, fromMs, toMs);
+		s.sessionMs += ss.activeMs;
+		s.sessions.push(ss);
+		s.busts.push(...busts);
+		allSpans.push(...merged);
+		harness(ss.harness).sessions++;
 		for (const day of sessionDays) daily.get(day)!.sessions++;
-		if (ss.turns > 0 || ss.agentRuns > 0) {
-			const spans = rec.spans.filter(([a, b]) => b >= fromMs && a < toMs);
-			ss.firstMs = spans[0]?.[0] ?? rec.startMs;
-			ss.lastMs = spans[spans.length - 1]?.[1] ?? rec.startMs;
-			ss.activeMs = byProvider ? 0 : clippedMs(spans, fromMs, toMs);
-			s.sessionMs += ss.activeMs;
-			s.sessions.push(ss);
-			s.busts.push(...busts);
-			const p = project(root);
-			p.cost += ss.cost;
-			p.turns += ss.turns;
-			p.tokens += ss.tokens;
-			p.sessions++;
-			p.lastMs = Math.max(p.lastMs, ss.lastMs);
-			for (const d of sessionDays) p.dayset.add(d);
-		}
+		const p = project(ss.project);
+		p.cost += ss.cost;
+		p.turns += ss.turns;
+		p.tokens += ss.tokens;
+		p.sessions++;
+		p.lastMs = Math.max(p.lastMs, ss.lastMs);
+		p.harnesses.add(ss.harness);
+		for (const d of sessionDays) p.dayset.add(d);
 	}
 
 	for (const [, g] of goals) {
@@ -639,8 +731,9 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 		s.goalSeconds += g[1];
 	}
 
+	const union = byProvider ? [] : mergeSpans(allSpans);
+	s.activeMs = clippedMs(union, fromMs, toMs);
 	for (const [a, b] of union) {
-		if (b < fromMs || a >= toMs) continue;
 		for (let t = Math.max(a, fromMs); t < Math.min(b, toMs); ) {
 			const day = dayKey(t);
 			const next = parseDay(addDays(day, 1)).getTime();
@@ -655,7 +748,7 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 		if (!inRange(day) || (filter.project !== undefined && c.root !== filter.project)) continue;
 		const lead = c.sessionId ? ds.leadModel.get(c.sessionId) : undefined;
 		if (lead && providerOk(providerOf(lead))) addNum(s.modelCommits, lead, 1);
-		if (byProvider) continue;
+		if (byProvider || filter.harness !== undefined) continue;
 		s.commits.push(c);
 		const d = daily.get(day)!;
 		d.commits++;
@@ -664,19 +757,24 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 		p.added += c.added;
 		p.deleted += c.deleted;
 		if (c.sessionId && ds.sessionIds.has(c.sessionId)) s.taggedCommits++;
-		if (isPiCommit(ds, c)) {
-			p.piCommits++;
-			d.piCommits++;
-			s.piCommits++;
-			s.piLines += c.added + c.deleted;
+		if (isAiCommit(ds, c)) {
+			p.aiCommits++;
+			d.aiCommits++;
+			s.aiCommits++;
+			s.aiLines += c.added + c.deleted;
 		}
 	}
 
 	s.cost = s.usage[U.cost] + s.agentTotal[A.cost];
 	s.tokens = tokensOf(s.usage) + agentTokens(s.agentTotal);
-	s.activeDays = days.filter((d) => daily.get(d)!.turns > 0).length;
+	s.activeDays = days.filter((d) => {
+		const x = daily.get(d)!;
+		return x.turns > 0 || x.tokens > 0;
+	}).length;
+	for (const [h, x] of s.harnesses) if (x.sessions === 0 && x.tokens === 0) s.harnesses.delete(h);
 	s.sessions.sort((a, b) => b.cost - a.cost);
 	s.projects = [...projects.values()]
+		.filter((p) => p.root)
 		.map(({ dayset, ...p }) => ({ ...p, activeDays: dayset.size }))
 		.sort((a, b) => b.cost - a.cost || b.commits - a.commits);
 	return s;
@@ -684,8 +782,9 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 
 /**
  * What cache reads saved against paying the input rate for the same tokens,
- * and what cache writes cost above it, per model, from pi's recorded prices.
- * A model with no priced input in range has no rate and contributes nothing.
+ * and what cache writes cost above it, per model, from the prices each turn
+ * was charged at. A model with no priced input in range has no rate and
+ * contributes nothing.
  */
 export function cacheSavings(models: Map<string, number[]>): { saved: number; premium: number; byModel: Map<string, number> } {
 	let saved = 0;
@@ -694,16 +793,16 @@ export function cacheSavings(models: Map<string, number[]>): { saved: number; pr
 	for (const [model, u] of models) {
 		if (u[U.input] <= 0 || u[U.costInput] <= 0) continue;
 		const rate = u[U.costInput] / u[U.input];
-		const s = u[U.cacheRead] * rate - u[U.costCacheRead];
+		const sv = u[U.cacheRead] * rate - u[U.costCacheRead];
 		const p = u[U.costCacheWrite] - u[U.cacheWrite] * rate;
-		saved += s;
+		saved += sv;
 		premium += p;
-		byModel.set(model, s - p);
+		byModel.set(model, sv - p);
 	}
 	return { saved, premium, byModel };
 }
 
-/** Commits a pi session made (Session-Id trailer) or landed while one was active in that repo. */
-export function isPiCommit(ds: Dataset, c: Commit): boolean {
+/** Commits a session made (Session-Id trailer) or landed while any session was active in that repo. */
+export function isAiCommit(ds: Dataset, c: Commit): boolean {
 	return (!!c.sessionId && ds.sessionIds.has(c.sessionId)) || insideSpans(ds.rootSpans.get(c.root), c.ms);
 }

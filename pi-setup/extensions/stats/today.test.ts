@@ -4,32 +4,38 @@ import os from "node:os";
 import path from "node:path";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import { burn, prepare, summarizeWindow } from "./aggregate";
-import { assistant, header, MIN, record, user } from "./fixtures";
-import { dayKey } from "./parse";
+import { dayKey } from "./record";
+import { piSpec } from "./sources/pi";
+import { iso, MIN, readLines } from "./test-helpers";
 import { readSettings, todayText, widgetLine, writeSettings } from "./today";
 
 const NOW = new Date(2026, 5, 10, 18, 0).getTime();
 const TODAY = dayKey(NOW);
 const T = new Date(2026, 5, 10, 9, 0).getTime();
 
+const header = JSON.stringify({ type: "session", id: "w", timestamp: iso(T), cwd: "/w" });
+const user = (ms: number) => JSON.stringify({ type: "message", timestamp: iso(ms), message: { role: "user", content: [{ type: "text", text: "go" }] } });
+const assistant = (ms: number, cost: number, input: number, cacheRead = 0) =>
+	JSON.stringify({ type: "message", timestamp: iso(ms), message: { role: "assistant", provider: "anthropic", model: "claude-opus-5", usage: { input, cacheRead, cost: { total: cost } } } });
+
 function today(lines: string[], commits = 0) {
-	const ds = prepare([record(lines)], { roots: new Map(), commits: Array.from({ length: commits }, (_, i) => ({ hash: `c${i}`, ms: T + i, root: "/w", added: 1, deleted: 0, subject: "x" })) }, NOW);
+	const rec = readLines(piSpec("/s"), "/s/w.jsonl", [header, ...lines]);
+	const ds = prepare([rec], { roots: new Map(), commits: Array.from({ length: commits }, (_, i) => ({ hash: `c${i}`, ms: T + i, root: "/w", added: 1, deleted: 0, subject: "x" })) }, NOW);
 	return summarizeWindow(ds, { start: TODAY, end: TODAY });
 }
 
-test("the line reads spend, cache hit, commits and time with pi for today", () => {
-	const s = today([header("w", "/w", T), user(T, "go"), assistant(T + 10 * MIN, { cost: 42.1, input: 60, cacheRead: 940 })], 3);
-	expect(todayText(s)).toBe("today $42.10 · 94% cache · 3 commits · 10m");
+test("the line reads spend, cache hit, commits and active time for today", () => {
+	expect(todayText(today([user(T), assistant(T + 10 * MIN, 42.1, 60, 940)], 3))).toBe("today $42.10 · 94% cache · 3 commits · 10m");
 });
 
 test("a budget adds month to date as a share of it", () => {
-	const s = today([header("w", "/w", T), assistant(T, { cost: 1, input: 1 })], 1);
+	const s = today([assistant(T, 1, 1)], 1);
 	expect(todayText(s, burn(170, TODAY, 500))).toBe("today $1.00 · 0% cache · 1 commit · 0m · MTD 34% of $500");
 	expect(todayText(s, burn(170, TODAY))).not.toContain("MTD");
 });
 
 test("no prompt tokens today is a dash, not 0%", () => {
-	expect(todayText(today([header("w", "/w", T)]))).toBe("today $0 · — cache · 0 commits · 0m");
+	expect(todayText(today([]))).toBe("today $0 · — cache · 0 commits · 0m");
 });
 
 test("the widget line is one clamped row whatever the text holds", () => {

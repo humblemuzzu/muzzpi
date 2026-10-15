@@ -130,9 +130,9 @@ export async function loadGit(firstSeen: Map<string, number>, cacheDir: string):
 		fresh[root] = { key, commits: await readLog(root, sinceSec, email) };
 	});
 
-	await fs.mkdir(cacheDir, { recursive: true });
+	await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
 	const tmp = `${cacheFile}.${process.pid}.tmp`;
-	await fs.writeFile(tmp, JSON.stringify(fresh));
+	await fs.writeFile(tmp, JSON.stringify(fresh), { mode: 0o600 });
 	await fs.rename(tmp, cacheFile);
 
 	return { commits: byHash(Object.values(fresh).map((r) => r.commits)), roots };

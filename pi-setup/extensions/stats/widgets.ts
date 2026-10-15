@@ -8,6 +8,7 @@ import {
 	dot,
 	duration,
 	fg,
+	HARNESS_COLOR,
 	hbar,
 	type Ink,
 	int,
@@ -25,12 +26,14 @@ import {
 	spread,
 	WHITE,
 } from "./draw";
-import { U } from "./parse";
+import { HARNESS_LABEL, HARNESSES, type Harness, U } from "./record";
+import { kv } from "./ui";
 
 export type Metric = "cost" | "tokens" | "turns";
 export const METRICS: Metric[] = ["cost", "tokens", "turns"];
 const METRIC_INDEX: Record<Metric, number> = { cost: 0, tokens: 1, turns: 2 };
-export type Group = "model" | "project";
+export type Group = "harness" | "model" | "project";
+export const GROUPS: Group[] = ["harness", "model", "project"];
 export type BustOrder = "cost" | "recent";
 
 export interface Ctx {
@@ -57,17 +60,23 @@ export interface Ctx {
 	label(series: string): string;
 }
 
-/** Under a provider filter, numbers no provider owns (time, prompts, goals, commits, agents) are not known. */
+const isHarness = (k: string): k is Harness => (HARNESSES as readonly string[]).includes(k);
+
+/** Under a provider filter, numbers no provider owns (time, prompts, goals, agents) are not known. */
 export function unscoped(ctx: Ctx, text: string): string {
 	return ctx.s.filter.provider === undefined ? text : "—";
 }
 
-/** "project ghosttyyy · provider anthropic", or "" without a filter. */
-export function filterLabel(ds: Dataset, filter: Filter): string {
-	const parts: string[] = [];
-	if (filter.project !== undefined) parts.push(`project ${ds.projectName.get(filter.project) ?? filter.project}`);
-	if (filter.provider !== undefined) parts.push(`provider ${filter.provider}`);
-	return parts.join(" · ");
+/** Commits carry neither a provider nor a harness, so either filter hides them. */
+export function commitsKnown(ctx: Ctx): boolean {
+	return ctx.s.filter.provider === undefined && ctx.s.filter.harness === undefined;
+}
+
+export function filterChips(ds: Dataset, filter: Filter): Array<[string, keyof Filter]> {
+	const out: Array<[string, keyof Filter]> = [];
+	if (filter.project !== undefined) out.push([`project ${ds.projectName.get(filter.project) ?? filter.project}`, "project"]);
+	if (filter.provider !== undefined) out.push([`provider ${filter.provider}`, "provider"]);
+	return out;
 }
 
 export function formatMetric(metric: Metric, v: number): string {
@@ -76,11 +85,16 @@ export function formatMetric(metric: Metric, v: number): string {
 
 export function modelLabel(key: string): string {
 	if (key === AGENTS_SERIES) return "sub-agents";
+	if (isHarness(key)) return HARNESS_LABEL[key];
 	const i = key.indexOf("/");
 	return i === -1 ? key : key.slice(i + 1);
 }
 
-/** Top series of a range get the palette in cost order; everything else is grey. */
+export function harnessDots(set: Set<Harness> | undefined): string {
+	return HARNESSES.filter((h) => set?.has(h)).map((h) => dot(HARNESS_COLOR[h])).join("");
+}
+
+/** Harnesses keep their own colour; the top models and projects of a range get the palette in cost order. */
 export function seriesColors(s: Summary): (key: string) => RGB {
 	const rank = new Map<string, number>();
 	[...s.models].sort((a, b) => b[1][U.cost] - a[1][U.cost]).slice(0, SERIES.length).forEach(([k], i) => rank.set(k, i));
@@ -88,23 +102,24 @@ export function seriesColors(s: Summary): (key: string) => RGB {
 	s.projects.slice(0, SERIES.length).forEach((p, i) => projects.set(p.root, i));
 	return (key) => {
 		if (key === AGENTS_SERIES) return AGENT;
+		if (isHarness(key)) return HARNESS_COLOR[key];
 		const i = rank.get(key) ?? projects.get(key);
 		return i === undefined ? OTHER : SERIES[i];
 	};
 }
 
-export function dayValue(d: DayStat | undefined, metric: Metric): number {
+function dayValue(d: DayStat | undefined, metric: Metric): number {
 	if (!d) return 0;
 	return metric === "cost" ? d.cost + d.agentCost : metric === "tokens" ? d.tokens : d.turns;
 }
 
-/** Quartile grade per day; a day with turns but no recorded price still shows as active. */
+/** Quartile grade per day; a day with usage but no recorded price still shows as active. */
 export function dayGrader(year: Summary, metric: Metric): (day: string) => number {
 	const grade = quartiles(year.days.map((d) => dayValue(year.daily.get(d), metric)));
 	return (day) => {
 		const d = year.daily.get(day);
 		const g = grade(dayValue(d, metric));
-		return g === 0 && d && (d.turns > 0 || d.agentRuns > 0) ? 1 : g;
+		return g === 0 && d && (d.tokens > 0 || d.agentRuns > 0) ? 1 : g;
 	};
 }
 
@@ -139,6 +154,9 @@ function yearGrid(ctx: Ctx, inner: number): { start: string; weeks: number } {
 	return { start, weeks };
 }
 
+/** Columns a full year of the heatmap needs. */
+export const HEATMAP_WIDTH = 4 + 2 * 53;
+
 export function heatmap(ctx: Ctx, inner: number): string[] {
 	const { ds, year, ink, ramp, metric, cursor } = ctx;
 	const { start, weeks } = yearGrid(ctx, inner);
@@ -168,20 +186,8 @@ export function heatmap(ctx: Ctx, inner: number): string[] {
 	}
 	const legend = [0, 1, 2, 3, 4].map((g) => fg(rampColor(ramp, g), "■")).join(" ");
 	const w = Math.min(inner, 4 + weeks * 2);
-	out.push("", spread(ink.dim(`Less ${legend} More`), ink.dim(`${ramp.name} · c`), w), "");
-	return [...out, ...yearFacts(ctx, w)];
-}
-
-function yearFacts(ctx: Ctx, w: number): string[] {
-	const { year, ink, streak } = ctx;
-	let best: DayStat | undefined;
-	for (const d of year.daily.values()) if (!best || dayValue(d, ctx.metric) > dayValue(best, ctx.metric)) best = d;
-	const kv = (k: string, v: string) => spread(ink.muted(k), v, w);
-	return [
-		kv("Past 365 days", `${bold(money(year.cost))} ${ink.dim(`· ${compact(year.tokens)} tokens · ${int(year.sessions.length)} sessions`)}`),
-		kv("Best day", best && dayValue(best, ctx.metric) > 0 ? `${longDate(best.day)} ${ink.dim(formatMetric(ctx.metric, dayValue(best, ctx.metric)))}` : "—"),
-		kv("Streak", `${streak.currentStreak} days now ${ink.dim(`· best ${streak.longestStreak}`)}`),
-	];
+	out.push("", spread(ink.dim(`Less ${legend} More`), ink.dim(`${ramp.name} · c`), w));
+	return out;
 }
 
 /** Weekly totals as shaded bars: a lit front face and a darker side face. */
@@ -202,19 +208,20 @@ export function skyline(ctx: Ctx, inner: number): string[] {
 	const chart = columnChart(columns, 7, 1, max);
 	const peak = totals.indexOf(max);
 	return [
-		ink.dim(spread(`peak week ${formatMetric(metric, max)}`, peak >= 0 ? `w/c ${shortDate(addDays(start, peak * 7))}` : "", 4 + weeks * 2)),
+		ink.dim(max > 0 ? spread(`peak week ${formatMetric(metric, max)}`, `w/c ${shortDate(addDays(start, peak * 7))}`, 4 + weeks * 2) : "no activity this year"),
 		...chart.map((l) => "    " + l),
 		ink.dim("    " + spread(...axisEnds(start, ds.today), weeks * 2)),
+		"",
 		ink.dim(`    weekly ${metric} · v grid`),
 	];
 }
 
-export function legend(ctx: Ctx, keys: Array<[string, number]>, total: number, inner: number): string[] {
-	const items = keys.map(([k, v]) => `${dot(ctx.color(k))} ${ctx.label(k)} ${ctx.ink.dim(total > 0 ? `${Math.round((v / total) * 100)}%` : "")}`);
+function legend(ink: Ink, color: (k: string) => RGB, label: (k: string) => string, keys: Array<[string, number]>, total: number, inner: number): string[] {
+	const items = keys.map(([k, v]) => `${dot(color(k))} ${label(k)} ${ink.dim(total > 0 ? `${Math.round((v / total) * 100)}%` : "")}`);
 	const lines: string[] = [];
 	let line = "";
 	for (const it of items) {
-		const next = line ? `${line}   ${it}` : it;
+		const next = line ? `${line}    ${it}` : it;
 		if (line && visibleWidth(next) > inner) {
 			lines.push(line);
 			line = it;
@@ -230,6 +237,8 @@ export interface PlotOptions {
 	max?: number;
 	/** Average a bucket's days instead of summing them (rates). */
 	average?: boolean;
+	/** Colour a single-series column by its value, after bucketing. */
+	colorOf?: (v: number) => RGB;
 }
 
 /**
@@ -238,7 +247,7 @@ export interface PlotOptions {
  */
 export function plot(ctx: Ctx, perDay: (day: string) => Array<[RGB, number]>, inner: number, height: number, opts: PlotOptions): string[] {
 	const { s, ink } = ctx;
-	const axisW = 8;
+	const axisW = 9;
 	const avail = Math.max(10, inner - axisW);
 	const n = s.days.length;
 	const per = Math.ceil(n / avail);
@@ -249,7 +258,8 @@ export function plot(ctx: Ctx, perDay: (day: string) => Array<[RGB, number]>, in
 		const days = s.days.slice(i, i + per).map(perDay);
 		const filled = days.filter((segs) => segs.some(([, v]) => v > 0)).length;
 		const col = (days[0] ?? []).map(([c], k) => [c, days.reduce((a, segs) => a + (segs[k]?.[1] ?? 0), 0)] as [RGB, number]);
-		columns.push(opts.average && filled > 0 ? col.map(([c, v]) => [c, v / filled]) : col);
+		const value = opts.average && filled > 0 ? col.map(([c, v]) => [c, v / filled] as [RGB, number]) : col;
+		columns.push(opts.colorOf ? value.map(([, v]) => [opts.colorOf!(v), v]) : value);
 	}
 	const max = opts.max ?? Math.max(0, ...columns.map((c) => c.reduce((a, [, v]) => a + v, 0)));
 	const chart = columnChart(columns, height, slot - gap, max, gap);
@@ -263,11 +273,11 @@ export function plot(ctx: Ctx, perDay: (day: string) => Array<[RGB, number]>, in
 	return out;
 }
 
-/** Stacked usage over the range, one series per model or project. */
+/** Stacked usage over the range, one series per harness, model or project. */
 export function timeline(ctx: Ctx, inner: number, height: number): string[] {
 	const { s, metric, ink, group } = ctx;
 	const mi = METRIC_INDEX[metric];
-	const series = (d: DayStat) => (group === "model" ? d.byModel : d.byProject);
+	const series = (d: DayStat) => (group === "harness" ? d.byHarness : group === "model" ? d.byModel : d.byProject);
 	const totals = new Map<string, number>();
 	for (const d of s.daily.values()) for (const [k, v] of series(d)) totals.set(k, (totals.get(k) ?? 0) + v[mi]);
 	const ranked = [...totals].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
@@ -289,8 +299,9 @@ export function timeline(ctx: Ctx, inner: number, height: number): string[] {
 		{ format: (v) => formatMetric(ctx.metric, v) },
 	);
 	out.push("");
-	const legendKeys: Array<[string, number]> = otherTotal > 0 ? [...named, ["\0other", otherTotal]] : named;
-	out.push(...legend({ ...ctx, color: (k) => (k === "\0other" ? OTHER : ctx.color(k)), label: (k) => (k === "\0other" ? `${ranked.length - 7} more` : ctx.label(k)) }, legendKeys, grand, inner));
+	const OTHER_KEY = "\0other";
+	const legendKeys: Array<[string, number]> = otherTotal > 0 ? [...named, [OTHER_KEY, otherTotal]] : named;
+	out.push(...legend(ink, (k) => (k === OTHER_KEY ? OTHER : ctx.color(k)), (k) => (k === OTHER_KEY ? `${ranked.length - 7} more` : ctx.label(k)), legendKeys, grand, inner));
 	return out;
 }
 
@@ -298,33 +309,31 @@ export function dayPanel(ctx: Ctx, day: string, inner: number): string[] {
 	const { ink, year } = ctx;
 	const d = year.daily.get(day);
 	const out = [bold(ink.text(longDate(day))), ""];
-	if (!d || (d.turns === 0 && d.agentRuns === 0 && d.commits === 0)) {
-		out.push(ink.muted("No pi activity. A rest day."));
+	if (!d || (d.tokens === 0 && d.agentRuns === 0 && d.commits === 0)) {
+		out.push(ink.muted("Nothing ran. A rest day."));
 		return out;
 	}
-	const kv = (k: string, v: string) => spread(ink.muted(k), v, inner);
-	out.push(kv("Cost", `${bold(money(d.cost + d.agentCost))} ${ink.dim(unscoped(ctx, `main ${money(d.cost)} · agents ${money(d.agentCost)}`))}`));
-	out.push(kv("Tokens", compact(d.tokens)));
-	out.push(kv("Model turns", int(d.turns)));
-	out.push(kv("Sessions", int(d.sessions)));
-	out.push(kv("Time with pi", unscoped(ctx, duration(d.activeMs))));
-	out.push(kv("Agent runs", unscoped(ctx, int(d.agentRuns))));
-	out.push(kv("Commits", unscoped(ctx, int(d.commits))));
-	if (d.cacheDenom > 0) out.push(kv("Cache hit", `${((d.cacheRead / d.cacheDenom) * 100).toFixed(1)}%`));
-	const series = [...d.byModel].sort((a, b) => b[1][0] - a[1][0]).slice(0, 5);
-	const top = series[0]?.[1][0] ?? 0;
-	if (series.length) {
-		out.push("", ink.muted("Spend by model"));
-		const barW = Math.max(4, inner - 30);
-		for (const [k, v] of series) {
-			out.push(`${dot(ctx.color(k))} ${pad(ctx.label(k), 18)} ${hbar(top > 0 ? v[0] / top : 0, barW, ctx.color(k))} ${padStart(money(v[0]), 7)}`);
-		}
-	}
-	const projects = [...d.byProject].sort((a, b) => b[1][0] - a[1][0]).slice(0, 3);
-	if (projects.length) {
-		out.push("", ink.muted("Projects"));
-		for (const [root, v] of projects) out.push(spread(ctx.ds.projectName.get(root) ?? root, ink.dim(money(v[0])), inner));
-	}
+	const pairs: Array<[string, string]> = [
+		["Spend", `${bold(money(d.cost + d.agentCost))}${d.agentCost > 0 ? ink.dim(`  agents ${money(d.agentCost)}`) : ""}`],
+		["Tokens", compact(d.tokens)],
+		["Turns", int(d.turns)],
+		["Sessions", int(d.sessions)],
+		["Time active", unscoped(ctx, duration(d.activeMs))],
+	];
+	if (d.commits && commitsKnown(ctx)) pairs.push(["Commits", int(d.commits)]);
+	if (d.cacheDenom > 0) pairs.push(["Cache hit", `${((d.cacheRead / d.cacheDenom) * 100).toFixed(1)}%`]);
+	out.push(...kv(ink, pairs, Math.min(inner, 74)));
+	const rows = (map: Map<string, number[]>, title: string, n: number) => {
+		const list = [...map].filter(([, v]) => v[0] > 0 || v[1] > 0).sort((a, b) => b[1][0] - a[1][0] || b[1][1] - a[1][1]).slice(0, n);
+		if (!list.length) return;
+		const top = list[0][1][0];
+		const labelW = Math.min(18, Math.max(...list.map(([k]) => visibleWidth(ctx.label(k)))));
+		const barW = Math.max(4, inner - labelW - 13);
+		out.push("", ink.muted(title));
+		for (const [k, v] of list) out.push(`${dot(ctx.color(k))} ${pad(ctx.label(k), labelW)} ${hbar(top > 0 ? v[0] / top : 0, barW, ctx.color(k))} ${padStart(money(v[0]), 8)}`);
+	};
+	if (ctx.s.filter.harness === undefined && d.byHarness.size > 1) rows(d.byHarness, "By harness", 4);
+	rows(d.byModel, "By model", 4);
 	return out;
 }
 

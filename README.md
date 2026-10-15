@@ -99,9 +99,10 @@ the tools it has. Pick by what you need back:
 - `Ctrl+Shift+A` opens any sub-agent's live transcript.
 - `/studio` previews pi themes **and** your Ghostty theme, font and opacity live.
   Esc reverts, Enter keeps.
-- `/stats` (`Ctrl+Shift+S`): a nine-tab usage dashboard covering cost, tokens,
-  cache hits and busts, models, tools, sub-agents, projects matched to commits,
-  your work rhythm, and a wrapped card.
+- `/stats` (`Ctrl+Shift+S`): an eight-tab usage dashboard over every session pi,
+  Claude Code, Codex and OpenCode left on the machine, deduplicated across all
+  four: cost, tokens, cache hits and busts, models, tools, sub-agents, projects
+  matched to commits, your work rhythm, and a wrapped card. Local and read-only.
 - `Ctrl+Shift+P` command palette, `/md` export, desktop notifications, auto-named sessions, a DeepSeek peak-pricing
   clock, and `/ysk`, an opt-in side agent that flags what you might have missed.
 - Pin sessions with `Ctrl+B` in `/resume`.

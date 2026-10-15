@@ -1,10 +1,12 @@
 /**
- * /stats — usage analytics over every pi session on disk: cost, tokens,
- * cache, models, tools, sub-agents, projects and commits, rhythm, wrapped.
+ * /stats — usage analytics over every session pi, Claude Code, Codex and
+ * OpenCode left on this Mac: spend, tokens, cache, models, tools, agents,
+ * projects and commits, rhythm, wrapped.
  *
- * Read-only over ~/.pi/agent/sessions and the repos sessions ran in; the
- * only writes are its own caches and settings under <agent dir>/cache/stats.
- * No network.
+ * Read-only over each harness's own files and the repos sessions ran in;
+ * the only writes are its own ledgers, settings and exports under
+ * <agent dir>/cache/stats. No network. Nothing here reaches the model: no
+ * tool, no prompt text, no session message.
  */
 
 import fs from "node:fs/promises";
@@ -13,13 +15,14 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { decodeKittyPrintable, Key, matchesKey, type TUI } from "@mariozechner/pi-tui";
 import { burn, type Dataset, monthWindow, prepare, RANGES, type RangeId, summarize, summarizeWindow } from "./aggregate";
-import { card, center, clampLines, hbar, type Ink, money, SERIES } from "./draw";
+import { bold, card, center, clampLines, dot, HARNESS_COLOR, hbar, type Ink, int, money, pad, plain } from "./draw";
 import { commitsSince, loadGit } from "./git";
-import { type IngestProgress, ingest, ingestWarm } from "./ingest";
-import { dayKey } from "./parse";
+import { type IngestProgress, ingestAll, ingestPiWarm, type SourceStatus } from "./ingest";
+import { type CatalogModel, PriceBook } from "./pricing";
+import { dayKey, HARNESS_LABEL, HARNESSES } from "./record";
 import { markdownReport } from "./report";
-import { StatsView } from "./view";
 import { readSettings, todayText, widgetLine, writeSettings } from "./today";
+import { StatsView, terminalRows } from "./view";
 import { writeWrappedPng } from "./wrapped";
 
 const SHORTCUT = "ctrl+shift+s";
@@ -44,15 +47,29 @@ function planUsd(): number {
 	return Number.isFinite(n) && n > 0 ? n : 200;
 }
 
-function rangeArg(arg: string | undefined): RangeId {
-	return RANGES.find((r) => r.id === arg)?.id ?? "30d";
+const USAGE = "/stats [export|wrapped] [7d|30d|90d|1y|all] \u00b7 /stats widget on|off \u00b7 /stats budget <usd>|off";
+
+/** The range named on the command line: 30 days when none is, undefined for one that does not exist. */
+function rangeArg(arg: string | undefined): RangeId | undefined {
+	return arg ? RANGES.find((r) => r.id === arg)?.id : "30d";
 }
 
-async function load(onProgress?: (p: IngestProgress) => void, signal?: AbortSignal): Promise<Dataset> {
-	const records = await ingest(sessionsDir(), cacheDir(), onProgress, signal);
+/** pi's model catalog, the only price list used: local, and the same one pi prices its own turns from. */
+function priceBook(ctx: ExtensionContext): PriceBook {
+	return new PriceBook(ctx.modelRegistry.getAll() as unknown as CatalogModel[]);
+}
+
+interface Loaded {
+	ds: Dataset;
+	problems: string[];
+}
+
+async function load(ctx: ExtensionContext, onProgress?: (p: IngestProgress) => void, signal?: AbortSignal): Promise<Loaded> {
+	const { records, status } = await ingestAll({ piSessions: sessionsDir(), cacheDir: cacheDir(), prices: priceBook(ctx), onProgress, signal });
 	const firstSeen = new Map<string, number>();
-	for (const r of records) firstSeen.set(r.cwd, Math.min(firstSeen.get(r.cwd) ?? Infinity, r.startMs));
-	return prepare(records, await loadGit(firstSeen, cacheDir()));
+	for (const r of records) if (r.cwd && r.startMs) firstSeen.set(r.cwd, Math.min(firstSeen.get(r.cwd) ?? Infinity, r.startMs));
+	const problems = HARNESSES.filter((h) => status[h].state === "failed").map((h) => `${HARNESS_LABEL[h]} could not be read (${status[h].error}); showing what was read before.`);
+	return { ds: prepare(records, await loadGit(firstSeen, cacheDir())), problems };
 }
 
 /** Context window per `provider/model` the dataset has seen, from pi's model registry; unknown models are left out. */
@@ -66,8 +83,23 @@ function contextWindows(ctx: ExtensionContext, models: string[]): Map<string, nu
 	return out;
 }
 
-function gb(bytes: number): string {
-	return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+function size(bytes: number): string {
+	return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : `${Math.round(bytes / 1e3)} KB`;
+}
+
+function sourceLine(ink: Ink, s: SourceStatus): string {
+	switch (s.state) {
+		case "waiting":
+			return ink.dim("waiting");
+		case "absent":
+			return ink.dim("not installed");
+		case "failed":
+			return ink.accent(`could not read: ${s.error ?? "unknown error"}`);
+		case "done":
+			return ink.dim(s.totalBytes && s.parsed ? `${int(s.files)} sessions · read ${size(s.bytes)}` : `${int(s.files)} sessions · up to date`);
+		default:
+			return ink.dim(s.totalBytes ? `${size(s.bytes)} of ${size(s.totalBytes)}` : "looking…");
+	}
 }
 
 class Loading {
@@ -75,17 +107,18 @@ class Loading {
 	constructor(private readonly ink: Ink) {}
 
 	render(width: number): string[] {
-		const rows = process.stdout.rows || 24;
-		const w = Math.min(64, width - 2);
-		const p = this.progress;
-		const frac = p?.totalBytes ? p.bytes / p.totalBytes : 0;
-		const status = !p
-			? "Finding sessions…"
-			: p.totalBytes === 0
-				? `${p.files.toLocaleString("en-US")} sessions, all cached · reading git…`
-				: `${gb(p.bytes)} of ${gb(p.totalBytes)} · ${p.parsed.toLocaleString("en-US")} files parsed`;
-		const body = ["", hbar(frac, w - 4, SERIES[0]), "", this.ink.dim(status), this.ink.dim("The first run reads everything; later runs only read what changed."), ""];
-		const box = card(this.ink, { title: "pi stats", right: this.ink.dim("esc to cancel"), width: w, body });
+		const rows = terminalRows();
+		const w = Math.min(72, width - 2);
+		const inner = w - 4;
+		const body = ["", this.ink.muted("Reading every session on this Mac"), ""];
+		for (const h of HARNESSES) {
+			const s = this.progress?.[h];
+			const frac = !s ? 0 : s.state === "done" || s.state === "absent" ? 1 : s.totalBytes ? s.bytes / s.totalBytes : 0;
+			const color = s?.state === "absent" ? [70, 66, 64] as const : HARNESS_COLOR[h];
+			body.push(`${dot(color)} ${pad(HARNESS_LABEL[h], 13)}${hbar(frac, Math.max(8, inner - 48), color)}  ${s ? sourceLine(this.ink, s) : this.ink.dim("waiting")}`);
+		}
+		body.push("", this.ink.dim("The first run reads everything once; after that only what changed."), "");
+		const box = card(this.ink, { title: "stats", right: this.ink.dim("esc to cancel"), width: w, body });
 		const top = Math.max(0, Math.floor((rows - box.length) / 2));
 		return [...new Array(top).fill(""), ...box.map((l) => center(l, width))];
 	}
@@ -101,13 +134,13 @@ async function open(ctx: ExtensionContext): Promise<void> {
 			let view: StatsView | undefined;
 			let failed: string | undefined;
 
-			load((p) => {
-				loading.progress = { ...p };
+			load(ctx, (p) => {
+				loading.progress = p;
 				tui.requestRender();
 			}, controller.signal)
-				.then((ds) => {
+				.then(({ ds, problems }) => {
 					if (controller.signal.aborted) return;
-					view = new StatsView(ds, ink, { planUsd: planUsd(), windows: contextWindows(ctx, ds.lifetime.modelRank), budget }, () => done(null));
+					view = new StatsView(ds, ink, { planUsd: planUsd(), windows: contextWindows(ctx, ds.lifetime.modelRank), budget, problems }, () => done(null));
 					tui.requestRender();
 				})
 				.catch((err) => {
@@ -117,7 +150,7 @@ async function open(ctx: ExtensionContext): Promise<void> {
 
 			return {
 				render: (width: number) =>
-					view?.render(width) ?? clampLines(failed ? [ink.accent(` pi stats failed: ${failed}`), ink.dim(" esc to close")] : loading.render(width), width),
+					view?.render(width) ?? clampLines((failed ? ["", ` ${bold(ink.accent("stats failed"))}  ${ink.dim(failed)}`, ink.dim(" esc to close")] : loading.render(width)).map(plain), width),
 				handleInput: (data: string) => {
 					if (view) view.handleInput(data);
 					else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")) || (decodeKittyPrintable(data) ?? data) === "q") {
@@ -135,36 +168,38 @@ async function open(ctx: ExtensionContext): Promise<void> {
 	);
 }
 
-function tell(pi: ExtensionAPI, ctx: ExtensionContext, text: string, level: "info" | "error" = "info"): void {
-	if (ctx.hasUI) ctx.ui.notify(text, level);
-	else pi.sendMessage({ customType: "stats", content: text, display: true }, { triggerTurn: false });
+/** A notification only: nothing /stats says may land in the session, where the model would read it. */
+function tell(ctx: ExtensionContext, text: string, level: "info" | "error" = "info"): void {
+	ctx.ui.notify(text, level);
 }
 
-async function exportReport(pi: ExtensionAPI, ctx: ExtensionContext, range: RangeId): Promise<void> {
-	const ds = await load();
-	const report = markdownReport(ds, summarize(ds, range));
+/** Where an export landed, and any harness it had to leave out. */
+function written(ctx: ExtensionContext, what: string, file: string, problems: string[]): void {
+	tell(ctx, [`${what} written to ${file}`, ...problems].join("\n"), problems.length ? "error" : "info");
+}
+
+async function exportReport(ctx: ExtensionContext, range: RangeId): Promise<void> {
+	const { ds, problems } = await load(ctx);
 	const file = path.join(cacheDir(), `report-${ds.today}-${range}.md`);
-	await fs.writeFile(file, report);
-	if (ctx.hasUI) ctx.ui.notify(`pi stats report written to ${file}`, "info");
-	else pi.sendMessage({ customType: "stats", content: report, display: true }, { triggerTurn: false });
+	await fs.writeFile(file, markdownReport(ds, summarize(ds, range), problems), { mode: 0o600 });
+	written(ctx, "stats report", file, problems);
 }
 
-async function exportWrapped(pi: ExtensionAPI, ctx: ExtensionContext, range: RangeId): Promise<void> {
-	tell(pi, ctx, `Rendering pi wrapped (${range})…`);
-	const ds = await load();
+async function exportWrapped(ctx: ExtensionContext, range: RangeId): Promise<void> {
+	tell(ctx, `Rendering wrapped (${range})…`);
+	const { ds, problems } = await load(ctx);
 	const file = path.join(cacheDir(), `wrapped-${ds.today}-${range}.png`);
 	try {
 		await writeWrappedPng(ds, range, planUsd(), file);
 	} catch (err) {
-		tell(pi, ctx, `pi wrapped PNG failed: ${err instanceof Error ? err.message : String(err)}`, "error");
-		return;
+		return tell(ctx, `wrapped PNG failed: ${err instanceof Error ? err.message : String(err)}`, "error");
 	}
-	tell(pi, ctx, `pi wrapped written to ${file}`);
+	written(ctx, "wrapped", file, problems);
 }
 
-/** The widget's line, or undefined while there is no index cache: the widget never triggers a full parse. */
-async function todayLine(budget: number | undefined): Promise<string | undefined> {
-	const records = await ingestWarm(sessionsDir(), cacheDir());
+/** The widget's line, or undefined while pi has no ledger: the widget never triggers a full read. */
+async function todayLine(ctx: ExtensionContext, budget: number | undefined): Promise<string | undefined> {
+	const records = await ingestPiWarm(sessionsDir(), cacheDir(), priceBook(ctx));
 	if (!records) return undefined;
 	const now = Date.now();
 	const today = dayKey(now);
@@ -202,8 +237,9 @@ function todayWidget(pi: ExtensionAPI): TodayWidget {
 		running = true;
 		const gen = generation;
 		try {
+			const ctx = ctxRef;
 			const settings = await readSettings(cacheDir());
-			const text = settings.widget ? await todayLine(settings.budget) : undefined;
+			const text = settings.widget && ctx ? await todayLine(ctx, settings.budget) : undefined;
 			if (gen === generation && ctxRef) show(ctxRef, text);
 		} catch {
 			// a failed refresh keeps the last line; the next agent turn tries again
@@ -250,44 +286,43 @@ function todayWidget(pi: ExtensionAPI): TodayWidget {
 	return { refresh };
 }
 
-async function setWidget(pi: ExtensionAPI, ctx: ExtensionContext, arg: string | undefined, widget: TodayWidget): Promise<void> {
+async function setWidget(ctx: ExtensionContext, arg: string | undefined, widget: TodayWidget): Promise<void> {
 	const settings = await readSettings(cacheDir());
-	if (arg !== "on" && arg !== "off") {
-		return tell(pi, ctx, `stats widget is ${settings.widget ? "on" : "off"} · /stats widget on|off`);
-	}
+	if (arg !== "on" && arg !== "off") return tell(ctx, `stats widget is ${settings.widget ? "on" : "off"} · /stats widget on|off`);
 	await writeSettings(cacheDir(), { ...settings, widget: arg === "on" });
 	widget.refresh(ctx);
-	tell(pi, ctx, arg === "on" ? "stats widget on: today's spend under the editor, updated after each agent run (needs /stats to have built its index once)" : "stats widget off");
+	tell(ctx, arg === "on" ? "stats widget on: today's pi spend under the editor, updated after each agent run (needs /stats to have run once)" : "stats widget off");
 }
 
-async function setBudget(pi: ExtensionAPI, ctx: ExtensionContext, arg: string | undefined, widget: TodayWidget): Promise<void> {
+async function setBudget(ctx: ExtensionContext, arg: string | undefined, widget: TodayWidget): Promise<void> {
 	const settings = await readSettings(cacheDir());
-	if (!arg) {
-		return tell(pi, ctx, settings.budget ? `monthly budget ${money(settings.budget)} (API-price spend) · /stats budget <usd>|off` : "no monthly budget · /stats budget <usd>");
-	}
+	if (!arg) return tell(ctx, settings.budget ? `monthly budget ${money(settings.budget)} (API-price spend, all harnesses) · /stats budget <usd>|off` : "no monthly budget · /stats budget <usd>");
 	const usd = Number(arg.replace(/^\$/, ""));
-	if (arg !== "off" && !(Number.isFinite(usd) && usd > 0)) return tell(pi, ctx, `not a budget: ${arg} · /stats budget <usd>|off`, "error");
+	if (arg !== "off" && !(Number.isFinite(usd) && usd > 0)) return tell(ctx, `not a budget: ${arg} · /stats budget <usd>|off`, "error");
 	await writeSettings(cacheDir(), { ...settings, budget: arg === "off" ? undefined : usd });
 	widget.refresh(ctx);
-	tell(pi, ctx, arg === "off" ? "monthly budget cleared" : `monthly budget set to ${money(usd)} of API-price spend`);
+	tell(ctx, arg === "off" ? "monthly budget cleared" : `monthly budget set to ${money(usd)} of API-price spend`);
 }
 
 export default function statsExtension(pi: ExtensionAPI): void {
 	const widget = todayWidget(pi);
 	pi.registerCommand("stats", {
-		description:
-			"Usage analytics: cost, tokens, cache, models, tools, agents, projects, commits · /stats export|wrapped [7d|30d|90d|1y|all] · /stats widget on|off · /stats budget <usd>|off",
+		description: "Usage across pi, Claude Code, Codex and OpenCode · /stats export|wrapped [7d|30d|90d|1y|all] · widget on|off · budget <usd>|off",
 		handler: async (args, ctx) => {
-			const [sub, arg] = (args ?? "").trim().split(/\s+/);
-			if (sub === "widget") return setWidget(pi, ctx, arg, widget);
-			if (sub === "budget") return setBudget(pi, ctx, arg, widget);
-			if (sub === "wrapped") return exportWrapped(pi, ctx, rangeArg(arg));
-			if (sub === "export" || !ctx.hasUI) return exportReport(pi, ctx, rangeArg(sub === "export" ? arg : undefined));
+			const [sub = "", arg] = (args ?? "").trim().split(/\s+/);
+			if (sub === "widget") return setWidget(ctx, arg, widget);
+			if (sub === "budget") return setBudget(ctx, arg, widget);
+			const exporting = sub === "export" || sub === "wrapped";
+			if (sub && !exporting) return tell(ctx, `unknown: ${sub} \u00b7 ${USAGE}`, "error");
+			const range = rangeArg(exporting ? arg : undefined);
+			if (!range) return tell(ctx, `unknown range: ${arg} \u00b7 ${USAGE}`, "error");
+			if (sub === "wrapped") return exportWrapped(ctx, range);
+			if (sub === "export" || !ctx.hasUI) return exportReport(ctx, range);
 			return open(ctx);
 		},
 	});
 	pi.registerShortcut(SHORTCUT, {
-		description: "Open pi stats",
+		description: "Open stats",
 		handler: async (ctx) => {
 			if (ctx.hasUI) await open(ctx);
 		},

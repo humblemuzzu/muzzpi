@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import type { Harness } from "./record";
 
 export type RGB = readonly [number, number, number];
 
@@ -23,22 +24,29 @@ export const bg = (c: RGB, s: string) => `\x1b[48;2;${c[0]};${c[1]};${c[2]}m${s}
 export const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
 
 export const SERIES: RGB[] = [
-	[94, 234, 212],
-	[167, 139, 250],
-	[251, 191, 36],
-	[96, 165, 250],
-	[251, 113, 133],
-	[163, 230, 53],
-	[251, 146, 60],
-	[129, 140, 248],
+	[125, 211, 252],
+	[196, 181, 253],
+	[252, 211, 77],
+	[110, 231, 183],
+	[251, 146, 160],
+	[253, 186, 116],
+	[165, 180, 252],
+	[190, 242, 100],
 ];
 export const OTHER: RGB = [120, 113, 108];
 export const AGENT: RGB = [244, 114, 182];
 export const WHITE: RGB = [250, 250, 250];
-export const EMPTY: RGB = [60, 56, 54];
+export const EMPTY: RGB = [58, 56, 54];
 export const GOOD: RGB = [74, 222, 128];
 export const WARN: RGB = [251, 191, 36];
 export const BAD: RGB = [248, 113, 113];
+
+export const HARNESS_COLOR: Record<Harness, RGB> = {
+	pi: [167, 139, 250],
+	claude: [217, 119, 87],
+	codex: [52, 211, 153],
+	opencode: [96, 165, 250],
+};
 
 export interface Ramp {
 	name: string;
@@ -46,7 +54,7 @@ export interface Ramp {
 }
 
 export const RAMPS: Ramp[] = [
-	{ name: "YlGnBu", stops: [[37, 52, 148], [44, 127, 184], [65, 182, 196], [161, 238, 196]] },
+	{ name: "Ocean", stops: [[30, 58, 95], [37, 99, 160], [56, 154, 214], [147, 220, 250]] },
 	{ name: "GitHub", stops: [[14, 68, 41], [0, 109, 50], [38, 166, 65], [57, 211, 83]] },
 	{ name: "Ember", stops: [[104, 58, 18], [175, 58, 3], [214, 93, 14], [250, 189, 47]] },
 	{ name: "Grape", stops: [[61, 43, 107], [100, 64, 170], [150, 100, 230], [215, 180, 255]] },
@@ -90,12 +98,23 @@ export function money(n: number): string {
 	return `$${n.toFixed(a >= 0.01 ? 2 : 3)}`;
 }
 
+/** 1.2K, 34.5M, 120B; rounding never lands on "1000K" or "100.0K". */
 export function compact(n: number): string {
 	const a = Math.abs(n);
-	if (a >= 1e9) return `${(n / 1e9).toFixed(a >= 1e11 ? 0 : 1)}B`;
-	if (a >= 1e6) return `${(n / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
-	if (a >= 1e4) return `${(n / 1e3).toFixed(a >= 1e5 ? 0 : 1)}K`;
-	return Math.round(n).toLocaleString("en-US");
+	if (a < 1e4) return Math.round(n).toLocaleString("en-US");
+	const units: Array<[number, string]> = [
+		[1e3, "K"],
+		[1e6, "M"],
+		[1e9, "B"],
+		[1e12, "T"],
+	];
+	for (let i = 0; i < units.length; i++) {
+		const [size, unit] = units[i];
+		const v = a / size;
+		const text = v >= 100 ? Math.round(v).toString() : v.toFixed(1);
+		if (Number(text) < 1000 || i === units.length - 1) return `${n < 0 ? "-" : ""}${text === "100.0" ? "100" : text}${unit}`;
+	}
+	return String(n);
 }
 
 export function int(n: number): string {
@@ -137,11 +156,6 @@ export function duration(ms: number): string {
 	const h = Math.floor(m / 60);
 	if (h >= 100) return `${int(h)}h`;
 	return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
-}
-
-/** At most `w` columns, cut at the end with an ellipsis. */
-export function clip(s: string, w: number): string {
-	return visibleWidth(s) > w ? truncateToWidth(s, w) : s;
 }
 
 /** Exactly `w` columns: truncated with an ellipsis, then padded. */
@@ -186,14 +200,8 @@ export function hstack(blocks: string[][], widths: number[], gap = 2): string[] 
 	return out;
 }
 
-export interface CardOptions {
-	title: string;
-	right?: string;
-	width: number;
-	body: string[];
-}
-
-export function card(ink: Ink, { title, right, width, body }: CardOptions): string[] {
+/** A rounded box; kept for the two framed surfaces, the loading card and Wrapped. */
+export function card(ink: Ink, { title, right, width, body }: { title: string; right?: string; width: number; body: string[] }): string[] {
 	const inner = Math.max(1, width - 4);
 	const head = ` ${bold(ink.text(title))} `;
 	const tail = right ? ` ${right} ` : "";
@@ -205,40 +213,30 @@ export function card(ink: Ink, { title, right, width, body }: CardOptions): stri
 	return lines;
 }
 
-/** Cards side by side when each gets at least `min` columns, else stacked. */
-export function cardRow(ink: Ink, width: number, cards: Array<Omit<CardOptions, "width">>, min = 44): string[] {
-	if (cards.length === 1 || width < min * cards.length + 2 * (cards.length - 1)) {
-		return cards.flatMap((c, i) => [...(i ? [""] : []), ...card(ink, { ...c, width })]);
-	}
-	const widths = split(width, cards.length);
-	const height = Math.max(...cards.map((c) => c.body.length));
-	const rendered = cards.map((c, i) => card(ink, { ...c, width: widths[i], body: [...c.body, ...new Array(height - c.body.length).fill("")] }));
-	return hstack(rendered, widths);
-}
-
 const EIGHTHS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
 const LOWER = ["", "▁", "▂", "▃", "▄", "▅", "▆", "▇"];
 
-/** A horizontal bar `frac` of `w` columns, resolved to eighths. */
-export function hbar(frac: number, w: number, color: RGB): string {
+/** A horizontal bar `frac` of `w` columns, resolved to eighths, over a faint track. */
+export function hbar(frac: number, w: number, color: RGB, track = true): string {
 	const units = Math.round(Math.max(0, Math.min(1, frac)) * w * 8);
 	const full = Math.floor(units / 8);
 	const rest = units % 8;
-	const s = "█".repeat(full) + EIGHTHS[rest];
-	return fg(color, s) + " ".repeat(Math.max(0, w - full - (rest ? 1 : 0)));
+	const used = full + (rest ? 1 : 0);
+	const rail = Math.max(0, w - used);
+	return fg(color, "█".repeat(full) + EIGHTHS[rest]) + (track ? fg(EMPTY, "─".repeat(rail)) : " ".repeat(rail));
 }
 
-/** One bar split into coloured segments, e.g. the token mix. */
-export function segmentBar(parts: Array<[RGB, number]>, w: number): string {
+/** One bar split into coloured segments, e.g. spend by harness. */
+export function segmentBar(parts: Array<[RGB, number]>, w: number, glyph = "█"): string {
 	const total = parts.reduce((a, [, v]) => a + v, 0);
-	if (total <= 0 || w <= 0) return " ".repeat(Math.max(0, w));
+	if (total <= 0 || w <= 0) return fg(EMPTY, "─".repeat(Math.max(0, w)));
 	let used = 0;
 	let acc = 0;
 	let out = "";
 	for (const [c, v] of parts) {
 		acc += v;
 		const end = Math.round((acc / total) * w);
-		if (end > used) out += fg(c, "█".repeat(end - used));
+		if (end > used) out += fg(c, glyph.repeat(end - used));
 		used = Math.max(used, end);
 	}
 	return out + " ".repeat(Math.max(0, w - used));
@@ -275,7 +273,7 @@ export function columnChart(columns: Column[], height: number, colWidth = 1, max
 			}
 			const seg = segs[at];
 			const k = Math.min(8, seg.end - lo);
-			const above = segs[at + 1];
+			const above = segs[at + 1]?.end > seg.end ? segs[at + 1] : undefined;
 			if (k >= 8) line += fg(seg.color, "█".repeat(colWidth));
 			else if (above) line += bg(above.color, fg(seg.color, LOWER[k].repeat(colWidth)));
 			else line += fg(seg.color, LOWER[k].repeat(colWidth));
@@ -295,6 +293,7 @@ export interface ColSpec {
 	drop?: number;
 }
 
+/** Header, a hairline, then rows; low-priority columns drop out until the table fits. */
 export function table(ink: Ink, cols: ColSpec[], rows: string[][], inner: number, gap = 2): string[] {
 	const keep = cols.map((_, i) => i);
 	const need = () => keep.reduce((a, i) => a + (cols[i].flex ? 12 : cols[i].w), 0) + gap * (keep.length - 1);
@@ -307,7 +306,8 @@ export function table(ink: Ink, cols: ColSpec[], rows: string[][], inner: number
 	const fixed = keep.reduce((a, i) => a + (cols[i].flex ? 0 : cols[i].w), 0) + gap * (keep.length - 1);
 	const width = (i: number) => (cols[i].flex ? Math.max(8, inner - fixed) : cols[i].w);
 	const line = (cells: string[]) => keep.map((i) => (cols[i].right ? padStart(cells[i] ?? "", width(i)) : pad(cells[i] ?? "", width(i)))).join(" ".repeat(gap));
-	return [ink.muted(line(cols.map((c) => c.title))), ...rows.map(line)];
+	const total = keep.reduce((a, i) => a + width(i), 0) + gap * (keep.length - 1);
+	return [ink.muted(line(cols.map((c) => c.title))), ink.border("─".repeat(Math.min(inner, total))), ...rows.map(line)];
 }
 
 /** "~/a/b/c/file.ts" cut from the left so the file name survives. */
@@ -320,41 +320,18 @@ export function dot(color: RGB): string {
 	return fg(color, "●");
 }
 
-export interface Tile {
-	label: string;
-	value: string;
-	sub?: string;
-	color?: RGB;
-	/** Change against the previous window, shown after the value. */
-	delta?: string;
-}
-
-export function tiles(ink: Ink, items: Tile[], width: number, minWidth = 18): string[] {
-	const valueLine = (t: Tile) => {
-		const value = bold(t.color ? fg(t.color, t.value) : ink.text(t.value));
-		return t.delta ? `${value} ${t.delta}` : value;
-	};
-	const need = Math.max(minWidth, ...items.map((t) => Math.max(visibleWidth(t.label), visibleWidth(valueLine(t)), visibleWidth(t.sub ?? ""))));
-	const fit = Math.max(1, Math.min(items.length, Math.floor((width + 2) / (need + 2))));
-	const perRow = Math.ceil(items.length / Math.ceil(items.length / fit));
-	const widths = split(width, perRow);
-	const out: string[] = [];
-	for (let i = 0; i < items.length; i += perRow) {
-		const chunk = items.slice(i, i + perRow);
-		const blocks = chunk.map((t) => [
-			ink.muted(t.label),
-			valueLine(t),
-			t.sub ? ink.dim(t.sub) : "",
-		]);
-		if (i) out.push("");
-		out.push(...hstack(blocks, widths.slice(0, chunk.length)));
-	}
-	return out;
-}
-
 export function gradientText(s: string, from: RGB, to: RGB): string {
 	const chars = [...s];
 	return chars.map((ch, i) => fg(mix(from, to, chars.length > 1 ? i / (chars.length - 1) : 0), ch)).join("");
+}
+
+/**
+ * Keeps the colour codes this extension draws with and drops every other
+ * escape and control character: a stray \n or cursor move inside one row
+ * would smear the screen, and width checks count it as zero columns.
+ */
+export function plain(s: string): string {
+	return s.replace(/\x1b\[[0-9;]*m|\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|.?)|[\x00-\x08\x0a-\x1a\x1c-\x1f\x7f]/g, (m) => (/^\x1b\[[0-9;]*m$/.test(m) ? m : "")).replace(/\t/g, " ");
 }
 
 export function clampLines(lines: string[], width: number): string[] {

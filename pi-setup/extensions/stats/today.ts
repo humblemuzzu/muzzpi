@@ -22,10 +22,10 @@ export async function readSettings(dir: string): Promise<StatsSettings> {
 }
 
 export async function writeSettings(dir: string, settings: StatsSettings): Promise<void> {
-	await fs.mkdir(dir, { recursive: true });
+	await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 	const file = settingsFile(dir);
 	const tmp = `${file}.${process.pid}.tmp`;
-	await fs.writeFile(tmp, JSON.stringify(settings));
+	await fs.writeFile(tmp, JSON.stringify(settings), { mode: 0o600 });
 	await fs.rename(tmp, file);
 }
 

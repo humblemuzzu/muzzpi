@@ -219,7 +219,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `system-prompt.ts` | parent template / sub-agent generated prompt |
 | `mentions.ts` | @mentions + agent directives |
 | `session-name.ts` | auto session naming (haiku, deliberately; a direct model call, not a sub-agent) |
-| `stats/` | `/stats`, Ctrl+Shift+S — analytics over `sessions/` + git; caches, `settings.json` (widget, budget) and wrapped PNGs in `<agent dir>/cache/stats`. The widget only reads an existing index, never a cold parse |
+| `stats/` | `/stats`, Ctrl+Shift+S — analytics over pi, Claude Code, Codex and OpenCode sessions + git. Per-harness ledgers in `<agent dir>/cache/stats` keep sessions whose source is gone (Claude prunes after 30 days): never delete them casually. Bump `ledger.ts` `VERSION` when a parser's output changes. OpenCode is read via the `sqlite3` CLI, read-only. Nothing may reach the model: no tools, no `sendMessage`. The widget reads pi's ledger only, never a cold parse |
 | `notify.ts` | OSC 777 desktop notifications |
 | `md-export.ts` | `/md` session → markdown |
 | `command-palette/` | Ctrl+Shift+P |
