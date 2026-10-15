@@ -7,6 +7,7 @@ import { projectsTab } from "./projects";
 import { rhythmTab } from "./rhythm";
 import { toolsTab } from "./tools";
 import { wrappedTab } from "./wrapped";
+import { youTab } from "./you";
 
 export type { Tab };
-export const TABS: Tab[] = [overview, modelsTab, cacheTab, toolsTab, agentsTab, projectsTab, rhythmTab, wrappedTab];
+export const TABS: Tab[] = [overview, youTab, modelsTab, cacheTab, toolsTab, agentsTab, projectsTab, rhythmTab, wrappedTab];

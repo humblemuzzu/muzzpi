@@ -44,6 +44,11 @@ export interface DayStat {
 	cacheRead: number;
 	cacheDenom: number;
 	busts: number;
+	prompts: number;
+	swears: number;
+	/** Replies stopped mid-way, and replies that ended in an error. */
+	aborted: number;
+	errors: number;
 	/** [input, output, cacheRead, cacheWrite] cost of main turns. */
 	parts: number[];
 	/** series → [cost, tokens, turns]; sub-agents under AGENTS_SERIES. */
@@ -56,6 +61,8 @@ export interface SessionStat {
 	harness: Harness;
 	id: string;
 	name?: string;
+	/** First line of the first prompt: the user's own words, unlike an auto-generated name. */
+	title?: string;
 	project: string;
 	cost: number;
 	turns: number;
@@ -102,6 +109,8 @@ export interface HarnessStat {
 	turns: number;
 	sessions: number;
 	estimated: number;
+	prompts: number;
+	swears: number;
 }
 
 export interface Streaks {
@@ -167,6 +176,8 @@ export interface Summary {
 	weekdayCost: number[];
 	prompts: number;
 	promptChars: number;
+	/** Swear word (by root) to how often it was typed. */
+	swears: Map<string, number>;
 	sessions: SessionStat[];
 	projects: ProjectStat[];
 	compactions: number;
@@ -442,6 +453,10 @@ function emptyDay(day: string): DayStat {
 		cacheRead: 0,
 		cacheDenom: 0,
 		busts: 0,
+		prompts: 0,
+		swears: 0,
+		aborted: 0,
+		errors: 0,
 		parts: [0, 0, 0, 0],
 		byModel: new Map(),
 		byProject: new Map(),
@@ -473,7 +488,7 @@ export function summarize(ds: Dataset, rangeId: RangeId, filter: Filter = {}): S
 }
 
 function emptyHarness(): HarnessStat {
-	return { cost: 0, agentCost: 0, tokens: 0, turns: 0, sessions: 0, estimated: 0 };
+	return { cost: 0, agentCost: 0, tokens: 0, turns: 0, sessions: 0, estimated: 0, prompts: 0, swears: 0 };
 }
 
 export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Filter = {}, label = `${start} → ${end}`): Summary {
@@ -514,6 +529,7 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 		weekdayCost: new Array(7).fill(0),
 		prompts: 0,
 		promptChars: 0,
+		swears: new Map(),
 		sessions: [],
 		projects: [],
 		compactions: 0,
@@ -568,6 +584,7 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 		const ss = entry?.ss;
 		if (ss && rec.role === "session") {
 			ss.name ??= rec.name ?? rec.title;
+			ss.title ??= rec.title;
 			if (root) ss.project = root;
 		}
 		const hs = harness(rec.harness);
@@ -594,6 +611,8 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 			d.cacheRead += v[U.cacheRead];
 			d.cacheDenom += v[U.input] + v[U.cacheRead] + v[U.cacheWrite];
 			d.busts += v[U.busts];
+			d.aborted += v[U.aborted];
+			d.errors += v[U.errors];
 			d.parts[0] += v[U.costInput];
 			d.parts[1] += v[U.costOutput];
 			d.parts[2] += v[U.costCacheRead];
@@ -674,6 +693,15 @@ export function summarizeWindow(ds: Dataset, { start, end }: Window, filter: Fil
 			if (!inRange(day)) continue;
 			s.prompts += v[0];
 			s.promptChars += v[1];
+			daily.get(day)!.prompts += v[0];
+			hs.prompts += v[0];
+		}
+		for (const [key, n] of byProvider ? [] : Object.entries(rec.swears ?? {})) {
+			const day = key.slice(0, 10);
+			if (!inRange(day)) continue;
+			addNum(s.swears, key.slice(11), n);
+			daily.get(day)!.swears += n;
+			hs.swears += n;
 		}
 		for (const [ms, before, model] of rec.compactions) {
 			if (!inRange(dayKey(ms)) || !providerOk(providerOf(model))) continue;

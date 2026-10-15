@@ -133,6 +133,12 @@ export interface SessionRecord {
 	dedup: Record<string, string>;
 	/** Model → signature of the catalog rates its estimates used; a changed rate re-reads the record. */
 	rates: Record<string, string>;
+	/** `day\tword` to swear words in the prompts typed that day, by root word. */
+	swears?: Record<string, number>;
+	/** Work day (4 am to 4 am) to first and last prompt: when the person was typing, as opposed to agents running. */
+	awake?: Record<string, [number, number]>;
+	/** The session's single most expensive reply and longest prompt. */
+	peak?: { reply?: [ms: number, cost: number, model: string]; prompt?: [ms: number, chars: number, head: string] };
 }
 
 export function emptyRecord(harness: Harness, source: string, role: Role = "session"): SessionRecord {
@@ -397,6 +403,8 @@ export function addTurn(rec: SessionRecord, t: Turn, counted = true, extra = fal
 		[U.unpriced, !extra && t.unpriced ? 1 : 0],
 	]);
 	if (extra) return;
+	const peak = (rec.peak ??= {});
+	if (t.cost.total > (peak.reply?.[1] ?? 0)) peak.reply = [t.ms, t.cost.total, t.model];
 	if (context > 0) (rec.contexts[`${day}\t${t.model}`] ??= []).push(context);
 	if (bust) rec.busts.push([t.ms, t.model, context, t.cost.cacheWrite, t.ms - prev!.ms, idle]);
 	bump(rec.hours, `${day}\t${new Date(t.ms).getHours()}\t${provider}`, 2, [
@@ -474,15 +482,62 @@ export function cleanText(s: string, max = 120): string | undefined {
 	return line ? line.slice(0, max) : undefined;
 }
 
-/** `chars` is the prompt's full length when `text` is only its head. */
-export function addPrompt(rec: SessionRecord, ms: number, text: string, chars = text.length): void {
-	if (rec.role !== "session") return;
-	bump(rec.prompts, dayKey(ms), 2, [
+/** OpenCode puts file contents into the user turn as text like this; nobody typed it. */
+const TOOL_REPLAY = /^\s*Called the \S+ tool with the following input:/;
+
+const SWEAR = /\b(motherf\w*|f+u+c+k+\w*|fk|fkin|fking|fuk\w*|bullshit\w*|shit\w*|shi|asshole\w*|dumbass\w*|jackass\w*|ass|goddamn\w*|damn\w*|dammit|hell|wtf|wth|stfu|crap\w*|bitch\w*|bastard\w*|dick(?:head)?s?|piss\w*)\b/gi;
+
+function swearRoot(word: string): string {
+	const w = word.toLowerCase();
+	if (/^(motherf|f+u+c+k|fk|fuk)/.test(w)) return "fuck";
+	if (/^(bull)?shi/.test(w)) return "shit";
+	if (/ass/.test(w)) return "ass";
+	if (/damn|dammit/.test(w)) return "damn";
+	if (/^(wtf|wth|stfu)$/.test(w)) return "wtf";
+	return ["crap", "bitch", "bastard", "piss", "dick"].find((root) => w.startsWith(root)) ?? w;
+}
+
+/** Pasted files, code blocks, and paths, file names and URLs: in a prompt, but not typed. */
+const PASTED = /<file\b[\s\S]*?<\/file>|```[\s\S]*?```|\S*\w[./@]\w\S*/gi;
+
+/** Swear words in what the person typed, by root, for the potty-mouth count. */
+export function countSwears(text: string): Map<string, number> {
+	const out = new Map<string, number>();
+	for (const m of text.replace(PASTED, " ").matchAll(SWEAR)) {
+		const root = swearRoot(m[1]);
+		out.set(root, (out.get(root) ?? 0) + 1);
+	}
+	return out;
+}
+
+/** A prompt as the person typed it. */
+export function addPrompt(rec: SessionRecord, ms: number, text: string): void {
+	const chars = text.length;
+	if (rec.role !== "session" || TOOL_REPLAY.test(text)) return;
+	const day = dayKey(ms);
+	bump(rec.prompts, day, 2, [
 		[0, 1],
 		[1, chars],
 	]);
+	for (const [root, n] of countSwears(text)) {
+		const key = `${day}\t${root}`;
+		(rec.swears ??= {})[key] = (rec.swears[key] ?? 0) + n;
+	}
 	rec.title ??= cleanText(text.trim().split("\n")[0] ?? "");
+	const peak = (rec.peak ??= {});
+	if (chars > (peak.prompt?.[1] ?? 0)) peak.prompt = [ms, chars, cleanText(text, 70) ?? ""];
+	const wd = workday(ms);
+	const a = (rec.awake ??= {})[wd];
+	if (a) {
+		a[0] = Math.min(a[0], ms);
+		a[1] = Math.max(a[1], ms);
+	} else rec.awake[wd] = [ms, ms];
 	touch(rec, ms);
+}
+
+/** The day a moment belongs to when days run 4 am to 4 am, so 1 am is still last night. */
+export function workday(ms: number): string {
+	return dayKey(ms - 4 * 3_600_000);
 }
 
 export function addCompaction(rec: SessionRecord, ms: number, tokensBefore: number): void {

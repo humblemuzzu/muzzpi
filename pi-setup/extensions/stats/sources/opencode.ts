@@ -81,8 +81,8 @@ interface Message {
 	variant: string;
 	error: string;
 	agent: string;
-	promptLen: number;
-	promptHead: string;
+	/** What the person typed: the user message's text parts, without OpenCode's synthetic ones. */
+	prompt: string;
 }
 
 interface Tool {
@@ -107,8 +107,7 @@ const MESSAGE_COLS = (role: string, provider: string, model: string, variant: st
 const TOOL_COLS = (src: string) =>
 	`json_extract(${src},'$.state.status'), json_extract(${src},'$.state.time.start'), json_extract(${src},'$.state.time.end'), json_extract(${src},'$.state.input.command'), json_extract(${src},'$.state.input.filePath'), substr(json_extract(${src},'$.state.input.patchText'),1,20000)`;
 
-const USER_TEXT = (agg: string) =>
-	`CASE WHEN json_extract(m.data,'$.role')='user' THEN (SELECT ${agg} FROM part p WHERE p.message_id=m.id AND p.data LIKE '{"type":"text"%' AND json_extract(p.data,'$.synthetic') IS NULL ORDER BY p.id) END`;
+const USER_TEXT = `CASE WHEN json_extract(m.data,'$.role')='user' THEN (SELECT group_concat(t, char(10)) FROM (SELECT json_extract(p.data,'$.text') t FROM part p WHERE p.message_id=m.id AND p.data LIKE '{"type":"text"%' AND json_extract(p.data,'$.synthetic') IS NULL AND json_extract(p.data,'$.text') NOT LIKE 'Called the % tool with the following input:%' ORDER BY p.id)) END`;
 
 function toMessage(r: string[]): Message {
 	return {
@@ -128,8 +127,7 @@ function toMessage(r: string[]): Message {
 		variant: r[13],
 		error: r[14],
 		agent: r[15],
-		promptLen: num(r[16]),
-		promptHead: r[17] ?? "",
+		prompt: r[16] ?? "",
 	};
 }
 
@@ -173,13 +171,13 @@ function within(col: string, ids: string[] | undefined): string {
 async function messages(db: string, tables: Tables, ids: string[] | undefined, signal?: AbortSignal): Promise<Message[]> {
 	const queries: Promise<string[][]>[] = [];
 	if (tables.has("message")) {
-		const prompt = tables.has("part") ? `${USER_TEXT("sum(length(json_extract(p.data,'$.text')))")}, ${USER_TEXT("substr(json_extract(p.data,'$.text'),1,160)")}` : "NULL, NULL";
+		const prompt = tables.has("part") ? USER_TEXT : "NULL";
 		queries.push(sql(db, `SELECT m.id, m.session_id, ${MESSAGE_COLS("json_extract(data,'$.role')", "$.providerID", "$.modelID", "$.variant")}, ${prompt} FROM message m WHERE 1${within("m.session_id", ids)}`, signal));
 	}
 	if (tables.has("session_message")) {
 		const notOld = tables.has("message") ? " AND id NOT IN (SELECT id FROM message)" : "";
 		const cols = MESSAGE_COLS("type", "$.model.providerID", "$.model.id", "$.model.variant");
-		queries.push(sql(db, `SELECT id, session_id, ${cols}, length(json_extract(data,'$.text')), substr(json_extract(data,'$.text'),1,160) FROM session_message WHERE type IN ('assistant','user')${notOld}${within("session_id", ids)}`, signal));
+		queries.push(sql(db, `SELECT id, session_id, ${cols}, json_extract(data,'$.text') FROM session_message WHERE type IN ('assistant','user')${notOld}${within("session_id", ids)}`, signal));
 	}
 	return (await Promise.all(queries)).flat().map(toMessage);
 }
@@ -270,7 +268,7 @@ function build(s: Session, root: Session, source: string, msgs: Message[], toolR
 			continue;
 		}
 		if (m.role === "user") {
-			if (m.promptHead.trim()) addPrompt(rec, m.ms, m.promptHead, Math.max(m.promptLen, m.promptHead.length));
+			if (m.prompt.trim()) addPrompt(rec, m.ms, m.prompt);
 			continue;
 		}
 		if (m.role !== "assistant") continue;
@@ -326,8 +324,7 @@ async function legacy(home: string, dbIds: Set<string>, prices: PriceBook, seen:
 				variant: d?.variant ?? "",
 				error: d?.error?.name ?? "",
 				agent: d?.agent ?? d?.mode ?? "",
-				promptLen: 0,
-				promptHead: "",
+				prompt: "",
 			});
 		}
 		if (!msgs.length) continue;

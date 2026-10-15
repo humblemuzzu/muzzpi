@@ -1,9 +1,10 @@
 import { cacheHit, weekday } from "../aggregate";
 import { AGENT, bg, bold, card, center, compact, duration, fg, GOOD, gradientText, HARNESS_COLOR, hbar, hstack, int, money, pct, rampAt, rampColor, type RGB, SERIES, spread, split, WHITE } from "../draw";
+import { openers } from "../persona";
 import { A, HARNESS_LABEL, T, U } from "../record";
 import { metrics } from "../ui";
 import { commitsKnown, type Ctx, dayGrader, longDate, modelLabel, unscoped } from "../widgets";
-import { busiestDay, C, share, type Tab, turnsShare } from "./common";
+import { busiestDay, C, projectPath, share, type Tab, turnsShare } from "./common";
 
 interface Badge {
 	name: string;
@@ -38,6 +39,22 @@ function badges(ctx: Ctx): Badge[] {
 		b("Night Owl", "20% of turns 0–5h", turnsShare(s, 0, 5), 0.2, pct(turnsShare(s, 0, 5), 0)),
 		...(known ? [b("Marathoner", "8h in one session", longestSession, 8 * 3_600_000, duration(longestSession)), b("Delegator", "1,000 agent runs", s.agentTotal[A.runs], 1000, int(s.agentTotal[A.runs]))] : []),
 	];
+}
+
+/** Facts about how you in particular worked this range; each only when its numbers exist. */
+function personal(ctx: Ctx): string[] {
+	const { s } = ctx;
+	const out: string[] = [];
+	const o = openers(s.sessions.map((x) => x.title), 1);
+	if (o.sessions >= 10 && o.first[0]) out.push(`You opened ${bold(pct(o.first[0][1] / o.sessions, 0))} of your sessions with \u201c${bold(o.first[0][0])}\u201d.`);
+	const harnesses = [...s.harnesses].filter(([, h]) => h.turns > 0);
+	const turns = harnesses.reduce((a, [, h]) => a + h.turns, 0);
+	const lead = harnesses.sort((a, b) => b[1].turns - a[1].turns)[0];
+	if (harnesses.length > 1 && lead) out.push(`${bold(HARNESS_LABEL[lead[0]])} carried ${bold(pct(lead[1].turns / turns, 0))} of your turns; ${harnesses.length - 1} other ${harnesses.length === 2 ? "tool" : "tools"} took the rest.`);
+	const file = [...s.edits].sort((a, b) => b[1] - a[1])[0];
+	if (file && file[1] >= 5) out.push(`Most rewritten file: ${bold(projectPath(ctx, file[0]).split("/").pop() ?? file[0])}, ${bold(int(file[1]))} edits.`);
+	if (s.usage[U.aborted] > 0) out.push(`You stopped ${bold(int(s.usage[U.aborted]))} replies mid-way.`);
+	return out;
 }
 
 /** The year at half-block resolution: two weekdays per terminal row. */
@@ -108,6 +125,7 @@ export const wrappedTab: Tab = {
 			known ? `Agents ran ${bold(int(s.agentTotal[A.runs]))} times and took ${bold(int(s.agentTotal[A.turns]))} turns for you.` : "",
 			busy ? `Your biggest day was ${bold(longDate(busy[0]))}: ${bold(money(busy[1]))}.` : "",
 			`${bold(pct(turnsShare(s, 0, 5), 0))} of your turns happened between midnight and 5am.`,
+			...personal(ctx),
 		].filter(Boolean);
 		body.push(ink.muted("Fun facts"), ...facts.map((f) => `${fg(C.amber, "✦")} ${f}`), "");
 

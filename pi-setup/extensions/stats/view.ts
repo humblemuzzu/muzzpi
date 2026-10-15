@@ -9,7 +9,7 @@ const MAX_WIDTH = 150;
 const MEMO_LIMIT = 24;
 const PILL_BG: RGB = [64, 60, 58];
 const PILL_FG: RGB = [250, 245, 235];
-const SHORT_TITLES = ["Over", "Models", "Cache", "Tools", "Agents", "Proj", "Rhythm", "Wrap"];
+const SHORT_TITLES = ["Over", "You", "Models", "Cache", "Tools", "Agents", "Proj", "Rhythm", "Wrap"];
 
 export interface ViewOptions {
 	planUsd: number;
@@ -294,6 +294,9 @@ export class StatsView {
 			prev: this.previous(id),
 			get year() {
 				return view.summary("1y");
+			},
+			get all() {
+				return view.summary("all");
 			},
 			get streak() {
 				return view.streak();

@@ -24,6 +24,15 @@ const HEAD_BYTES = 240;
 const TYPE = /"type":"([a-z_]+)"/g;
 const TIMESTAMP = /"timestamp":"([^"]+)"/;
 const INJECTED_PROMPT = /^\s*(<|# AGENTS\.md)/;
+const IDE_CONTEXT = "# Context from my IDE setup:";
+const IDE_REQUEST = "## My request for Codex:";
+
+/** The IDE extension wraps the request in editor context; the request is what was typed. */
+function typed(text: string): string {
+	if (!text.trimStart().startsWith(IDE_CONTEXT)) return text;
+	const at = text.indexOf(IDE_REQUEST);
+	return at === -1 ? "" : text.slice(at + IDE_REQUEST.length).trim();
+}
 
 function parse(line: Buffer): any {
 	try {
@@ -145,7 +154,7 @@ export function codexLine(rec: SessionRecord, line: Buffer, env: LineEnv): void 
 				const p = parse(line)?.payload;
 				if (p) onCall(rec, p, ms);
 			} else if (inner === "message" && head.includes('"role":"user"')) {
-				const text = textOf(parse(line)?.payload?.content);
+				const text = typed(textOf(parse(line)?.payload?.content));
 				if (text.trim() && !INJECTED_PROMPT.test(text)) addPrompt(rec, ms, text);
 			}
 			return;

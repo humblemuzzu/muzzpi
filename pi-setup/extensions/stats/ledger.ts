@@ -9,7 +9,7 @@ import { A_LEN, type Harness, type SessionRecord, T_LEN, U_LEN } from "./record"
  */
 
 /** Bump when a parser's output changes: present sources are re-read, records of vanished ones carry over. */
-const VERSION = 2;
+const VERSION = 7;
 let saves = 0;
 
 interface LedgerFile<X = unknown> {

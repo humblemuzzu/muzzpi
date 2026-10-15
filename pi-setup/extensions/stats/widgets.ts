@@ -42,6 +42,8 @@ export interface Ctx {
 	/** The window of the same length before `s`; absent for the lifetime range. */
 	prev?: Summary;
 	year: Summary;
+	/** The whole history under the current filter. */
+	all: Summary;
 	streak: Streaks;
 	/** Account-wide month to date, whatever the filter. */
 	burn: Burn;
