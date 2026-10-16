@@ -19,7 +19,7 @@
     "~/.pi/agent/extensions/notify.js",
     "~/.pi/agent/extensions/mentions.js",
     "~/.pi/agent/extensions/anthropic-sub.js",
-    "-builtin:mcp"
+    "~/.pi/agent/extensions/goal"
   ],
   "compaction": {
     "enabled": true
@@ -43,10 +43,6 @@
   "doubleEscapeAction": "tree",
   "quietStartup": "header",
   "tuiMode": "fullscreen",
-  "packages": [
-    "npm:pi-codex-goal@0.6.1",
-    { "source": "npm:pi-mcp-adapter@5.3.1", "skills": [] }
-  ],
   "terminal": {
     "clearOnShrink": false,
     "showImages": false

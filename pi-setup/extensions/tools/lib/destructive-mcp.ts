@@ -1,6 +1,6 @@
 /**
  * Spots MCP calls that delete cloud data: an HTTP DELETE inside a code-running
- * tool (cloudflare_execute), destructive SQL sent to a database tool, or a tool
+ * tool (cloudflare's execute), destructive SQL sent to a database tool, or a tool
  * named for deleting a bucket, database, volume or namespace. Deleting design
  * nodes or comments is not data loss, so verbs alone do not count.
  */
@@ -14,17 +14,16 @@ const DATA_NOUN = /(?:^|_)(?:buckets?|databases?|d1|kv|namespaces?|volumes?|r2|t
 const QUERY_FIELD = /sql|query|statement|command|code/i;
 
 export interface McpCall {
-	/** the MCP tool being called. */
+	server: string;
+	/** the MCP tool being called, as pi sanitized it. */
 	tool: string;
 	args: unknown;
 }
 
-/** the MCP tool behind a pi tool call, when it is one: the `mcp` proxy carries `{ tool, args }`. */
+/** the MCP tool behind a pi tool call, when it is one: pi names them `mcp__<server>__<tool>`. */
 export function mcpCallOf(toolName: string, input: unknown): McpCall | undefined {
-	if (toolName !== "mcp" || !input || typeof input !== "object") return undefined;
-	const record = input as Record<string, unknown>;
-	if (typeof record.tool !== "string") return undefined;
-	return { tool: record.tool, args: record.args };
+	const match = /^mcp__(.+?)__(.+)$/.exec(toolName);
+	return match ? { server: match[1]!, tool: match[2]!, args: input } : undefined;
 }
 
 /** every string in the args, with the key it sits under; JSON-string args are parsed first. */
@@ -48,15 +47,16 @@ function strings(value: unknown, key = "", out: { key: string; text: string }[] 
 
 /** why this call needs approval, or undefined when it does not. */
 export function destructiveMcpReason(call: McpCall): string | undefined {
+	const label = `${call.server}/${call.tool}`;
 	const texts = strings(call.args);
 	const httpDelete = texts.some(({ key, text }) => HTTP_DELETE.test(text) || (/^method$/i.test(key) && /^\s*DELETE\s*$/i.test(text)));
-	if (httpDelete) return `${call.tool} sends an HTTP DELETE, which deletes cloud resources`;
+	if (httpDelete) return `${label} sends an HTTP DELETE, which deletes cloud resources`;
 	const queries = texts.filter(({ key }) => QUERY_FIELD.test(key));
 	if ((queries.length > 0 ? queries : texts).some(({ text }) => DESTRUCTIVE_SQL.test(text))) {
-		return `${call.tool} runs SQL that deletes data for good (DROP / TRUNCATE / DELETE without WHERE)`;
+		return `${label} runs SQL that deletes data for good (DROP / TRUNCATE / DELETE without WHERE)`;
 	}
 	const name = call.tool.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[-.]/g, "_");
-	if (DELETE_VERB.test(name) && DATA_NOUN.test(name)) return `${call.tool} deletes a cloud data store`;
+	if (DELETE_VERB.test(name) && DATA_NOUN.test(name)) return `${label} deletes a cloud data store`;
 	return undefined;
 }
 
@@ -67,5 +67,5 @@ export function describeMcpCall(call: McpCall): string {
 	} catch {
 		text = "";
 	}
-	return `mcp ${call.tool} ${text.length > 4000 ? `${text.slice(0, 4000)}\u2026` : text}`;
+	return `mcp ${call.server}/${call.tool} ${text.length > 4000 ? `${text.slice(0, 4000)}\u2026` : text}`;
 }

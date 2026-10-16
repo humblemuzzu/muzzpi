@@ -53,10 +53,9 @@ import {
 	scrubToolResult,
 	setActiveTags,
 	getActiveTags,
-	invalidateCache,
+	saveSecret,
 	type SecretEntry,
 } from "./lib/psst";
-import { Vault } from "psst-cli";
 import { requestApproval } from "./lib/approval";
 import { setBlockedReporter } from "./lib/choice-dialog";
 import { describeMcpCall, destructiveMcpReason, mcpCallOf } from "./lib/destructive-mcp";
@@ -155,7 +154,7 @@ export default function (pi: ExtensionAPI) {
 		if (!call || !reason) return;
 		const answer = await requestApproval(
 			ctx,
-			{ tool: "mcp", command: describeMcpCall(call), reasons: [reason], hosts: [], where: `through MCP (${call.tool})` },
+			{ tool: "mcp", command: describeMcpCall(call), reasons: [reason], hosts: [], where: `through MCP (${call.server}/${call.tool})` },
 			ctx.signal,
 		);
 		return answer.approved ? undefined : { block: true, reason: answer.message, terminate: answer.stop };
@@ -241,32 +240,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const tags = tagsRaw.split(",").map((t: string) => t.trim()).filter(Boolean);
+			const badTag = tags.find((t) => t.startsWith("-"));
+			if (badTag) return ctx.ui.notify(`Invalid tag: ${badTag}. Tags cannot start with "-"`, "error");
 
-			try {
-				// resolve vault — try local first, then global
-				const vaultPath = Vault.findVaultPath({ global: false })
-					?? Vault.findVaultPath({ global: true });
-				if (!vaultPath) {
-					return ctx.ui.notify("No vault found. Run 'psst init' or 'psst init --global' first.", "error");
-				}
-
-				const vault = new Vault(vaultPath);
-				const unlocked = await vault.unlock();
-				if (!unlocked) {
-					vault.close();
-					return ctx.ui.notify("Vault is locked — unlock keychain or set PSST_PASSWORD", "error");
-				}
-
-				await vault.setSecret(name, value, tags.length > 0 ? tags : undefined);
-				vault.close();
-
-				invalidateCache();
-
-				const tagSuffix = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
-				ctx.ui.notify(`Secret ${name} saved${tagSuffix}`, "success");
-			} catch (e: any) {
-				ctx.ui.notify(`Failed to set secret: ${e.message}`, "error");
-			}
+			const failure = await saveSecret(name, value, tags);
+			if (failure) return ctx.ui.notify(`Failed to set secret: ${failure}`, "error");
+			const tagSuffix = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
+			ctx.ui.notify(`Secret ${name} saved${tagSuffix}`, "success");
 		},
 	});
 
@@ -278,14 +258,12 @@ export default function (pi: ExtensionAPI) {
 
 			if (!raw) {
 				setActiveTags([]);
-				invalidateCache();
 				ctx.ui.notify("psst: tag filter cleared — all vault secrets available", "info");
 				return;
 			}
 
 			const tags = raw.split(",").map((t: string) => t.trim()).filter(Boolean);
 			setActiveTags(tags);
-			invalidateCache();
 
 			const matched = await loadSecrets();
 			ctx.ui.notify(

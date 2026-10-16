@@ -3,8 +3,7 @@
     "cheerio": "^1.0.0",
     "diff": "^9.0.0",
     "playwright-core": "^1.62.0",
-    "pngjs": "^7.0.0",
-    "psst-cli": "^0.7.1"
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "file:/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent",

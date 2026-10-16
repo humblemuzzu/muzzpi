@@ -11,11 +11,15 @@ PREFIX="$PI_PREFIX"
 PKG="$PI_PACKAGE"
 PI_DIR="$PREFIX/lib/node_modules/$PKG"
 BASE="$(tr -d '[:space:]' < "$SCRIPT_DIR/pi-core-patches/base-version")"
+# <dist path>[=<file in pi-core-patches/>]; the file defaults to the path's basename
 PATCHED=(
     core/resource-loader.js
     modes/interactive/components/session-selector.js
     core/keybindings.js
+    extensions/mcp/index.js=mcp-index.js
 )
+dist_path() { echo "${1%%=*}"; }
+patch_file() { case "$1" in *=*) echo "${1#*=}" ;; *) basename "$1" ;; esac; }
 
 WORK="$(mktemp -d /tmp/pi-update.XXXXXX)"
 # npm takes devEngines from the nearest package.json above cwd; ~/package.json demands bun.
@@ -30,7 +34,8 @@ tar -xzf "earendil-works-pi-coding-agent-$BASE.tgz" -C base
 tar -xzf "earendil-works-pi-coding-agent-$VERSION.tgz" -C new
 
 drift=0
-for f in "${PATCHED[@]}"; do
+for entry in "${PATCHED[@]}"; do
+    f="$(dist_path "$entry")"
     if ! cmp -s "base/package/dist/$f" "new/package/dist/$f"; then
         echo "DRIFT  stock $f changed between $BASE and $VERSION"
         drift=1
@@ -48,8 +53,8 @@ ROLLBACK="rollback: trash '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../l
 
 npm install --prefix "$PREFIX" -g --ignore-scripts "$PKG@$VERSION"
 ln -sfn "../lib/node_modules/$PKG/dist/cli.js" "$PREFIX/bin/pi"
-for f in "${PATCHED[@]}"; do
-    cp "$SCRIPT_DIR/pi-core-patches/$(basename "$f")" "$PI_DIR/dist/$f"
+for entry in "${PATCHED[@]}"; do
+    cp "$SCRIPT_DIR/pi-core-patches/$(patch_file "$entry")" "$PI_DIR/dist/$(dist_path "$entry")"
 done
 node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs"
 

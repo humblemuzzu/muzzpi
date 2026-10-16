@@ -53,6 +53,43 @@ else
          "cp pi-setup/pi-core-patches/session-selector.js $PI_DIST/modes/interactive/components/session-selector.js && cp pi-setup/pi-core-patches/keybindings.js $PI_DIST/core/keybindings.js"
 fi
 
+# ── pi core: lazy MCP connect (stock connects every server at every session start) ──
+if grep -q "LOCAL PATCH: lazy MCP connect" "$PI_DIST/extensions/mcp/index.js" 2>/dev/null; then
+    pass "pi core: lazy MCP connect"
+else
+    fail "pi core: lazy MCP connect missing" \
+         "cp pi-setup/pi-core-patches/mcp-index.js $PI_DIST/extensions/mcp/index.js"
+fi
+
+# ── MCP: pi's built-in client reads ~/.pi/agent/mcp.json ──
+# A server without a description changes the mcp_servers prompt section when it
+# connects; the adapter's `auth: "oauth"` / `false` fail the built-in's
+# validation, which takes only `auth: { provider }`.
+MCP_REPORT=$(python3 - "$PI_AGENT/mcp.json" "$PI_AGENT/settings.json" <<'PY'
+import json, sys
+mcp, settings = sys.argv[1:3]
+problems = []
+try:
+    servers = json.load(open(mcp)).get("mcpServers", {})
+    problems += [f"{name} has no description" for name, s in servers.items() if not s.get("description")]
+    problems += [f"{name} has the adapter's auth key" for name, s in servers.items() if "auth" in s and not isinstance(s["auth"], dict)]
+except (OSError, ValueError) as error:
+    problems.append(f"cannot read {mcp}: {error}")
+try:
+    if "-builtin:mcp" in json.load(open(settings)).get("extensions", []):
+        problems.append("settings.json disables builtin:mcp")
+except (OSError, ValueError) as error:
+    problems.append(f"cannot read {settings}: {error}")
+print("; ".join(problems))
+PY
+) || MCP_REPORT="the audit script failed"
+if [ -z "$MCP_REPORT" ]; then
+    pass "MCP: built-in client enabled, every server in mcp.json described"
+else
+    fail "MCP: $MCP_REPORT" \
+         "cp pi-setup/mcp.json $PI_AGENT/mcp.json, and drop -builtin:mcp from settings.json extensions"
+fi
+
 # ── pi core: compaction must be STOCK ──
 # pi-core-patches/compaction.js is retired; copying it would undo upstream's
 # toolChoice fix and break /compact on xAI/OpenAI.
@@ -90,7 +127,7 @@ REMOVED_PKGS=(
     claude-agent-sdk-pi @sting8k/pi-vcc pi-computer-use pi-gpt-config pi-ask
     pi-grok-cli pi-claude-bridge lsp-pi pi-powerline-footer pi-anycopy
     pi-autoresearch pi-token-burden @marckrenn/pi-sub-bar @marckrenn/pi-sub-core
-    pi-tool-display @benvargas/pi-claude-code-use
+    pi-tool-display @benvargas/pi-claude-code-use pi-mcp-adapter pi-codex-goal
 )
 NPM_GLOBAL="$(npm root -g 2>/dev/null || true)"
 removed_found=""

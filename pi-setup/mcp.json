@@ -1,10 +1,7 @@
 {
-  "settings": {
-    "scriptMode": false,
-    "namespaceProxyTools": false
-  },
   "mcpServers": {
     "chrome-devtools": {
+      "description": "An isolated Chrome: navigate, click, fill, console, network, screenshots, performance traces, Lighthouse, heap snapshots",
       "command": "npx",
       "cwd": "/tmp",
       "args": [
@@ -21,92 +18,89 @@
       }
     },
     "astro": {
-      "url": "http://127.0.0.1:8089/mcp",
-      "auth": false
+      "description": "Astro Mac app: App Store search, keyword suggestions, rankings and app data",
+      "url": "http://127.0.0.1:8089/mcp"
     },
     "paper": {
-      "url": "http://127.0.0.1:29979/mcp",
-      "auth": false
+      "description": "Paper Desktop, the design file open on this Mac: read and edit it. Call get_guide({ topic: \"paper-mcp-instructions\" }) first",
+      "url": "http://127.0.0.1:29979/mcp"
     },
     "cloudflare": {
-      "url": "https://mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
-    },
-    "cloudflare-docs": {
-      "url": "https://docs.mcp.cloudflare.com/mcp",
-      "auth": false,
-      "protocolVersion": "auto"
-    },
-    "cloudflare-blog": {
-      "url": "https://blog.mcp.cloudflare.com/mcp",
-      "auth": false,
-      "protocolVersion": "auto"
-    },
-    "cloudflare-stack": {
-      "url": "https://stack.mcp.cloudflare.com/mcp",
-      "auth": false,
-      "protocolVersion": "auto"
-    },
-    "cloudflare-agents-docs": {
-      "url": "https://agents.cloudflare.com/mcp",
-      "auth": false,
-      "protocolVersion": "auto"
+      "description": "Cloudflare API for the whole account: search the API spec, run calls, read docs",
+      "url": "https://mcp.cloudflare.com/mcp"
     },
     "cloudflare-bindings": {
-      "url": "https://bindings.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "description": "Cloudflare Workers and their bindings: KV, R2, D1, Hyperdrive",
+      "url": "https://bindings.mcp.cloudflare.com/mcp"
+    },
+    "cloudflare-docs": {
+      "description": "Search Cloudflare's documentation",
+      "url": "https://docs.mcp.cloudflare.com/mcp"
+    },
+    "cloudflare-blog": {
+      "description": "Cloudflare blog posts",
+      "url": "https://blog.mcp.cloudflare.com/mcp",
+      "enabled": false
+    },
+    "cloudflare-stack": {
+      "description": "Libraries and APIs of the Cloudflare developer stack",
+      "url": "https://stack.mcp.cloudflare.com/mcp",
+      "enabled": false
+    },
+    "cloudflare-agents-docs": {
+      "description": "Search the Cloudflare Agents SDK docs",
+      "url": "https://agents.cloudflare.com/mcp",
+      "enabled": false
     },
     "cloudflare-builds": {
+      "description": "Cloudflare Workers Builds: build history and logs",
       "url": "https://builds.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-observability": {
+      "description": "Cloudflare Workers logs and analytics",
       "url": "https://observability.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-containers": {
+      "description": "Cloudflare sandbox containers",
       "url": "https://containers.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-browser": {
+      "description": "Cloudflare Browser Rendering: fetch pages, screenshots, markdown",
       "url": "https://browser.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-logpush": {
+      "description": "Cloudflare Logpush jobs",
       "url": "https://logs.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-ai-gateway": {
+      "description": "Cloudflare AI Gateway logs and analytics",
       "url": "https://ai-gateway.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-auditlogs": {
+      "description": "Cloudflare account audit logs",
       "url": "https://auditlogs.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-dns-analytics": {
+      "description": "Cloudflare DNS analytics and zone settings",
       "url": "https://dns-analytics.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-dex": {
+      "description": "Cloudflare Zero Trust digital experience monitoring",
       "url": "https://dex.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     },
     "cloudflare-casb": {
+      "description": "Cloudflare One CASB: SaaS security findings",
       "url": "https://casb.mcp.cloudflare.com/mcp",
-      "auth": "oauth",
-      "protocolVersion": "auto"
+      "enabled": false
     }
   }
 }

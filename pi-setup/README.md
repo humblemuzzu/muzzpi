@@ -139,8 +139,8 @@ and `install.sh` does not create them.
 - When on, the ask is a picker: Allow, Deny (the agent stops and waits), or type what to do instead (the agent carries on with that). No UI (a sub-agent) means refused; every answer, and anything you typed, goes to `~/.pi/agent/approvals.jsonl`.
 
 ### Pi Packages
-`settings.json` `packages` is the list: `pi-codex-goal`, `pi-mcp-adapter`.
-See `AGENTS.md` → "Packages (npm)" for versions and patches, and "Removed — do not reinstall"
+None: `/goal` is vendored in `extensions/goal` and MCP is pi's built-in client.
+See `AGENTS.md` → "Packages (npm)" for pi's version and patches, and "Removed — do not reinstall"
 for the packages that were taken out on purpose (`verify-patches.sh` fails if one comes back).
 
 ## Directory Structure
@@ -155,7 +155,7 @@ pi-setup/
 ├── keybindings.json            # Custom keybindings
 ├── models.json                 # Custom providers + context-window overrides
 ├── permissions.json            # Tool permission rules
-├── mcp.json                    # pi-mcp-adapter global MCP servers
+├── mcp.json                    # MCP servers for pi's built-in client (~/.pi/agent/mcp.json)
 ├── build-extensions.ts         # Bundles each extension into one .js (run by install.sh)
 ├── verify-patches.sh           # Read-only audit of every patch/config
 ├── extensions/                 # extensions + tools/ suite

@@ -99,8 +99,9 @@ fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
 ' "$1" "$2" "$3"
 }
 
+# install alone keeps a dependency package.json dropped; prune removes it
 install_tool_deps() {
-    (cd "$1" && npm install --no-package-lock --silent 2>/dev/null)
+    (cd "$1" && npm install --no-package-lock --silent 2>/dev/null && npm prune --no-package-lock --silent 2>/dev/null)
 }
 
 echo ""
@@ -234,40 +235,30 @@ for cfg in settings.json models.json agent-models.json keybindings.json permissi
 done
 ok "Config files installed"
 
-# ── MCP servers (pi-mcp-adapter global config) ──
+# ── MCP servers (pi's built-in client) ──
 if [ -f "$SCRIPT_DIR/mcp.json" ]; then
-    info "Installing global MCP config..."
-    run mkdir -p "$HOME/.config/mcp"
-    install_file "$SCRIPT_DIR/mcp.json" "$HOME/.config/mcp/mcp.json"
-    ok "Global MCP config installed (~/.config/mcp/mcp.json)"
-fi
-if [ -f "$PI_AGENT/mcp.json" ]; then
-    run mv "$PI_AGENT/mcp.json" "$PI_AGENT/mcp.json${BACKUP_SUFFIX}"
-    ok "Moved leftover $PI_AGENT/mcp.json aside (adapter reads ~/.config/mcp/mcp.json)"
+    info "Installing MCP config..."
+    install_file "$SCRIPT_DIR/mcp.json" "$PI_AGENT/mcp.json"
+    ok "MCP config installed ($PI_AGENT/mcp.json)"
 fi
 
-# ── Pi packages (npm, discovered by pi at runtime) ──
-info "Installing pi packages..."
-# Mirror of settings.json "packages"; never re-add one AGENTS.md lists as removed.
-packages=(
-    "npm:pi-codex-goal@0.6.1"
-    "npm:pi-mcp-adapter@5.3.1"
+# ── Pi packages ──
+# None: everything runs from extensions/ or pi itself. Remove what older
+# installs had: <npm source>|<dir under npm/node_modules>|<what replaced it>.
+replaced=(
+    "npm:@benvargas/pi-claude-code-use@2.2.1|@benvargas/pi-claude-code-use|extensions/anthropic-sub.ts"
+    "npm:pi-mcp-adapter@5.3.1|pi-mcp-adapter|pi's built-in MCP client"
+    "npm:pi-codex-goal@0.6.1|pi-codex-goal|extensions/goal"
 )
-for pkg in "${packages[@]}"; do
-    info "  Installing $pkg..."
-    run pi install "$pkg" 2>/dev/null || warn "Failed to install $pkg (install manually with: pi install $pkg)"
-done
-ok "Pi packages installed (${#packages[@]} packages)"
-
-# Replaced by extensions/anthropic-sub.ts.
-SHIM_DIR="$PI_AGENT/npm/node_modules/@benvargas/pi-claude-code-use"
-if [ -d "$SHIM_DIR" ]; then
-    run pi remove "npm:@benvargas/pi-claude-code-use@2.2.1" || true
-    if [ -d "$SHIM_DIR" ]; then
-        run mv "$SHIM_DIR" "$PI_AGENT/pi-claude-code-use$BACKUP_SUFFIX"
+for entry in "${replaced[@]}"; do
+    IFS='|' read -r source dir by <<< "$entry"
+    [ -d "$PI_AGENT/npm/node_modules/$dir" ] || continue
+    run pi remove "$source" || true
+    if [ -d "$PI_AGENT/npm/node_modules/$dir" ]; then
+        run mv "$PI_AGENT/npm/node_modules/$dir" "$PI_AGENT/$(basename "$dir")$BACKUP_SUFFIX"
     fi
-    ok "Removed pi-claude-code-use (replaced by extensions/anthropic-sub.ts)"
-fi
+    ok "Removed $(basename "$dir") (replaced by $by)"
+done
 
 # ── pi entrypoint ──
 # pi ships `pi` → dist/bundle/cli.js, which never loads the patched dist/ files.
@@ -286,10 +277,11 @@ if [ -d "$SCRIPT_DIR/pi-core-patches" ]; then
     patch_core_file "$SCRIPT_DIR/pi-core-patches/resource-loader.js" "$PI_DIST/core/resource-loader.js"
     patch_core_file "$SCRIPT_DIR/pi-core-patches/session-selector.js" "$PI_DIST/modes/interactive/components/session-selector.js"
     patch_core_file "$SCRIPT_DIR/pi-core-patches/keybindings.js" "$PI_DIST/core/keybindings.js"
+    patch_core_file "$SCRIPT_DIR/pi-core-patches/mcp-index.js" "$PI_DIST/extensions/mcp/index.js"
     # every npm package bundles its own pi-tui, and one unpatched copy still smears
     run node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs" || \
         warn "pi-tui width patch failed on some copies — TUI may smear on exotic unicode (see AGENTS.md)"
-    ok "pi core patches applied (resource-loader + session pinning + pi-tui widths)"
+    ok "pi core patches applied (resource-loader + session pinning + lazy MCP + pi-tui widths)"
 else
     warn "pi-core-patches/ missing — apply them by hand"
 fi

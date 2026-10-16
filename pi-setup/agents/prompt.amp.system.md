@@ -92,7 +92,7 @@ There is no tool named `github`. GitHub access is seven separate tools: `read_gi
 
 ### The full tool surface
 
-Beyond the tools above, every one of these is registered and callable; each description says when to use it: `screenshot` (the only path from screen pixels to a vision model — `screencapture`/`sips` are blocked in `bash`), `web_search`, `read_web_page`, `skill`, `search_sessions`, `read_session`, `ask` (put questions only I can answer to me in a picker; parent session only), `mcp` (MCP gateway), `codemode`, and the goal tools `get_goal` / `create_goal` / `update_goal`.
+Beyond the tools above, every one of these is registered and callable; each description says when to use it: `screenshot` (the only path from screen pixels to a vision model — `screencapture`/`sips` are blocked in `bash`), `web_search`, `read_web_page`, `skill`, `search_sessions`, `read_session`, `ask` (put questions only I can answer to me in a picker; parent session only), `codemode` (also how the servers in `<mcp_servers>` are called), and the goal tools `get_goal` / `create_goal` / `update_goal`.
 
 Sub-agents get a **filtered subset** (their own `--tools` allowlist) and a short prompt naming it, so don't assume a child can call everything you can.
 

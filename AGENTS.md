@@ -96,9 +96,10 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 |---|---|---|
 | `resource-loader.js` | pi core `dist/core/` | suppresses extension tool-conflict boot errors |
 | `session-selector.js` + `keybindings.js` | pi core | session pinning, `Ctrl+B` in `/resume`; pins in `~/.pi/agent/pinned-sessions.json` (user data) |
+| `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect; stock connects every enabled server at every session start |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
 | extension bundles | `~/.pi/agent/extensions/` | `.js` only; a stray `.ts` shadows its bundle |
-| pi-mcp-adapter settings | `~/.config/mcp/mcp.json` + `settings.json` | `scriptMode: false`, `namespaceProxyTools: false`, skills `[]` |
+| MCP config | `~/.pi/agent/mcp.json` | every server has a `description`; no `-builtin:mcp` in `settings.json` |
 | sub-agent models | `~/.pi/agent/agent-models.json` | valid, every id listed by `pi --list-models` |
 
 ### Quick re-patch
@@ -108,6 +109,7 @@ source pi-setup/pi-location.sh && pi_locate && PI=$PI_PKG   # wherever `pi` real
 cp pi-setup/pi-core-patches/resource-loader.js  $PI/dist/core/resource-loader.js
 cp pi-setup/pi-core-patches/session-selector.js $PI/dist/modes/interactive/components/session-selector.js
 cp pi-setup/pi-core-patches/keybindings.js      $PI/dist/core/keybindings.js
+cp pi-setup/pi-core-patches/mcp-index.js        $PI/dist/extensions/mcp/index.js
 
 node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs           # all copies
 node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs --check   # audit
@@ -118,28 +120,15 @@ hardcode `/opt/homebrew` in a script**: `install.sh`, `verify-patches.sh` and
 `update-pi.sh` all locate pi via `pi-location.sh`
 (strangers run pi from nvm and Intel prefixes too).
 
-### pi-mcp-adapter config (required)
-
-`settings.scriptMode: false` in `mcp.json` (5.1 only registers `mcpScript` on
-`=== true`; mcpScript runs arbitrary JS outside `permissions.json`), and
-`{ "source": "npm:pi-mcp-adapter@<ver>", "skills": [] }` in `settings.json`.
-**The object form is load-bearing** — the string form silently restores the
-`mcp-scripting` skill. After any update: tools contain `mcp`, not `mcpScript`;
-skills do not contain `mcp-scripting`. pi's built-in `mcp` extension is
-`replaceable`; `-builtin:mcp` in `extensions` makes the adapter's win explicit.
-
 ## Packages (npm)
 
 | Package | Ver | Purpose | Patched |
 |---|---|---|---|
-| `@earendil-works/pi-coding-agent` | 1.3.0 | pi itself | 3 core patches |
-| `pi-codex-goal` | 0.6.1 (pinned) | `/goal` | no |
-| `pi-mcp-adapter` | 5.3.1 (pinned) | one `mcp` proxy tool, lazy servers | **config** |
+| `@earendil-works/pi-coding-agent` | 1.3.0 | pi itself | 4 core patches |
 
-**Pinned versions** live in `settings.json` and `install.sh`'s package list;
-change both. To move a pin: edit the source in both, then
-`pi install npm:<pkg>@<ver>` (a bare `pi update <source>` reported success
-without installing), then re-check the settings entry kept its shape.
+No pi packages: `settings.json` has no `packages`. A future one goes there
+and in `install.sh`, pinned; move a pin with `pi install npm:<pkg>@<ver>` (a
+bare `pi update <source>` reported success without installing).
 
 ### Removed — do not reinstall
 
@@ -153,7 +142,11 @@ commands as successes**), `claude-agent-sdk-pi`, `@sting8k/pi-vcc`,
 `@marckrenn/pi-sub-bar` (+324 ms, every provider off, two patches to stop it
 crashing pi), `pi-tool-display` (rewrote stored messages, then spliced the
 whole context on every LLM call to undo it), `@benvargas/pi-claude-code-use`
-(`mcp__` aliasing Anthropic no longer needs; see `anthropic-sub.ts`).
+(`mcp__` aliasing Anthropic no longer needs; see `anthropic-sub.ts`),
+`pi-mcp-adapter` (+33 ms per start, 85 MB, a 3.8k-char `mcp` tool on every
+request, and it wrote `-builtin:mcp` into `settings.json` itself; pi's built-in
+client replaces it), `pi-codex-goal` (vendored as `extensions/goal`; the npm
+copy would register the goal tools twice).
 `verify-patches.sh` `REMOVED_PKGS` must match this list; it fails on any trace.
 
 ### One install, no duplicates
@@ -176,16 +169,21 @@ because the lockfile stores the links relative to the checkout.
 
 ## MCP servers
 
-Config: `~/.config/mcp/mcp.json` (backed up as `pi-setup/mcp.json`). Do not
-create `~/.pi/agent/mcp.json` — the adapter also reads it, so servers would
-load twice. Lazy: nothing connects until a tool is called.
+pi's built-in client reads `~/.pi/agent/mcp.json` (source: `pi-setup/mcp.json`).
+Tools are `mcp__<server>__<tool>`, called from codemode; the model learns the
+servers from the `<mcp_servers>` prompt section. **Every server needs a
+`description`**: without one its line changes when it connects. `mcp-index.js`
+makes connecting lazy: a server starts when a script names it, a discovery
+call or resource tool needs it, or `/mcp` runs; a failed one is retried on the
+next call that needs it. Only `direct`-exposure servers connect at startup.
+Rarely used servers stay in the file with `"enabled": false`; `/mcp` turns one on.
 
 | Server | Notes |
 |---|---|
 | `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.11.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
-| `astro` | `127.0.0.1:8089/mcp`, `auth: false`; runs inside the Astro Mac app (Settings → MCP Server) |
-| `paper` | `127.0.0.1:29979/mcp`, `auth: false`; inside Paper Desktop, **read+write** on the open file |
-| `cloudflare*` | remote HTTP, `protocolVersion: "auto"` |
+| `astro` | `127.0.0.1:8089/mcp`; runs inside the Astro Mac app (Settings → MCP Server) |
+| `paper` | `127.0.0.1:29979/mcp`; inside Paper Desktop, **read+write** on the open file |
+| `cloudflare*` | remote HTTP; `cloudflare` and `cloudflare-bindings` use OAuth |
 
 **chrome-devtools flags are load-bearing.** `--isolated` (the default profile
 is persistent, single-browser and readable by the agent),
@@ -199,13 +197,9 @@ under `~` without its own package.json, npx reads `~/package.json`'s bun
 Pin the version, never `@latest`: a lazy spawn re-resolves on every cold start.
 File-writing tools are confined to the OS temp dir.
 
-**`auth` must be `"oauth"`, never `true`.** `true` is not legal and fails
-silently: no OAuth, no bearer, 401. First connect: `/mcp-auth <key>`, or
-headless `mcp({ action: "auth-start", server })` → approve → `auth-complete`
-with the `redirectUrl`. Tokens live in the macOS Keychain.
-
-Result rendering: `settings.toolResultRendering: "boxed"` restores the boxed
-row; `collapsedResultLines` (1–3) sets collapsed height.
+`auth` takes only `{ "provider": "<pi login>" }`; the adapter's `"oauth"` or
+`false` fails validation. OAuth needs no key: a server that answers 401 needs
+sign-in, `/mcp login <server>` or `pi mcp login <server>` from a shell. Tokens live in `~/.pi/agent/mcp-auth.json` (mode 0600).
 
 ## Extensions (`extensions/`)
 
@@ -234,6 +228,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
+| `goal/` | `/goal`, `/create-goal` and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it |
 | `tools/` | custom tools |
 
 ### guardrails — the comment gate, and where the rules live
@@ -528,7 +523,7 @@ injected in the `context` hook telling the model to call that tool
    --mode --session-id`); pi 0.84's #7327 silently killed every sub-agent that
    way. When a release touches model resolution, tool filtering or CLI
    arguments, call one real sub-agent before declaring it clean.
-3. **pi core update** → re-derive the 3 core patches against the new stock
+3. **pi core update** → re-derive the 4 core patches against the new stock
    files (never blind-copy; see `pi-migrations.md`) + the width patch. The
    `@mariozechner/*` compat aliases will eventually go — then rename imports.
 4. **Any `pi install` / package update** → `verify-patches.sh` (width patcher

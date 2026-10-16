@@ -86,9 +86,10 @@ the tools it has. Pick by what you need back:
   already sized for the model to read small text.
 - **`search_sessions`** and **`read_session`** pull context out of any past
   conversation.
-- **codemode** batches dozens of tool calls in one script, and one **`mcp`** proxy
-  reaches 19 MCP servers (Chrome DevTools, Cloudflare, Paper, Astro) that only
-  connect when first used.
+- **codemode** batches dozens of tool calls in one script, and also calls the
+  tools of 19 MCP servers (Chrome DevTools, Cloudflare, Paper, Astro; 6 on by
+  default) through pi's own MCP client, patched to connect a server only when
+  it is first used.
 - **13 skills** load on demand: debugging, code review, TDD, design ports, git,
   SEO data, server work over ssh, and more.
 
@@ -290,9 +291,10 @@ bug, and [`pi-setup/README.md`](pi-setup/README.md) for the full inventory.
   is why the prompt files are still named `*.amp.*`.
 - [bdsqqq/dots](https://github.com/bdsqqq/dots): the sub-agent wiring and
   `delegate` began as a port from there.
-- The packages it runs: [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal)
-  and [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter). Claude Max
-  support began with Ben Vargas's [pi-claude-code-use](https://github.com/ben-vargas/pi-packages).
+- `/goal` is [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal), vendored.
+  MCP ran through [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter)
+  until pi shipped its own client. Claude Max support began with Ben Vargas's
+  [pi-claude-code-use](https://github.com/ben-vargas/pi-packages).
 - Skills adapted from Matt Pocock (`mat-*`), dmmulroy (`dm-*`) and Cursor (`c-*`).
 - Ghostty theme palettes inspired by [opencode](https://github.com/anomalyco/opencode).
 

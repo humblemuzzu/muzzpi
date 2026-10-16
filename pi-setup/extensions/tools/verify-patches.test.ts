@@ -23,7 +23,8 @@ function healthyHome(): string {
 		copyFileSync(join(PI_SETUP, "agents", f), join(agent, "agents", f));
 	}
 
-	writeFileSync(join(agent, "settings.json"), JSON.stringify({ packages: ["npm:pi-codex-goal@0.6.0"] }));
+	writeFileSync(join(agent, "settings.json"), JSON.stringify({ packages: ["npm:pi-some-allowed-pkg@1.0.0"] }));
+	copyFileSync(join(PI_SETUP, "mcp.json"), join(agent, "mcp.json"));
 	return home;
 }
 
@@ -39,9 +40,29 @@ function verdict(lines: string[], label: string): string | undefined {
 describe("verify-patches.sh", () => {
 	test("a healthy home passes every covered check", () => {
 		const lines = audit(healthyHome());
-		for (const label of ["agent prompts", "removed packages"]) {
+		for (const label of ["agent prompts", "removed packages", "MCP:"]) {
 			expect(verdict(lines, label)).toStartWith("PASS");
 		}
+	}, 60_000);
+
+	test("the adapter's MCP config fails and every problem is named", () => {
+		const home = healthyHome();
+		const agent = join(home, ".pi", "agent");
+		writeFileSync(join(agent, "settings.json"), JSON.stringify({ extensions: ["-builtin:mcp"] }));
+		writeFileSync(join(agent, "mcp.json"), JSON.stringify({ mcpServers: { a: { url: "http://x", auth: "oauth" }, b: { url: "http://y", description: "ok", auth: { provider: "github" } } } }));
+		const line = verdict(audit(home), "MCP:");
+		expect(line).toStartWith("FAIL");
+		expect(line).toContain("a has no description");
+		expect(line).toContain("a has the adapter's auth key");
+		expect(line).not.toContain("b has");
+		expect(line).toContain("settings.json disables builtin:mcp");
+	}, 60_000);
+
+	test("unreadable MCP files fail instead of passing", () => {
+		const home = healthyHome();
+		unlinkSync(join(home, ".pi", "agent", "settings.json"));
+		writeFileSync(join(home, ".pi", "agent", "mcp.json"), "{ not json");
+		expect(verdict(audit(home), "MCP:")).toStartWith("FAIL");
 	}, 60_000);
 
 	test("a missing agent prompt fails and is named", () => {

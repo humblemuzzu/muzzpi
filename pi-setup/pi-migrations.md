@@ -12,6 +12,33 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## Setup on pi 1.3.0 (2026-10-16): built-in MCP, a 4th core patch, psst and goal in-house
+
+- `pi-codex-goal` 0.6.1 vendored as `extensions/goal` and bundled (it was 40
+  TypeScript files through jiti on every start). Changed: model text (no
+  `pi__` bridge naming, audit rules said once: guidelines 2,068 to 905 chars,
+  compact continuation ~1,294 to 728), unsent `promptSnippet`s dropped, timer
+  callbacks guarded. Logic and the stored entry type are upstream's, so a
+  future upstream release is merged by diffing its `src/` against 0.6.1.
+
+- `pi-mcp-adapter` removed for pi's built-in client. **New core patch
+  `mcp-index.js`** (stock `dist/extensions/mcp/index.js` of 1.3.0, every change
+  marked `LOCAL PATCH: lazy MCP connect`): servers connect when a call needs
+  them, not at session start; a script that only describes the namespaces it
+  names starts only those; `reachesServer` matches the namespace exactly (stock
+  `includes` made `mcp__cloudflare_docs` reach `mcp__cloudflare`); a failed
+  server is retried by the next call that needs it; `/mcp` connects what it
+  shows. Re-derive by re-applying those hunks to the new stock file;
+  `update-pi.sh` lists it as `extensions/mcp/index.js=mcp-index.js`.
+- Config moved to `~/.pi/agent/mcp.json`: `auth`, `protocolVersion` and the
+  adapter's `settings` block dropped, a `description` per server, 13 rarely used
+  Cloudflare servers `enabled: false`. OAuth tokens: sign in again with
+  `/mcp login <server>`; the adapter's Keychain entries are unused.
+- `psst-cli` (and `better-sqlite3`, its native addon) removed from the tools
+  extension: `lib/psst.ts` reads the vault with `node:sqlite` + `node:crypto`
+  and writes through the `psst` CLI. `muzzpi-computer` must be rebuilt after
+  this (its bundle imported `psst-cli`).
+
 ## Packages on pi 1.3.0 (2026-10-16): goal 0.6.1, mcp-adapter 5.3.1, chrome-devtools-mcp 1.11.0
 
 - `pi-codex-goal` 0.6.0 → 0.6.1: one guard in `before_agent_start` for

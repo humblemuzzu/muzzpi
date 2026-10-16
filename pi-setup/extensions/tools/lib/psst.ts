@@ -1,13 +1,10 @@
 /**
- * psst vault integration — loads secrets from the global psst vault,
- * injects them into bash subprocess env vars, scrubs them from output.
+ * psst vault integration — loads secrets from the psst vault, injects them
+ * into bash subprocess env vars, scrubs them from output.
  *
- * vault resolution order:
- *   1. local vault (cwd/.psst/) — for per-project secrets
- *   2. global vault (~/.psst/) — for cross-project secrets
- *
- * tags filter which secrets are loaded. set PSST_TAGS env var or
- * use /psst-tag command. cleared = all secrets loaded.
+ * The vault is read here directly (node:sqlite + node:crypto); writes go
+ * through the `psst` CLI, which owns the format (history, pruning).
+ * /psst-tag filters which secrets are loaded; cleared = all of them.
  *
  * the agent never sees secret values — only names in the system prompt,
  * and $NAME references in bash commands that resolve at spawn time.
@@ -20,7 +17,8 @@
  *      *PASSWORD*) — these come from the shell and could be dumped via `env`
  */
 
-import { Vault } from "psst-cli";
+import { execFile, spawn } from "node:child_process";
+import { createDecipheriv, createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,45 +31,136 @@ export interface SecretEntry {
 	tags: string[];
 }
 
-// --- vault resolution ---
+// --- the vault: psst's own layout and crypto ---
+
+const VAULT_DB = "vault.db";
+const KEYCHAIN_SERVICE = "psst";
+const KEYCHAIN_ACCOUNT = "vault-key";
+const GCM_TAG_BYTES = 16;
+/** the keychain is asked again at most this often, after a miss or a key that fails to decrypt. */
+const KEY_RETRY_MS = 30_000;
+
+interface VaultLocation {
+	dir: string;
+	global: boolean;
+}
 
 /**
- * find the best vault path: local first, then global.
- * matches psst-cli's own resolution logic.
+ * <cwd>/.psst before ~/.psst; in each, psst's own order: the legacy layout,
+ * then envs/default. Only SQLite vaults: psst's AWS backend has no vault.db.
  */
-function findVaultPath(): string | null {
-	// local vault: <cwd>/.psst/
-	const localPath = Vault.findVaultPath({ global: false });
-	if (localPath) return localPath;
+function findVault(): VaultLocation | undefined {
+	for (const global of [false, true]) {
+		const base = path.join(global ? os.homedir() : process.cwd(), ".psst");
+		for (const dir of [base, path.join(base, "envs", "default")]) {
+			if (fs.existsSync(path.join(dir, VAULT_DB))) return { dir, global };
+		}
+	}
+	return undefined;
+}
 
-	// global vault: ~/.psst/
-	const globalPath = Vault.findVaultPath({ global: true });
-	if (globalPath) return globalPath;
+/** psst accepts a base64 32-byte key as is and hashes anything else (a password). */
+function keyFromString(secret: string): Buffer {
+	const decoded = Buffer.from(secret, "base64");
+	return decoded.length === 32 ? decoded : createHash("sha256").update(secret).digest();
+}
 
-	return null;
+function readKeychain(): Promise<string | undefined> {
+	const lookup: [string, string[]] | undefined =
+		process.platform === "darwin"
+			? ["security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"]]
+			: process.platform === "linux"
+				? ["secret-tool", ["lookup", "service", KEYCHAIN_SERVICE, "account", KEYCHAIN_ACCOUNT]]
+				: undefined;
+	if (!lookup) return Promise.resolve(undefined);
+	return new Promise((resolve) => {
+		execFile(lookup[0], lookup[1], { timeout: 10_000 }, (error, stdout) => resolve(error ? undefined : stdout.trim() || undefined));
+	});
+}
+
+let keychain: { key: Promise<Buffer | undefined>; readAt: number } | undefined;
+
+/** `rejected`: the key in hand failed to decrypt, so a re-keyed vault needs a fresh one. */
+async function vaultKey(rejected = false): Promise<Buffer | undefined> {
+	const password = process.env.PSST_PASSWORD;
+	if (password) return keyFromString(password);
+	const due = keychain !== undefined && Date.now() - keychain.readAt > KEY_RETRY_MS && (rejected || !(await keychain.key));
+	if (!keychain || due) {
+		keychain = { key: readKeychain().then((secret) => (secret ? keyFromString(secret) : undefined)), readAt: Date.now() };
+	}
+	return keychain.key;
+}
+
+interface SecretRow {
+	name: string;
+	encrypted_value: Uint8Array;
+	iv: Uint8Array;
+	tags: string | null;
+}
+
+let sqlite: typeof import("node:sqlite") | undefined;
+
+/** node:sqlite warns once that it is experimental; on pi's stderr that is noise over the TUI. */
+function loadSqlite(): typeof import("node:sqlite") {
+	if (sqlite) return sqlite;
+	const emitWarning = process.emitWarning;
+	process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
+		const type = typeof rest[0] === "string" ? rest[0] : (rest[0] as { type?: string } | undefined)?.type;
+		if (type === "ExperimentalWarning" && String(warning).includes("SQLite")) return;
+		return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
+	}) as typeof process.emitWarning;
+	try {
+		sqlite = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
+		return sqlite;
+	} finally {
+		process.emitWarning = emitWarning;
+	}
+}
+
+function readRows(dbPath: string): SecretRow[] {
+	const db = new (loadSqlite().DatabaseSync)(dbPath, { readOnly: true });
+	try {
+		return db.prepare("SELECT name, encrypted_value, iv, tags FROM secrets ORDER BY name").all() as unknown as SecretRow[];
+	} finally {
+		db.close();
+	}
+}
+
+/** AES-256-GCM as written by WebCrypto: the 16-byte tag is the tail of the ciphertext. */
+function decrypt(row: SecretRow, key: Buffer): string {
+	const sealed = Buffer.from(row.encrypted_value);
+	const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(row.iv));
+	decipher.setAuthTag(sealed.subarray(sealed.length - GCM_TAG_BYTES));
+	return Buffer.concat([decipher.update(sealed.subarray(0, sealed.length - GCM_TAG_BYTES)), decipher.final()]).toString("utf8");
+}
+
+/** changes on every write, so a cached read is reused until psst writes again. */
+function vaultStamp(dbPath: string): string {
+	return [dbPath, `${dbPath}-wal`]
+		.map((file) => {
+			try {
+				const st = fs.statSync(file);
+				return `${st.mtimeMs}:${st.size}`;
+			} catch {
+				return "-";
+			}
+		})
+		.join("|");
 }
 
 // --- loading ---
 
-let cachedSecrets: SecretEntry[] | null = null;
-let cacheExpiry = 0;
-const CACHE_TTL_MS = 30_000; // 30 seconds — balance between freshness and vault I/O
+let cached: { stamp: string; secrets: SecretEntry[] } | undefined;
 
 /** active tag filter. empty = load all secrets. */
 let activeTags: string[] = [];
 
 export function setActiveTags(tags: string[]): void {
 	activeTags = tags;
-	invalidateCache();
 }
 
 export function getActiveTags(): string[] {
 	return [...activeTags];
-}
-
-export function invalidateCache(): void {
-	cachedSecrets = null;
-	cacheExpiry = 0;
 }
 
 /**
@@ -79,42 +168,81 @@ export function invalidateCache(): void {
  * used for: bash env injection, system prompt (names only).
  */
 export async function loadSecrets(): Promise<SecretEntry[]> {
-	const now = Date.now();
-	if (cachedSecrets && now < cacheExpiry) return cachedSecrets;
+	const vault = findVault();
+	if (!vault) return [];
+	const dbPath = path.join(vault.dir, VAULT_DB);
+	const tags = activeTags;
+	const stamp = `${dbPath}|${tags.join(",")}|${vaultStamp(dbPath)}`;
+	if (cached?.stamp === stamp) return cached.secrets;
 
-	const vaultPath = findVaultPath();
-	if (!vaultPath) return [];
-
-	try {
-		const vault = new Vault(vaultPath);
-		const unlocked = await vault.unlock();
-		if (!unlocked) {
-			vault.close();
-			return [];
-		}
-
-		const filterTags = activeTags.length > 0 ? activeTags : undefined;
-		const list = await vault.listSecrets(filterTags);
-		const secrets: SecretEntry[] = [];
-
-		for (const entry of list) {
-			const value = await vault.getSecret(entry.name);
-			if (value) {
-				secrets.push({
-					name: entry.name,
-					value,
-					tags: entry.tags ?? [],
-				});
-			}
-		}
-
-		vault.close();
-		cachedSecrets = secrets;
-		cacheExpiry = now + CACHE_TTL_MS;
-		return secrets;
-	} catch {
-		return [];
+	const key = await vaultKey();
+	if (!key) return [];
+	let secrets = readSecrets(dbPath, key, tags);
+	if (!secrets) {
+		const fresh = await vaultKey(true);
+		if (fresh && !fresh.equals(key)) secrets = readSecrets(dbPath, fresh, tags);
 	}
+	// a failure is never cached: an empty list would also switch off scrubbing
+	if (!secrets) return [];
+	cached = { stamp, secrets };
+	return secrets;
+}
+
+/**
+ * undefined when the vault cannot be read or no secret decrypts with this key.
+ * A single bad row is skipped, so the others are still injected and scrubbed.
+ */
+function readSecrets(dbPath: string, key: Buffer, filter: string[]): SecretEntry[] | undefined {
+	let rows: SecretRow[];
+	try {
+		rows = readRows(dbPath);
+	} catch {
+		return undefined;
+	}
+	const secrets: SecretEntry[] = [];
+	let failed = 0;
+	for (const row of rows) {
+		try {
+			const tags = JSON.parse(row.tags || "[]") as string[];
+			if (filter.length > 0 && !tags.some((tag) => filter.includes(tag))) continue;
+			const value = decrypt(row, key);
+			if (value) secrets.push({ name: row.name, value, tags });
+		} catch {
+			failed++;
+		}
+	}
+	return failed > 0 && secrets.length === 0 ? undefined : secrets;
+}
+
+/** `undefined` on success, else why it failed. Values go over stdin, never argv. */
+export async function saveSecret(name: string, value: string, tags: string[]): Promise<string | undefined> {
+	const vault = findVault();
+	if (!vault) return "No vault found. Run 'psst init' or 'psst init --global' first.";
+	const args = ["set", name, "--stdin", "--json", ...(vault.global ? ["--global"] : []), ...tags.flatMap((tag) => ["--tag", tag])];
+	// the read side ignores these, so the write must too or the two pick different vaults
+	const env = { ...process.env };
+	delete env.PSST_GLOBAL;
+	delete env.PSST_ENV;
+	return new Promise((resolve) => {
+		const child = spawn("psst", args, { cwd: process.cwd(), env, stdio: ["pipe", "pipe", "pipe"], timeout: 30_000 });
+		let out = "";
+		child.stdout.on("data", (chunk) => (out += chunk));
+		child.stderr.on("data", (chunk) => (out += chunk));
+		child.on("error", (error: NodeJS.ErrnoException) =>
+			resolve(error.code === "ENOENT" ? "the psst CLI is not on PATH" : error.message),
+		);
+		child.on("close", (code) => {
+			const reply = out.split("\n").find((line) => line.startsWith("{"));
+			let result: { success?: boolean; error?: string } = {};
+			try {
+				result = reply ? JSON.parse(reply) : {};
+			} catch {}
+			if (code === 0 && result.success) return resolve(undefined);
+			resolve(result.error ?? (out.trim() || (code === null ? "psst timed out" : `psst exited with ${code}`)));
+		});
+		child.stdin.on("error", () => {});
+		child.stdin.end(value);
+	});
 }
 
 // --- comprehensive scrubbing values ---
