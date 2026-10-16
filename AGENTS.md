@@ -193,7 +193,9 @@ is persistent, single-browser and readable by the agent),
 to Google, trace URLs to CrUX). **Its arg parser is not strict** — a misspelled
 flag is only warned about (`Unknown arguments`); confirm a flag by its startup
 notice disappearing. `CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY=1` stops it applying
-an ambient `~/.config/cd4a/config.json`.
+an ambient `~/.config/cd4a/config.json`. **Keep `"cwd": "/tmp"`**: from any folder
+under `~` without its own package.json, npx reads `~/package.json`'s bun
+`devEngines` and refuses to start (`EBADDEVENGINES`).
 Pin the version, never `@latest`: a lazy spawn re-resolves on every cold start.
 File-writing tools are confined to the OS temp dir.
 
