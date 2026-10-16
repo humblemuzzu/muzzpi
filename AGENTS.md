@@ -32,7 +32,7 @@ Write the one-line rule and delete whatever it supersedes.
 ## Providers and defaults
 
 ```
-pi CLI (v1.2.0) — @earendil-works/pi-coding-agent
+pi CLI (v1.3.0) — @earendil-works/pi-coding-agent
   ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)   [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
@@ -132,7 +132,7 @@ skills do not contain `mcp-scripting`. pi's built-in `mcp` extension is
 
 | Package | Ver | Purpose | Patched |
 |---|---|---|---|
-| `@earendil-works/pi-coding-agent` | 1.2.0 | pi itself | 3 core patches |
+| `@earendil-works/pi-coding-agent` | 1.3.0 | pi itself | 3 core patches |
 | `pi-codex-goal` | 0.6.0 (pinned) | `/goal` | no |
 | `pi-mcp-adapter` | 5.1.0 (pinned) | one `mcp` proxy tool, lazy servers | **config** |
 

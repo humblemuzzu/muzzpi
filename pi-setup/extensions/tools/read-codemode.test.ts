@@ -2,11 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { runCodemode } from "./codemode-harness";
 import { createReadTool, NORMAL_LIMITS } from "./read";
-
-const { executeCodemode } = await import(
-	join(import.meta.dir, "node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js")
-);
 
 const dir = fs.mkdtempSync(join(os.tmpdir(), "read-codemode-"));
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -25,8 +22,7 @@ const ctx = {
 };
 
 async function script(code: string): Promise<string> {
-	const r = await executeCodemode("cm", { code }, undefined, undefined, ctx);
-	return r.content.map((c: any) => c.text).join("");
+	return (await runCodemode(ctx, code)).text;
 }
 
 describe("read inside a real codemode script", () => {

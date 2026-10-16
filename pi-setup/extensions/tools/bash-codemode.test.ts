@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { createBashTool } from "./bash";
-
-const { executeCodemode } = await import(
-	join(import.meta.dir, "node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js")
-);
+import { runCodemode } from "./codemode-harness";
 
 const bash = createBashTool() as any;
 const bashCtx = { cwd: "/tmp", sessionManager: { getSessionId: () => "bash-codemode-test" } };
@@ -20,8 +16,7 @@ const ctx = {
 };
 
 async function script(code: string): Promise<{ text: string; isError: boolean }> {
-	const r = await executeCodemode("cm", { code }, undefined, undefined, ctx);
-	return { text: r.content.map((c: any) => c.text).join(""), isError: r.isError === true };
+	return runCodemode(ctx, code);
 }
 
 describe("bash inside a real codemode script", () => {

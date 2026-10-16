@@ -12,6 +12,39 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## 1.3.0 (2026-10-16) — from 1.2.0, no patch drift
+
+**Patch drift (stock 1.2.0 vs stock 1.3.0, registry tarballs):** none.
+`resource-loader.js`, `session-selector.js`, `keybindings.js` byte-identical,
+copied. pi-tui, pi-agent-core and pi-mcp dist unchanged; width patcher clean.
+`system-prompt.js` and every `core/tools/*` definition unchanged, so the
+prompt and tool schemas (cache prefix) are identical.
+
+**Changes checked against our setup:**
+- `--model` resolver rewritten (#10160): a `provider/id` whose provider has
+  that literal id resolves to it. All our ids are qualified; only
+  `deepseek/deepseek-v4-pro` is also a raw id (openrouter, vercel-ai-gateway),
+  and the named provider still wins while it has auth. `enabledModels` scope
+  resolves it to `deepseek` only, no ambiguity warning.
+- Resume restores the transcript's tools only when `--tools` is absent or
+  `+/-` modifiers (`usesDefaultTools`). Children pass an explicit list, so
+  `continueId` resumes are unchanged.
+- Codemode admits at most 2 live workers per process, counted until the
+  worker exits (Bun can trail the result). A 3rd parallel call errors;
+  `codemode-harness.ts` retries admission for the back-to-back test scripts.
+- Overlay `done()` hides its own overlay, not the topmost: a fix for us.
+- Malformed final tool-call JSON now fails validation (`argumentsError`)
+  instead of running with a parsed prefix.
+- Thinking from another model is dropped on a model switch, not sent as text.
+- pi-ai no longer exports `AssistantMessageFrame*`; we never imported it.
+- `kimi-coding` moved to Chat Completions at `/coding/v1`; we override nothing.
+- `/share` defaults to `sessionShareDestination: "auto"` (Radius when logged in).
+- Verified: staged 1.3.0 in /tmp (boot, smoke, real `finder` child on
+  `deepseek/deepseek-flash · high`, canary 4/4), then `update-pi.sh`:
+  `verify-patches.sh` 16/16 PASS, smoke reply, canary 4/4, `bun test`.
+
+---
+
 ## pi-claude-code-use → `anthropic-sub.ts` (2026-10-16)
 
 Measured on Claude Max OAuth with extra usage off (a 400 "You're out of extra
