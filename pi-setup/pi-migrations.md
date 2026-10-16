@@ -12,6 +12,20 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## Packages on pi 1.3.0 (2026-10-16): goal 0.6.1, mcp-adapter 5.3.1, chrome-devtools-mcp 1.11.0
+
+- `pi-codex-goal` 0.6.0 → 0.6.1: one guard in `before_agent_start` for
+  custom-message starts (0.6.0 read `event.prompt`, undefined there, and threw).
+  Tool schemas and prompt text byte-identical.
+- `pi-mcp-adapter` 5.1.0 → 5.3.1: MCP SDK 2.3.1 (GHSA-6qxp-vccf-f47h); a server
+  URL that redirects to another host is no longer followed. `scriptMode === true`
+  gate, `namespaceProxyTools === false`, the `mcp` tool's parameters and the
+  skill list unchanged; peers and engines identical.
+- `chrome-devtools-mcp` 1.7.0 → 1.11.0: our three flags unchanged (launch
+  checked against a flagless control). New: ambient `~/.config/cd4a/config.json`
+  discovery (off via `CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY=1`), unknown flags
+  are warned about, page-scoped tools require `pageId`, 7 new tools.
+
 ## 1.3.0 (2026-10-16) — from 1.2.0, no patch drift
 
 **Patch drift (stock 1.2.0 vs stock 1.3.0, registry tarballs):** none.
