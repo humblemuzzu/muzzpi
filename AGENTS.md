@@ -182,7 +182,7 @@ load twice. Lazy: nothing connects until a tool is called.
 
 | Server | Notes |
 |---|---|
-| `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.7.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
+| `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.11.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
 | `astro` | `127.0.0.1:8089/mcp`, `auth: false`; runs inside the Astro Mac app (Settings → MCP Server) |
 | `paper` | `127.0.0.1:29979/mcp`, `auth: false`; inside Paper Desktop, **read+write** on the open file |
 | `cloudflare*` | remote HTTP, `protocolVersion: "auto"` |
@@ -191,7 +191,9 @@ load twice. Lazy: nothing connects until a tool is called.
 is persistent, single-browser and readable by the agent),
 `--no-usage-statistics` + `--no-performance-crux` (both default ON; telemetry
 to Google, trace URLs to CrUX). **Its arg parser is not strict** — a misspelled
-flag is silently ignored; confirm a flag by its startup notice disappearing.
+flag is only warned about (`Unknown arguments`); confirm a flag by its startup
+notice disappearing. `CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY=1` stops it applying
+an ambient `~/.config/cd4a/config.json`.
 Pin the version, never `@latest`: a lazy spawn re-resolves on every cold start.
 File-writing tools are confined to the OS temp dir.
 
