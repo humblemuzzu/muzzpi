@@ -36,7 +36,7 @@ stock pi. Nothing is forked.
 | Sub-agents | none, by design | 6, each with its own model and thinking level, resumable |
 | Editing | `edit` + `write` | the same `edit` + `write`, plus undo/redo that refuses to clobber drift, permission rules, a comment gate, and errors that show the closest line |
 | Bash | timeout optional, no default | timeout required (1–600s), killed after 300s of no output and no CPU |
-| Command rules | none | `permissions.json`: no `git add -A`, no force push, no shelling out to other agents; deletes and data loss ask first |
+| Command rules | none | `permissions.json`: no `git add -A`, no force push, no shelling out to other agents; local deletes go to the Trash; an optional approval picker for data loss (off by default) |
 | Secrets | in the clear | scrubbed from every tool result before the model sees it |
 | Web | none | `web_search`, `read_web_page` with a Q&A child |
 | GitHub | none | 7 tools over `gh api`: read, search, glob, list, commits, diff |
@@ -271,7 +271,7 @@ muzzpi/
 │   │   └── tools/          the 30 tools and their tests (bun test)
 │   ├── agents/             system prompt, working rules, one prompt per sub-agent
 │   ├── agent-models.json   which model each sub-agent runs on
-│   ├── permissions.json    what bash may never do, and what needs your approval
+│   ├── permissions.json    what bash may never do, and what can ask for approval
 │   ├── pi-core-patches/    the 3 patched pi files + the pi-tui width patch
 │   ├── config-skills/      13 skills
 │   └── *.md                migration records and investigations

@@ -3,12 +3,16 @@
  * sub-agent, `pi -p`) nobody can answer, so the call is refused and the agent
  * is told to hand the exact command back. Every decision is appended to
  * approvals.jsonl, so "what did the agent delete?" has an answer.
+ *
+ * Off unless ext-config.json has `"approvals": { "enabled": true }`: when off,
+ * every request is approved without a picker and logged as "auto".
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { canShowChoiceDialog, openChoiceDialog } from "./choice-dialog";
+import { getExtensionConfig } from "./config";
 import { makeScrubber } from "./psst";
 
 export interface ApprovalRequest {
@@ -37,6 +41,10 @@ interface UiContext {
 	sessionManager?: { getSessionId(): string };
 }
 
+function approvalsEnabled(): boolean {
+	return getExtensionConfig("approvals", { enabled: false }).enabled === true;
+}
+
 function approvalLogPath(): string {
 	return process.env.PI_APPROVALS_LOG || path.join(os.homedir(), ".pi", "agent", "approvals.jsonl");
 }
@@ -45,7 +53,7 @@ function approvalLogPath(): string {
 async function record(
 	ctx: UiContext,
 	request: ApprovalRequest,
-	decision: "approved" | "denied" | "no-ui",
+	decision: "approved" | "denied" | "no-ui" | "auto",
 	feedback?: string,
 ): Promise<void> {
 	try {
@@ -128,6 +136,10 @@ export async function requestApproval(
 	signal?: AbortSignal,
 ): Promise<ApprovalAnswer> {
 	const context = ctx ?? {};
+	if (!approvalsEnabled()) {
+		await record(context, request, "auto");
+		return { approved: true };
+	}
 	if (!context.hasUI || !context.ui) {
 		await record(context, request, "no-ui");
 		return {

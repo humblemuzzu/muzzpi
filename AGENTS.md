@@ -334,15 +334,18 @@ is decoded only when that alone makes oldText match, refused in prose files
 without escapes; `[REDACTED]` is never written over a real value. UTF-8 text
 only; no `replace_all`, delete or move (`trash <path>` / `git mv` in bash).
 
-- **This Mac: deletes ask first (`ask` rule; `trash` is the default). Over ssh: deletes run.** `lib/remote-command.ts`
+- **This Mac: deletes are rejected, the agent uses `trash`. Over ssh: deletes run.** `lib/remote-command.ts`
   splits out server parts (ssh args and heredocs, `rsync --delete` to a remote
   dest); local-only rules carry `where: "local"`; text it cannot place stays
   local; keep its real-bash oracle test green. Undo of a creation: `lib/trash.ts`.
-- **`ask` rules** (rm and other local deletes, destructive SQL, Docker volumes,
-  buckets, disks; MCP DELETE) go through `lib/approval.ts`: the picker (cursor on
-  Deny; Deny ends the turn with `terminate`, typed instructions deny but let the
-  agent continue), plain confirm in RPC, refused with no UI (sub-agents, `-p`),
-  logged to `~/.pi/agent/approvals.jsonl`. Reject beats ask beats allow.
+- **Approvals are off by default (yolo).** `ask` rules (destructive SQL, Docker
+  volumes, buckets, disks), MCP DELETE and any extension
+  that calls `requestApproval` go through `lib/approval.ts`, which approves
+  without a picker and logs `"auto"` to `~/.pi/agent/approvals.jsonl`.
+  `"approvals": { "enabled": true }` in `ext-config.json` (restart pi) brings back
+  the picker (cursor on Deny; Deny ends the turn with `terminate`, typed
+  instructions deny but let the agent continue), plain confirm in RPC, refused
+  with no UI (sub-agents, `-p`). Reject beats ask beats allow.
 - **The `ask` tool and the approval prompt share `lib/choice-dialog.ts`.** `ask`
   is parent-only: never add it to a sub-agent allowlist (`ask.test.ts` pins it).
   While a picker is open it emits `herdr:blocked` on `pi.events`, which herdr's
@@ -404,13 +407,8 @@ in `vision.test.ts`). Tiers: standard 1568px/1568 tokens, high-res (Claude
   (`buildSessionProjection`) plus in-flight calls and refuses before it.
 - Media type comes from the bytes, never the extension (a mismatch is a 400).
   sips ignores EXIF orientation, so `orient()` applies it.
-- `MAX_IMAGES_PER_CALL = 12`, truncating from the top. **Chromium returns BLANK
-  past 16384px** without erroring; `MAX_RENDERABLE_HEIGHT` clips and reports it.
-  Full-page captures scroll through once first, or lazy content is missing.
-- 0x0, truncated and unreadable files throw `UnusableImageError`; `read` has
-  no raw-bytes fallback.
-- `collectSubAgentImages` returns the **2 most recent** images from
-  oracle/delegate/code_review/chad.
+- **Chromium returns BLANK past 16384px** without erroring; `MAX_RENDERABLE_HEIGHT`
+  clips and reports it. Full-page captures scroll through once first, or lazy content is missing.
 - macOS: every tab is its own `NSWindow`; `CGWindowListCopyWindowInfo` option
   `0`, never `1`. A window is captured where it is first; only after a failure,
   or for a Stage Manager thumbnail (it captures as a tiny preview), is its app

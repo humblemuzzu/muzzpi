@@ -134,9 +134,9 @@ and `install.sh` does not create them.
 ### Permissions
 - Blocks `git add -A` / `git add .` (forces explicit staging)
 - Blocks force push
-- Asks before every way to delete on this Mac — `rm`, `rmdir`, `unlink`, `shred`, `find -delete`, `git rm`, `git clean`, delete calls in scripts (`trash` is the default and never asks). Deletes inside `ssh host '...'` run normally.
-- Asks before destroying data, here or on a server: SQL `DROP`/`TRUNCATE`/`DELETE` without `WHERE`, Docker volumes, cloud buckets and databases, disks, and an MCP `DELETE`.
-- The ask is a picker: Allow, Deny (the agent stops and waits), or type what to do instead (the agent carries on with that). No UI (a sub-agent) means refused; every answer, and anything you typed, goes to `~/.pi/agent/approvals.jsonl`.
+- Blocks every way to delete on this Mac — `rm`, `rmdir`, `unlink`, `shred`, `find -delete`, `git rm`, `git clean`, delete calls in scripts; the agent uses `trash` instead. Deletes inside `ssh host '...'` run normally.
+- Approvals are **off by default**: destroying data (SQL `DROP`/`TRUNCATE`/`DELETE` without `WHERE`, Docker volumes, cloud buckets and databases, disks, an MCP `DELETE`) run without asking, logged as `auto`. Set `"approvals": { "enabled": true }` in `~/.pi/agent/ext-config.json` and restart pi to turn them on.
+- When on, the ask is a picker: Allow, Deny (the agent stops and waits), or type what to do instead (the agent carries on with that). No UI (a sub-agent) means refused; every answer, and anything you typed, goes to `~/.pi/agent/approvals.jsonl`.
 
 ### Pi Packages
 `settings.json` `packages` is the list: `pi-codex-goal`, `pi-mcp-adapter`.

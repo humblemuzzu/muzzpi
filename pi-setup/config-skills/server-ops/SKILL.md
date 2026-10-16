@@ -31,7 +31,7 @@ description: "rules for work on a server over ssh: deploys, cleanups, Docker, da
   ```
 
 - Deleting files on a server works normally (`rm`, `find -delete`, `rsync --delete`). Deleting files on the Mac does not; use `trash`.
-- Commands that destroy data (DROP / TRUNCATE / DELETE without WHERE, `docker volume rm`, `compose down -v`, bucket deletes, `mkfs`) open an Allow/Deny dialog for the user. If they already asked for it, run it; do not ask a second time in chat.
+- Commands that destroy data (DROP / TRUNCATE / DELETE without WHERE, `docker volume rm`, `compose down -v`, bucket deletes, `mkfs`) run without any dialog. If the user did not ask for it, ask in chat first; if they did, run it.
 
 ## What you may create
 

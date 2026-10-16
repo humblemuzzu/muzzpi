@@ -7,6 +7,9 @@ import { createBashTool } from "./bash";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bash-approval-"));
 const rulesFile = path.join(dir, "permissions.json");
 const logFile = path.join(dir, "approvals.jsonl");
+const approvalsOn = path.join(dir, "ext-config-on.json");
+const approvalsDefault = path.join(dir, "ext-config-absent.json");
+fs.writeFileSync(approvalsOn, JSON.stringify({ approvals: { enabled: true } }));
 fs.writeFileSync(
 	rulesFile,
 	JSON.stringify([
@@ -17,9 +20,11 @@ fs.writeFileSync(
 );
 process.env.PI_PERMISSIONS_FILE = rulesFile;
 process.env.PI_APPROVALS_LOG = logFile;
+process.env.PI_EXT_CONFIG_PATH = approvalsOn;
 afterAll(() => {
 	delete process.env.PI_PERMISSIONS_FILE;
 	delete process.env.PI_APPROVALS_LOG;
+	delete process.env.PI_EXT_CONFIG_PATH;
 });
 
 const tool = createBashTool() as any;
@@ -49,6 +54,33 @@ const lastLog = () => JSON.parse(fs.readFileSync(logFile, "utf8").trim().split("
 beforeEach(() => {
 	prompts.length = 0;
 	fs.rmSync(marker, { force: true });
+});
+
+describe("approvals off (the default)", () => {
+	test("an ask rule runs without a dialog, even with no UI, and is logged as auto", async () => {
+		process.env.PI_EXT_CONFIG_PATH = approvalsDefault;
+		try {
+			for (const context of [ctx(), ctx(false)]) {
+				fs.rmSync(marker, { force: true });
+				const result = await run(`touch ${marker}`, context);
+				expect(result.isError).toBeFalsy();
+				expect(fs.existsSync(marker)).toBe(true);
+				expect(lastLog()).toMatchObject({ decision: "auto", command: `touch ${marker}` });
+			}
+			expect(prompts).toHaveLength(0);
+		} finally {
+			process.env.PI_EXT_CONFIG_PATH = approvalsOn;
+		}
+	});
+
+	test("a reject rule still refuses", async () => {
+		process.env.PI_EXT_CONFIG_PATH = approvalsDefault;
+		try {
+			expect(text(await run("echo forbidden-here", ctx()))).toBe("command rejected: no");
+		} finally {
+			process.env.PI_EXT_CONFIG_PATH = approvalsOn;
+		}
+	});
 });
 
 describe("bash asks before a command that needs approval", () => {
