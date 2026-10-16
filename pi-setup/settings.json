@@ -45,7 +45,7 @@
   "tuiMode": "fullscreen",
   "packages": [
     "npm:pi-codex-goal@0.6.1",
-    { "source": "npm:pi-mcp-adapter@5.1.0", "skills": [] }
+    { "source": "npm:pi-mcp-adapter@5.3.1", "skills": [] }
   ],
   "terminal": {
     "clearOnShrink": false,

@@ -251,7 +251,7 @@ info "Installing pi packages..."
 # Mirror of settings.json "packages"; never re-add one AGENTS.md lists as removed.
 packages=(
     "npm:pi-codex-goal@0.6.1"
-    "npm:pi-mcp-adapter@5.1.0"
+    "npm:pi-mcp-adapter@5.3.1"
 )
 for pkg in "${packages[@]}"; do
     info "  Installing $pkg..."

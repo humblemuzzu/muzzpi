@@ -134,7 +134,7 @@ skills do not contain `mcp-scripting`. pi's built-in `mcp` extension is
 |---|---|---|---|
 | `@earendil-works/pi-coding-agent` | 1.3.0 | pi itself | 3 core patches |
 | `pi-codex-goal` | 0.6.1 (pinned) | `/goal` | no |
-| `pi-mcp-adapter` | 5.1.0 (pinned) | one `mcp` proxy tool, lazy servers | **config** |
+| `pi-mcp-adapter` | 5.3.1 (pinned) | one `mcp` proxy tool, lazy servers | **config** |
 
 **Pinned versions** live in `settings.json` and `install.sh`'s package list;
 change both. To move a pin: edit the source in both, then
