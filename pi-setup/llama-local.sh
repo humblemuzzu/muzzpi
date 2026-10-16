@@ -12,7 +12,8 @@
 #   - #24667 double-escaping: `\n` in a tool argument arrives as literal
 #     backslash-n, so every multi-line argument is corrupt (kills every edit)
 #   - #24178 parallel calls: `[f(a), f(b)]` is parsed as ONE mangled call
-# Neither errors — they silently produce garbage. Check with `llama-server --version`.
+# Neither errors — they silently produce garbage. Check with `llama-server --version`
+# (semver since 0.6.0, e.g. `0.6.0 (build 11429)`: compare the build number).
 
 set -euo pipefail
 

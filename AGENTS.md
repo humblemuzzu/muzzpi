@@ -478,7 +478,8 @@ edit there, deployed by `install.sh`, read at session start.
 
 **llama.cpp must be >= b10270** (b8680 mangles `lfm2` tool calls: `\n` arrives
 as a literal backslash-n, and `[f(a), f(b)]` parses as one call). Check
-`llama-server --version` first if local tool calling goes strange.
+`llama-server --version` first if local tool calling goes strange: releases are
+now semver (`0.6.0 (build 11429)`), so compare the build number.
 
 pi's own `/llama` uses provider `llama.cpp` (needs `/login llama.cpp`); ours is
 `/local` + provider `llama-local` in models.json (no login, always listed).
