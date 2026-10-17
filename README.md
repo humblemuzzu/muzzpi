@@ -1,302 +1,346 @@
 # muzzpi
 
-**pi, fully loaded.**
+**pi, fully loaded. Nothing forked.**
 
-My harness for [pi](https://pi.dev), the terminal coding agent. Six sub-agents
-that research, review and build in parallel. Web search, GitHub and screenshots
-built in. Edits you can undo. A TUI made for all-day sessions, with live theme
-and Ghostty previews. Everything vanilla pi leaves for you to build, already built.
+A harness for [pi](https://pi.dev), the terminal coding agent. Six sub-agents
+that research, review and build in parallel. Web, GitHub and screenshot tools.
+Edits you can undo. A TUI built for all-day sessions. And a pi that starts as
+fast as stock, with every patch inside.
 
-pi's homepage says *"There are many agent harnesses but this one is yours."* This
-one is mine. Built and used daily by [Muzzammil](https://itsmuzz.com) since March
-2026.
+**34** tools · **6** sub-agents · **19** MCP servers · **14** skills ·
+**0.27 s** to a ready prompt · on stock pi **1.3.0**
 
 ```bash
 git clone https://github.com/humblemuzzu/muzzpi.git && cd muzzpi
+npm install -g @earendil-works/pi-coding-agent@"$(cat pi-setup/pi-core-patches/base-version)"
 ./install.sh pi --dry-run    # every change it would make, nothing written
 ./install.sh pi
 ```
 
+The installer checks your pi before it touches anything, backs up whatever it
+overwrites, and ends with an audit that prints the exact fix for anything that
+did not land.
+
+Built and used daily by [Muzzammil](https://itsmuzz.com) since March 2026.
+
 ---
 
-## Why it exists
+## In daily use
 
-pi is deliberately small. Out of the box the model gets four tools (`read`,
-`bash`, `edit`, `write`), and the README says it *"skips features like sub-agents
-and plan mode. Ask Pi to build what you want."*
+The last 30 days, one machine:
 
-So I did. Everything here is an extension, a config file or a patch on top of
-stock pi. Nothing is forked.
+| | |
+|---|---|
+| Sessions | **196**, on 29 of the 30 days |
+| Tool calls | **18,905** |
+| Sub-agent runs | **1,016**: delegate 479 · chad 249 · read_web_page 103 · code_review 100 · oracle 23 · librarian 21 · read_session 21 · finder 20 |
+| Screenshots | 270 |
+| Web searches | 99 |
 
-## What vanilla pi doesn't have
+Every number in this README comes from the repo, those sessions, or a benchmark
+on an M4 Pro (48 GB, macOS 27).
 
-| | vanilla pi 1.1 | muzzpi |
+## Fast
+
+| | patched pi, the old way | muzzpi now |
+|---|---:|---:|
+| Open pi until you can type | 447 ms | **272 ms** |
+| Each sub-agent start | 348 ms | **186 ms** |
+| Full start, all 17 extensions | 376 ms | **211 ms** |
+| `pi --version` | 269 ms | **111 ms** |
+| Memory per pi process | 163 MB | **138 MB** |
+
+Medians of 11–15 runs, alternated between versions so load hits both equally.
+
+- **pi's own build recipe, on our patched files.** pi ships a fast prebuilt
+  copy of itself, but it was built before any patch, so a patched pi had to run
+  its slow loose files. [`build-pi-bundle.mjs`](pi-setup/pi-bundle/build-pi-bundle.mjs)
+  runs pi's own recipe on the patched files instead. On stock pi it reproduces
+  75 of pi's 80 files byte for byte; the other 5 are newer dependencies npm
+  resolved. It matches stock speed exactly (111 vs 109 ms) and refuses to build
+  when pi changes its recipe.
+- **MCP servers connect when first used.** Stock pi connects every server at
+  startup; its own prebuilt copy takes 733 ms to start with this setup.
+- **Each extension ships as one prebuilt file.** Sub-agents load the 4 they need,
+  not all 17.
+- **Every transcript row caches its render.** A 700k-token session types at
+  10 ms per keystroke; it was 180.
+
+Opening pi went from 1.1 s to 0.44 s to 0.27 s since March.
+
+## 01 · Six sub-agents
+
+Each is a fresh pi process with a short prompt naming exactly the tools it has.
+Pick by what you need back:
+
+| Agent | Returns | Default model |
 |---|---|---|
-| Tools the model gets | 4 on by default | 30 of its own, plus codemode and one lazy MCP proxy |
-| Sub-agents | none, by design | 6, each with its own model and thinking level, resumable |
-| Editing | `edit` + `write` | the same `edit` + `write`, plus undo/redo that refuses to clobber drift, permission rules, a comment gate, and errors that show the closest line |
-| Bash | timeout optional, no default | timeout required (1–600s), killed after 300s of no output and no CPU |
-| Command rules | none | `permissions.json`: no `git add -A`, no force push, no shelling out to other agents; local deletes go to the Trash; an optional approval picker for data loss (off by default) |
-| Secrets | in the clear | scrubbed from every tool result before the model sees it |
-| Web | none | `web_search`, `read_web_page` with a Q&A child |
-| GitHub | none | 7 tools over `gh api`: read, search, glob, list, commits, diff |
-| Screen | none | `screenshot` of any window, region or URL, sized to Claude's vision limits |
-| History | session picker | `search_sessions`, `read_session` |
-| Questions | none | `ask`: the agent puts its open questions to you in a picker; you pick or type your own answer |
-| Session list | stock | pinning (`Ctrl+B` in `/resume`) |
-| Comments | whatever the model writes | a gate that refuses a patch that is mostly commentary |
+| `finder` | file paths and line ranges | DeepSeek Flash |
+| `chad` | an answer with `path:line` evidence, verified vs inferred | DeepSeek Flash |
+| `oracle` | one verdict, its trade-offs and effort | Sonnet 5.5 |
+| `delegate` | finished work, resumable by `continueId` | Sonnet 5.5 |
+| `librarian` | how code works across GitHub repos you have not cloned | DeepSeek Flash |
+| `code_review` | a structured review of a diff described in plain words | Sonnet 5.5 |
 
-## The sub-agents
+- **Say it, get it.** *"Three chads on deepseek flash, medium thinking, in
+  parallel"* runs exactly that. Models live in one file,
+  [`agent-models.json`](pi-setup/agent-models.json); a name not on it is refused,
+  never swapped for the nearest one. Every result ends with the model and
+  thinking level that actually ran.
+- **chad cannot write.** No `edit` or `write`, and its bash runs under an
+  allowlist that refuses redirection, `sed -i`, interpreters and every git
+  command that mutates. Finding out is chad; doing is delegate.
+- **No fork bombs.** Only delegate can start another agent (finder). A chad swarm cannot spawn a swarm.
+- **A stalled child is killed, never left hanging**: 900 s without output.
+- `@oracle`, `@chad`, `@finder`, `@codereview`, `@task` in a message force that agent.
 
-Every sub-agent is a fresh pi process with its own short prompt naming exactly
-the tools it has. Pick by what you need back:
+## 02 · Edits you can take back
 
-| Agent | Returns | Use it to |
-|---|---|---|
-| `finder` | file paths and line ranges | locate code by concept, fast |
-| `chad` | an answer with `path:line` evidence, verified vs inferred | find out what is true; swarm several at once, one question each |
-| `oracle` | one verdict, trade-offs, effort | decide; review a plan or a hard bug |
-| `delegate` | finished work | hand off an independent task; resumable by `continueId` |
-| `librarian` | an explanation across repos | read code on GitHub you have not cloned |
-| `code_review` | a structured review | review a diff described in plain words |
+`edit` and `write` are pi's own tools with a thin layer on top.
 
-- **chad cannot write.** No `edit` or `write`, and its bash runs under an allowlist
-  that refuses redirection, `sed -i`, interpreters and every git subcommand that
-  mutates. Finding out is chad; doing is delegate.
-- **The spawn graph is acyclic and pinned by a test.** The only agent that can
-  start another is delegate (it can call finder). A chad swarm can never spawn
-  its own swarm.
-- **Models live in one file.** [`agent-models.json`](pi-setup/agent-models.json)
-  names a short list of models and a default per agent. Say *"three chads on
-  deepseek flash at medium"* and the parent passes exactly that. A model not on
-  the list is refused, never swapped for the nearest one. Every result ends with
-  the model and thinking level that actually ran.
-- **`@oracle`, `@chad`, `@finder`, `@codereview`, `@task`** in a message force
-  that agent.
+- Every change is saved to disk first, so `undo_edit` and `redo_edit` work across
+  restarts. They refuse when a later change or an outside edit touched the file.
+- A failed match names the first differing line, column and character.
+- [`permissions.json`](pi-setup/permissions.json): no `git add -A`, no force push,
+  no shelling out to other agents. Local `rm` is refused and points at `trash`;
+  over ssh, deletes run.
+- A comment gate refuses a patch that is mostly commentary.
 
-## The tools
+## 03 · Bash that cannot hang
 
-- **`edit`** and **`write`** are pi's own tools with a thin layer on top: every
-  change is recorded so `undo_edit` / `redo_edit` walk it back, even after a
-  restart.
-- **`web_search`** and **`read_web_page`**: fetch a page, or ask a question about
-  it and get an answer from a child agent.
-- **7 GitHub tools** read, search and diff any repo you can see, without cloning.
-- **`screenshot`** captures a window, a region of the screen or a whole web page,
-  already sized for the model to read small text.
+- Every command declares a timeout, 1–600 s.
+- No output **and** no CPU for 300 s: killed. A command busy at 100% CPU is left
+  alone; a machine that slept is not counted as hung.
+- A failed command is reported as failed, exit code and stderr intact.
+
+## 04 · Web, GitHub, screen, history
+
+- **`web_search`**, and **`read_web_page`**: fetch a page, or ask a question about
+  it and get the answer from a child agent.
+- **7 GitHub tools** read, search, glob, list and diff any repo `gh` can see,
+  without cloning.
+- **`screenshot`** captures a window, a screen region or a whole web page, sized
+  to Claude's vision limits so small text stays readable. The harness refuses a
+  request that would cross the API's 32 MiB limit, which pi does not check and
+  which breaks every later turn.
 - **`search_sessions`** and **`read_session`** pull context out of any past
   conversation.
-- **codemode** batches dozens of tool calls in one script, and also calls the
-  tools of 19 MCP servers (Chrome DevTools, Cloudflare, Paper, Astro; 6 on by
-  default) through pi's own MCP client, patched to connect a server only when
-  it is first used.
-- **15 skills** load on demand: debugging, code review, TDD, design ports, git,
-  SEO data, server work over ssh, Paper and Chrome DevTools design work, and more.
+- **`ask`** puts the agent's open questions to you in a picker.
 
-## The TUI
+## 05 · Codemode and 19 MCP servers
 
-- A box-drawn editor with model, context, cost and git branch on the border, and
-  a cache line under it: hit rate, read/write totals, time left on the cache.
-- `Ctrl+Shift+A` opens any sub-agent's live transcript.
-- `/studio` previews pi themes **and** your Ghostty theme, font and opacity live.
-  Esc reverts, Enter keeps.
-- `/stats` (`Ctrl+Shift+S`): an eight-tab usage dashboard over every session pi,
-  Claude Code, Codex and OpenCode left on the machine, deduplicated across all
-  four: cost, tokens, cache hits and busts, models, tools, sub-agents, projects
-  matched to commits, your work rhythm, and a wrapped card. Local and read-only.
-- `Ctrl+Shift+P` command palette, `/md` export, desktop notifications, auto-named sessions, a DeepSeek peak-pricing
-  clock, and `/ysk`, an opt-in side agent that flags what you might have missed.
-- Pin sessions with `Ctrl+B` in `/resume`.
-- A patched pi-tui that never undercounts character widths, so Hindi, Bengali
-  or emoji in tool output cannot smear the screen.
+**codemode** runs one script that makes dozens of tool calls, and reaches the
+MCP servers too: Chrome DevTools (isolated, telemetry off), Cloudflare, Paper,
+Astro. 6 are on by default and connect only when a script names them; `/mcp`
+turns on the other 13.
 
-## Built to run all day
+## 06 · Claude Max, billed to the plan
 
-- **Nothing runs unbounded.** Three layers: a declared timeout on every command,
-  an idle kill when a command stops printing and stops using CPU, and a 900s
-  stall watchdog on sub-agents. A machine sleep never counts as a hang.
-- **A failed command is a failure.** Exit codes and stderr reach the model as
-  they happened. A package that reported failed `git add` as success was
-  removed the day it was caught.
-- **Images can't break a session.** Every screenshot and image read is sized to
-  Claude's published vision limits before it is sent, and the harness refuses
-  a call that would push the request past the API's 32 MiB ceiling. That is a
-  limit pi does not check, and crossing it once means a 413 on every later turn.
-- **The prompt never changes mid-session.** One mutating hook once rewrote the
-  prompt cache on every turn and drained 19% of a Max plan's week in under a
-  day. The system prompt and tool schemas are now frozen at session start.
-- **Working rules ship in the system prompt**, not in a hook: scope, evidence,
-  no comments by default, and a hard stop before anything that deletes data,
-  rewrites git history or publishes.
-- **Deletes are scoped, data loss asks.** On your Mac the agent uses `trash`;
-  `rm`, dropping a table, a Docker volume, a bucket or a disk, or an MCP
-  `DELETE`, stops for a picker first: Allow, Deny (the agent stops and waits), or
-  type what to do instead (the agent carries on with that). On a server over ssh
-  deletes just work. A sub-agent cannot approve one, and every answer is logged.
-- **Secrets stay out of the model's context.** Every tool result is scrubbed of
-  vault values, key formats (Stripe, GitHub, AWS, Anthropic
-  and more), private keys, bearer tokens, URL passwords, and random-looking
-  values next to secret names, while code that merely mentions a token stays
-  readable.
+Claude Opus 5.5 on a Max subscription is the default. A request whose system
+prompt carries certain phrases bills as extra usage instead, so
+[`anthropic-sub.ts`](pi-setup/extensions/anthropic-sub.ts) keeps them out, and
+every pi update runs a canary that proves requests still bill to the plan.
+
+## 07 · A prompt that never changes mid-session
+
+One hook that rewrote the message list every turn once wrote 83,658,669
+cache tokens and burned 19% of a $200 plan's week in a day. The system prompt
+and tool schemas are now frozen at session start, and the working rules (scope,
+evidence, no comments by default, stop before anything that destroys or
+publishes) ship inside it. [The whole investigation](pi-setup/2026-10-03-cache-playbook.md).
+
+## 08 · Secrets stay out of the model
+
+Every tool result is scrubbed before the model sees it: vault values, Stripe,
+GitHub, AWS and Anthropic key formats, private keys, bearer tokens, URL
+passwords, and random-looking values next to secret names. Code that merely
+mentions a token stays readable.
+
+## 09 · A TUI for all day
+
+- A box-drawn editor with model, context and git branch on the border, and a
+  cache line under it: hit rate, reads, writes.
+- `/stats`: nine tabs over every session pi, Claude Code, Codex and OpenCode left
+  on the machine: cost, tokens, cache, models, tools, sub-agents, projects
+  matched to commits, your rhythm, and a wrapped card. Local and read-only.
+- `/studio`: preview pi themes **and** your Ghostty theme, font, cursor and
+  opacity live. Esc reverts, Enter keeps.
+- Any sub-agent's live transcript, a command palette, pinned sessions,
+  auto-named sessions, desktop notifications, a DeepSeek peak-price clock.
+- Hindi, Bengali and emoji cannot smear the screen: pi-tui is patched to never
+  undercount a character's width.
+
+| Command | Key | Does |
+|---|---|---|
+| `/stats` | `Ctrl+Shift+S` | usage dashboard |
+| `/studio`, `/theme` | `Ctrl+Shift+K` | live theme and Ghostty preview |
+| `/subagents` | `Ctrl+Shift+A` | sub-agent transcripts |
+| `/palette` | `Ctrl+Shift+P` | command palette |
+| `/ysk` | `Ctrl+Shift+Y` | a side agent that flags what you missed; off until `/ysk on` |
+| `/goal` | | a long-running goal, audited before it is marked done |
+| `/md` | | session to markdown |
+| `/deepseek` | | DeepSeek peak and off-peak clock |
+| `/local` | | run a local model through llama.cpp |
+| `/psst` | | the secrets vault |
+| `/resume` | `Ctrl+B` | pin a session to the top |
+
+## 10 · Skills
+
+14 skills load on demand: `review`, `dig` (debugging), `git`, `mat-tdd`,
+`mat-design`, `c-sqr` (strict code review), `dm-antislop`, `design-port`,
+`server-ops`, `tmux`, `chrome-cdp`, `paper-chrome`, `dataforseo`, `jev`.
+
+## Every tool
+
+| | |
+|---|---|
+| Files | `read` · `edit` · `write` · `undo_edit` · `redo_edit` · `grep` · `find` · `ls` · `format_file` |
+| Shell | `bash` · `codemode` |
+| Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `code_review` |
+| Web | `web_search` · `read_web_page` |
+| GitHub | `read_github` · `search_github` · `list_directory_github` · `list_repositories` · `glob_github` · `commit_search` · `diff` |
+| Screen | `screenshot` |
+| Memory | `search_sessions` · `read_session` · `skill` |
+| You | `ask` |
+| Goals | `get_goal` · `create_goal` · `update_goal` |
+
+## Stock pi vs muzzpi
+
+| | stock pi 1.3 | muzzpi |
+|---|---|---|
+| Tools on by default | 4: `read`, `bash`, `edit`, `write` | 34 |
+| Sub-agents | none, by design | 6, each on its own model |
+| Edits | `edit` + `write` | the same tools, plus undo across restarts, permission rules, a comment gate |
+| Bash | timeout optional | timeout required, hung commands killed |
+| MCP | every server connects at start | each connects on first use |
+| Web, GitHub, screen | none | built in |
+| Secrets in tool output | sent as is | scrubbed |
+| Start | 0.16 s with no extensions | 0.21 s with all 17 |
+
+## How it stays working
+
+pi moves fast. 17 releases, from 0.82 to 1.3, each have a written
+[migration record](pi-setup/pi-migrations.md); muzzpi started on 0.67.
+
+```bash
+bash pi-setup/update-pi.sh <version>   # update pi; never `pi update --self`
+bash pi-setup/verify-patches.sh        # audit: every patch, config and build in place
+git pull && ./install.sh pi            # update muzzpi
+```
+
+- **`update-pi.sh`** backs pi up, refuses a release that changed a file we patch,
+  installs, re-patches, rebuilds pi, then makes a real model call and runs the
+  Claude-plan canary. Any failure prints the one-line rollback.
+- **`install.sh`** compares your pi with the version the patches were made on.
+  If pi changed those files, it stops before writing anything and prints the
+  command that installs the right pi.
+- **`verify-patches.sh`** checks every patch, every config, the extension
+  bundles, the sub-agent models, and that pi runs a build of the current
+  patched files. Each FAIL prints its fix; a WARN is a login still to do.
+- **[`bundle-fidelity.mjs`](pi-setup/port-harness/bundle-fidelity.mjs)** re-proves
+  the build recipe against pi's own on each release.
 
 ## Things that broke
 
-Seven months on a fast-moving agent means a lot of things broke silently. The
-ones worth knowing about:
-
-- **The cache drain.** A hook re-added a note to the message list every turn.
-  83,658,669 cache-write tokens, 99% of everything metered, 19% of a $200 plan's
-  week in under 24 hours. Fixed by moving the rules into the system prompt.
-  The whole investigation, mistakes included:
-  [cache playbook](pi-setup/2026-10-03-cache-playbook.md).
-- **A pi update killed every sub-agent.** pi 0.84 made bare model ids an
-  ambiguity error, and every spawn died on start. One fix at the single spawn
-  point; the update workflow now calls a real sub-agent before calling it clean.
-- **For months, custom tools never reached Claude.** The OAuth shim filtered out
-  every tool not named like Claude Code's, so Claude wrote tool calls as plain
-  text and invented the results.
-- **Sub-agents asked for tools that did not exist.** `glob`, `edit_file` and
-  `create_file` are not pi names, so they were dropped without a word, and the
-  editing agent could not edit.
-- **Hindi broke the screen.** pi-tui measured `क्त्र` as 1 column, Ghostty drew 3,
-  and the whole TUI desynced. Fixed with a patch applied to every pi-tui copy
-  on the machine, and a render harness to prove it.
-- **3 GB of duplicates.** Three npm roots held 18 stale pi packages and 24 copies
-  of pi-tui. Now there is 1, patched, loaded.
-- **A 700k-token session took 180 ms per keystroke.** pi-tui redraws the whole
-  transcript every frame, and the edit/write diff renderer re-cut all 3,267 of
-  its lines each time. Diffs now render once per width, three packages that
-  cost 600 ms of startup went, and each extension ships as one prebuilt file:
-  10 ms per keystroke, 1.1 s to 0.44 s to start, and sub-agents load only the
-  4 extensions they use: 0.36 s each.
-- **`pi update --self` silently disables every patch.** It points `pi` at a
-  bundled build that ignores patched files. Updates go through
-  [`update-pi.sh`](pi-setup/update-pi.sh) instead.
-
-Every pi release since 0.82 has a written migration record:
-[`pi-migrations.md`](pi-setup/pi-migrations.md).
+- **The cache drain.** See 07: 99% of everything metered was cache writes.
+- **A pi update killed every sub-agent.** pi 0.84 made bare model ids an error,
+  and every spawn died on start. Fixed at the single spawn point; updates now
+  call a real sub-agent before calling it clean.
+- **Custom tools never reached Claude, for months.** The OAuth shim dropped every
+  tool not named like Claude Code's, so Claude wrote tool calls as plain text
+  and made up the results.
+- **Hindi broke the screen.** pi-tui measured `क्त्र` as 1 column, Ghostty drew
+  3, and the TUI desynced. Patched in every pi-tui copy.
+- **3 GB of duplicates.** Three npm roots held 18 stale pi packages and 24
+  copies of pi-tui. Now there is one, patched.
+- **`pi update --self` silently disables every patch** by pointing `pi` at its
+  prebuilt copy. Updates go through `update-pi.sh`.
+- **Patching pi cost half its startup**, until we ran pi's own build recipe on
+  the patched files (see Fast).
 
 ## The graveyard
 
-20 packages were installed, used, and removed. `verify-patches.sh` fails if any
-of them comes back.
+23 packages were installed, used and removed. The audit fails if one comes back.
 
 | Package | Why it went |
 |---|---|
 | `@tomooshi/condensed-milk-pi` | reported failed git commands as successes |
-| `pi-autoresearch` | its prompt guidelines changed mid-session, rewriting the cache |
-| `pi-tasks` | array parameters arrived JSON-stringified; `task_plan` always failed |
-| `pi-web-access` | every search provider key was rejected or rate-limited |
-| `pi-context` | checkpoint spam; pi's own `/compact` covers the need |
-| `pi-computer-use` | its GUI tools never registered |
-| `pi-claude-bridge`, `claude-agent-sdk-pi` | replaced by native Anthropic OAuth |
-| `pi-claude-code-use` | renamed every tool to `mcp__…`; Anthropic now checks only three prompt phrases, so a small extension replaced it |
-| `@sting8k/pi-vcc` | redundant once native compaction landed |
+| `pi-autoresearch` | its prompt guidelines changed mid-session, rewriting the prompt cache |
+| `pi-tool-display` | rewrote stored messages, then spliced the whole context on every request |
+| `pi-tasks` | array parameters arrived as JSON strings; `task_plan` always failed |
+| `pi-web-access` | every search provider key rejected or rate-limited |
+| `@marckrenn/pi-sub-bar`, `pi-sub-core` | +324 ms per start for a widget with every provider off |
+| `pi-token-burden` | +143 ms per start for one diagnostic command |
+| `pi-mcp-adapter` | +33 ms per start and a 3.8k-character tool on every request; pi's own MCP client replaced it |
+| `pi-claude-bridge`, `claude-agent-sdk-pi`, `pi-claude-code-use` | replaced by native Claude OAuth and one small extension |
+| `pi-codex-goal` | vendored as `/goal`, trimmed |
+| `pi-context`, `@sting8k/pi-vcc` | pi's own compaction covers it |
+| `pi-computer-use` | its tools never registered |
 | `lsp-pi`, `pi-powerline-footer`, `pi-anycopy` | installed where pi never loads them |
 | `pi-gpt-config`, `pi-ask`, `pi-grok-cli`, `todos` | unused |
-| `@marckrenn/pi-sub-bar` | +324 ms per start for a widget with every provider off |
-| `pi-tool-display` | rewrote stored messages, then spliced the whole context on every request |
-| `pi-token-burden` | +143 ms per start for one diagnostic command |
-
-## By the numbers
-
-As of October 2026:
-
-| | |
-|---|---|
-| First commit | 2026-03-10 |
-| Commits | 105, on 57 different days |
-| Lines changed | +97,381 / −37,598 |
-| Tests | 1,877 across 56 files, 0 failing |
-| pi releases lived through | 20+, from 0.67 to 1.2 |
-| Default-model changes | 17, across six providers: Opus 4.6 → GLM 5.1 → Kimi → GPT-5.5 → Grok 4.6 → Opus 5.5, and back again more than once |
-| MCP servers wired in | 19, none connected until first use |
-| Skills | 15 |
-| Commits made on a Thursday | 34 |
-| Commits made between midnight and 5am | 20 |
 
 ## Install
 
-**Needs:** macOS (built and tested there), node ≥ 22.19, bun (the installer
-bundles each extension into one file so pi starts fast), and pi itself:
-`npm install -g @earendil-works/pi-coding-agent`. Homebrew, nvm and any other
-npm prefix all work; the installer finds pi from the `pi` on your `PATH`.
+**Needs:** macOS, node ≥ 22.19, bun, and pi at the
+version in [`base-version`](pi-setup/pi-core-patches/base-version) (the quick
+start installs it). A newer pi works if it left the patched files alone; the
+installer checks. Homebrew, nvm and any other npm prefix work.
 
-**Default model:** Claude Opus 5.5 on a Claude Max subscription (`/login
-anthropic` inside pi). To use something else, change `defaultProvider` and
-`defaultModel` in [`pi-setup/settings.json`](pi-setup/settings.json).
-
-**Optional, one feature each** (the installer tells you what is missing):
+**Logins and keys**, one feature each; the installer and the audit say what is
+missing:
 
 | | turns on |
 |---|---|
+| `/login anthropic` in pi | Claude, the default model |
 | `DEEPSEEK_API_KEY` | cheap sub-agents (chad, finder, librarian, read_session, read_web_page); without it they run on your main model |
-| `RIVER_API_KEY` | DeepSeek V4.1 Flash via River in `/model`, cheaper than DeepSeek in its peak hours |
+| `RIVER_API_KEY` | DeepSeek V4.1 Flash via River, cheaper in DeepSeek's peak hours |
 | `PARALLEL_API_KEY` | `web_search` |
-| `gh auth login` | the 7 GitHub tools |
-| `ripgrep`, `trash` | `grep`/`find`, safe deletes |
+| `gh auth login` | the GitHub tools |
+| `ripgrep`, `trash` | `grep` and `find`, safe deletes |
 
-```bash
-./install.sh pi --dry-run   # read this first
-./install.sh pi
-```
+To use another default model, change `defaultProvider` and `defaultModel` in
+[`settings.json`](pi-setup/settings.json).
 
-The installer backs up everything it overwrites, including pi's own stock files
-(kept as `*.stock` beside the patched ones). It installs nothing globally, and
-ends by running [`verify-patches.sh`](pi-setup/verify-patches.sh), which prints
-the exact fix for anything that did not land.
-
-**After any pi or package update:**
-
-```bash
-bash pi-setup/update-pi.sh <version>   # updating pi itself; never pi update --self
-bash pi-setup/verify-patches.sh        # after any pi install / package update
-bun pi-setup/port-harness/anthropic-oauth-canary.ts   # Claude-plan requests still billed to the plan?
-```
-
-## Ghostty
-
-The repo started as my Ghostty config, and it still ships one: 22 dark themes,
-11 fonts, and `gt` / `gf` / `gc` switchers that preview live as you scroll.
-`./install.sh ghostty`, details in [`ghostty/`](ghostty/README.md). Each half
-installs on its own.
+**Ghostty.** The repo began as a Ghostty config and still ships one: 22 dark
+themes, 11 fonts, live switchers. `./install.sh ghostty`; see
+[`ghostty/`](ghostty/README.md). Each half installs on its own.
 
 ## Layout
 
 ```
 muzzpi/
 ├── install.sh              ./install.sh pi | ghostty
-├── AGENTS.md               the rules and facts every agent reads first
+├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
-│   ├── extensions/         editor, sub-agent inspector, theme studio, guardrails, …
-│   │   └── tools/          the 30 tools and their tests (bun test)
-│   ├── agents/             system prompt, working rules, one prompt per sub-agent
+│   ├── extensions/         17 extensions; tools/ holds the 30 tools
+│   ├── agents/             system prompt, working rules, sub-agent prompts
 │   ├── agent-models.json   which model each sub-agent runs on
-│   ├── permissions.json    what bash may never do, and what can ask for approval
-│   ├── pi-core-patches/    the 3 patched pi files + the pi-tui width patch
-│   ├── config-skills/      15 skills
-│   └── *.md                migration records and investigations
+│   ├── permissions.json    what bash may never do
+│   ├── pi-core-patches/    4 patched pi files + the pi-tui width patch
+│   ├── pi-bundle/          pi's build recipe, run on the patched files
+│   ├── config-skills/      14 skills
+│   ├── port-harness/       benchmarks and the Claude-plan canary
+│   └── pi-migrations.md    one record per pi release
 └── ghostty/                themes, fonts, switchers
 ```
 
-**Read next:** [`AGENTS.md`](AGENTS.md) for how it all fits and what not to
-break, [the cache playbook](pi-setup/2026-10-03-cache-playbook.md) for the best
-bug, and [`pi-setup/README.md`](pi-setup/README.md) for the full inventory.
+Read next: [`AGENTS.md`](AGENTS.md) for how it fits together and what not to
+break, and [`pi-setup/README.md`](pi-setup/README.md) for the full inventory.
 
 ## Credits
 
 - [pi](https://github.com/earendil-works/pi) by Mario Zechner, the engine all of
-  this sits on.
-- [Amp](https://ampcode.com): the system prompt started as a port of Amp's, which
-  is why the prompt files are still named `*.amp.*`.
-- [bdsqqq/dots](https://github.com/bdsqqq/dots): the sub-agent wiring and
-  `delegate` began as a port from there.
-- `/goal` is [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal), vendored.
-  MCP ran through [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter)
+  this runs on.
+- [Amp](https://ampcode.com): the system prompt started as a port of Amp's,
+  which is why its files are named `*.amp.*`.
+- [bdsqqq/dots](https://github.com/bdsqqq/dots): sub-agent wiring and `delegate`
+  began as a port from there.
+- `/goal` is [pi-codex-goal](https://github.com/fitchmultz/pi-codex-goal),
+  vendored. MCP ran through [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter)
   until pi shipped its own client. Claude Max support began with Ben Vargas's
   [pi-claude-code-use](https://github.com/ben-vargas/pi-packages).
 - Skills adapted from Matt Pocock (`mat-*`), dmmulroy (`dm-*`) and Cursor (`c-*`).
-- Ghostty theme palettes inspired by [opencode](https://github.com/anomalyco/opencode).
+- Ghostty palettes inspired by [opencode](https://github.com/anomalyco/opencode).
 
 ## License
 
