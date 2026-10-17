@@ -5,21 +5,14 @@ VERSION="${1:?usage: update-pi.sh <version>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=pi-location.sh
 source "$SCRIPT_DIR/pi-location.sh"
+# shellcheck source=pi-core-patches/patches.sh
+source "$SCRIPT_DIR/pi-core-patches/patches.sh"
 pi_locate || { echo "cannot locate pi's package directory; set PI_PKG_DIR and rerun"; exit 1; }
 [ -n "$PI_PREFIX" ] || { echo "pi at $PI_PKG is not under <prefix>/lib/node_modules; update it by hand"; exit 1; }
 PREFIX="$PI_PREFIX"
 PKG="$PI_PACKAGE"
 PI_DIR="$PREFIX/lib/node_modules/$PKG"
 BASE="$(tr -d '[:space:]' < "$SCRIPT_DIR/pi-core-patches/base-version")"
-# <dist path>[=<file in pi-core-patches/>]; the file defaults to the path's basename
-PATCHED=(
-    core/resource-loader.js
-    modes/interactive/components/session-selector.js
-    core/keybindings.js
-    extensions/mcp/index.js=mcp-index.js
-)
-dist_path() { echo "${1%%=*}"; }
-patch_file() { case "$1" in *=*) echo "${1#*=}" ;; *) basename "$1" ;; esac; }
 
 WORK="$(mktemp -d /tmp/pi-update.XXXXXX)"
 # npm takes devEngines from the nearest package.json above cwd; ~/package.json demands bun.
@@ -34,8 +27,8 @@ tar -xzf "earendil-works-pi-coding-agent-$BASE.tgz" -C base
 tar -xzf "earendil-works-pi-coding-agent-$VERSION.tgz" -C new
 
 drift=0
-for entry in "${PATCHED[@]}"; do
-    f="$(dist_path "$entry")"
+for entry in "${PI_CORE_PATCHES[@]}"; do
+    f="$(patch_dist_path "$entry")"
     if ! cmp -s "base/package/dist/$f" "new/package/dist/$f"; then
         echo "DRIFT  stock $f changed between $BASE and $VERSION"
         drift=1
@@ -53,10 +46,16 @@ ROLLBACK="rollback: trash '$PI_DIR' && cp -R '$BACKUP' '$PI_DIR' && ln -sfn ../l
 
 npm install --prefix "$PREFIX" -g --ignore-scripts "$PKG@$VERSION"
 ln -sfn "../lib/node_modules/$PKG/dist/cli.js" "$PREFIX/bin/pi"
-for entry in "${PATCHED[@]}"; do
-    cp "$SCRIPT_DIR/pi-core-patches/$(patch_file "$entry")" "$PI_DIR/dist/$(dist_path "$entry")"
+# keep the fresh stock file beside its patch, as install.sh does: pi_patch_drift reads it
+for entry in "${PI_CORE_PATCHES[@]}"; do
+    target="$PI_DIR/dist/$(patch_dist_path "$entry")"
+    cp "$target" "$target.stock"
+    cp "$SCRIPT_DIR/pi-core-patches/$(patch_source "$entry")" "$target"
 done
 node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs"
+if ! node "$SCRIPT_DIR/pi-bundle/build-pi-bundle.mjs" --pkg "$PI_DIR" --link "$PREFIX/bin/pi"; then
+    echo "WARN  pi runs the patched files directly (~170 ms slower per start) until build-pi-bundle.mjs builds (see above)"
+fi
 
 bash "$SCRIPT_DIR/verify-patches.sh"
 
@@ -78,5 +77,5 @@ elif [ "$canary" -ne 0 ]; then
     exit 1
 fi
 
-echo "pi $(pi --version) installed and patched. Now call one sub-agent (finder/chad) from a live session."
+echo "pi $(pi --version) installed and patched; \`pi\` → $(readlink "$PREFIX/bin/pi"). Now call one sub-agent (finder/chad) from a live session."
 echo "$ROLLBACK"

@@ -1,0 +1,9 @@
+{
+  "name": "muzzpi-pi-bundle",
+  "private": true,
+  "type": "module",
+  "description": "esbuild at the exact version pi builds its own bundle with; used by build-pi-bundle.mjs",
+  "dependencies": {
+    "esbuild": "0.28.2"
+  }
+}

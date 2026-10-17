@@ -128,11 +128,36 @@ fi
 
 # shellcheck source=pi-location.sh
 source "$SCRIPT_DIR/pi-location.sh"
+# shellcheck source=pi-core-patches/patches.sh
+source "$SCRIPT_DIR/pi-core-patches/patches.sh"
 if pi_locate; then
     ok "pi package: $PI_PKG"
 else
     warn "could not find pi's package directory from $(command -v pi). Set PI_PKG_DIR=/path/to/$PI_PACKAGE and re-run."
     exit 1
+fi
+
+# The patches replace whole files of pi $PI_BASE. Another pi gets them only when
+# it left those files alone; copied over changed ones they undo upstream fixes.
+PI_BASE="$(tr -d '[:space:]' < "$SCRIPT_DIR/pi-core-patches/base-version")"
+PI_VERSION="$(node -p "require(process.argv[1]).version" "$PI_PKG/package.json")"
+if [ "$PI_VERSION" != "$PI_BASE" ]; then
+    info "pi $PI_VERSION is installed; this setup's patches are for pi $PI_BASE. Checking they still fit..."
+    if ! drift="$(pi_patch_drift "$PI_DIST" "$PI_BASE")"; then
+        warn "could not download pi $PI_BASE to compare (offline?); nothing was changed. Re-run when online."
+        exit 1
+    fi
+    if [ -n "$drift" ]; then
+        warn "pi $PI_VERSION changed files the patches replace: ${drift//$'\n'/, }. Nothing was changed."
+        echo "  Install the pi this setup is built on, then re-run ./install.sh pi:"
+        if [ -n "$PI_PREFIX" ]; then
+            echo "    npm install -g --prefix '$PI_PREFIX' $PI_PACKAGE@$PI_BASE"
+        else
+            echo "    pi $PI_BASE, into $PI_PKG, with the tool that installed it there (pnpm, bun, ...)"
+        fi
+        exit 1
+    fi
+    ok "the patches fit pi $PI_VERSION"
 fi
 
 # None of these block the install; each one turns off one feature.
@@ -260,30 +285,40 @@ for entry in "${replaced[@]}"; do
     ok "Removed $(basename "$dir") (replaced by $by)"
 done
 
-# ── pi entrypoint ──
-# pi ships `pi` → dist/bundle/cli.js, which never loads the patched dist/ files.
-if pi_bin_is_bundle; then
-    info "Re-linking pi to the modular CLI so the core patches load..."
-    run ln -sfn "$PI_PKG/dist/cli.js" "$PI_BIN" || \
-        warn "could not re-link $PI_BIN — run: ln -sfn '$PI_PKG/dist/cli.js' '$PI_BIN'"
-fi
-
 # ── pi core patches (dist/) ──
 # resource-loader.js is CRITICAL — without it pi refuses to start (our tools
 # override built-in tool names). The pi-tui width patch is CRITICAL too —
 # without it Indic conjuncts or text-presentation emoji smear the whole TUI.
 if [ -d "$SCRIPT_DIR/pi-core-patches" ]; then
     info "Applying pi core patches to $PI_DIST (stock files kept as *.stock)..."
-    patch_core_file "$SCRIPT_DIR/pi-core-patches/resource-loader.js" "$PI_DIST/core/resource-loader.js"
-    patch_core_file "$SCRIPT_DIR/pi-core-patches/session-selector.js" "$PI_DIST/modes/interactive/components/session-selector.js"
-    patch_core_file "$SCRIPT_DIR/pi-core-patches/keybindings.js" "$PI_DIST/core/keybindings.js"
-    patch_core_file "$SCRIPT_DIR/pi-core-patches/mcp-index.js" "$PI_DIST/extensions/mcp/index.js"
+    for entry in "${PI_CORE_PATCHES[@]}"; do
+        patch_core_file "$SCRIPT_DIR/pi-core-patches/$(patch_source "$entry")" "$PI_DIST/$(patch_dist_path "$entry")"
+    done
     # every npm package bundles its own pi-tui, and one unpatched copy still smears
     run node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs" || \
         warn "pi-tui width patch failed on some copies — TUI may smear on exotic unicode (see AGENTS.md)"
     ok "pi core patches applied (resource-loader + session pinning + lazy MCP + pi-tui widths)"
 else
     warn "pi-core-patches/ missing — apply them by hand"
+fi
+
+# ── pi entrypoint: our bundle of the patched files ──
+# pi ships `pi` → dist/bundle/cli.js, built before any patch. Ours is pi's own
+# recipe run on the files patched above; without it `pi` runs those files directly.
+info "Building pi from the patched files..."
+BUILD=(node "$SCRIPT_DIR/pi-bundle/build-pi-bundle.mjs" --pkg "$PI_PKG")
+# PI_PKG_DIR can name another install than the `pi` on PATH; never repoint that one.
+if [ "$(node -e 'const fs = require("fs"); console.log(fs.realpathSync(process.argv[1]).startsWith(fs.realpathSync(process.argv[2]) + "/"))' "$PI_BIN" "$PI_PKG" 2>/dev/null)" != true ]; then
+    warn "$PI_BIN is not from $PI_PKG: building without re-pointing it"
+    run "${BUILD[@]}" || warn "could not build our bundle (see above)"
+elif run "${BUILD[@]}" --link "$PI_BIN"; then
+    ok "pi runs our bundle of the patched files"
+else
+    warn "could not build or link our bundle (see above): pi runs the patched files directly, ~170 ms slower per start"
+    if pi_bin_is_bundle || pi_bin_is_our_bundle; then
+        run ln -sfn "$PI_PKG/dist/cli.js" "$PI_BIN" || \
+            warn "could not re-link $PI_BIN — run: ln -sfn '$PI_PKG/dist/cli.js' '$PI_BIN'"
+    fi
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then

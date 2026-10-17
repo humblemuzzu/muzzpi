@@ -98,27 +98,31 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 | `session-selector.js` + `keybindings.js` | pi core | session pinning, `Ctrl+B` in `/resume`; pins in `~/.pi/agent/pinned-sessions.json` (user data) |
 | `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect; stock connects every enabled server at every session start |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
+| **our bundle** | `dist/muzzpi-bundle/`, `pi` → its `cli.js` | what pi runs: the patched files, bundled; stale after any change to them |
 | extension bundles | `~/.pi/agent/extensions/` | `.js` only; a stray `.ts` shadows its bundle |
 | MCP config | `~/.pi/agent/mcp.json` | every server has a `description`; no `-builtin:mcp` in `settings.json` |
 | sub-agent models | `~/.pi/agent/agent-models.json` | valid, every id listed by `pi --list-models` |
 
-### Quick re-patch
-
-```bash
-source pi-setup/pi-location.sh && pi_locate && PI=$PI_PKG   # wherever `pi` really lives
-cp pi-setup/pi-core-patches/resource-loader.js  $PI/dist/core/resource-loader.js
-cp pi-setup/pi-core-patches/session-selector.js $PI/dist/modes/interactive/components/session-selector.js
-cp pi-setup/pi-core-patches/keybindings.js      $PI/dist/core/keybindings.js
-cp pi-setup/pi-core-patches/mcp-index.js        $PI/dist/extensions/mcp/index.js
-
-node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs           # all copies
-node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs --check   # audit
-```
-
-`install.sh` applies all of these and runs `verify-patches.sh` last. **Never
+`install.sh` applies every patch, rebuilds our bundle and runs
+`verify-patches.sh` last; each FAIL there prints its own fix command. **Never
 hardcode `/opt/homebrew` in a script**: `install.sh`, `verify-patches.sh` and
 `update-pi.sh` all locate pi via `pi-location.sh`
 (strangers run pi from nvm and Intel prefixes too).
+
+### pi runs our bundle of the patched files
+
+`pi-bundle/build-pi-bundle.mjs` runs pi's own bundle recipe (`UPSTREAM.tag`) on
+the patched `dist/`: pi's bundled startup (~45% faster than `dist/cli.js`).
+
+- **A changed patched file needs a rebuild**, or pi runs the old code. Both
+  installers rebuild; `verify-patches.sh` fails a stale build. Rollback:
+  `ln -sfn "$PI_PKG/dist/cli.js" "$PI_BIN"`.
+- A pi whose recipe or esbuild differs from `UPSTREAM` is refused (exit 3, pi
+  stays on `dist/cli.js`): re-derive, then `port-harness/bundle-fidelity.mjs`.
+- Rebuilds keep the previous chunks (a live pi imports them lazily). esbuild
+  loads by path: `~/node_modules` holds an older one that a lookup finds.
+- Extensions get pi's virtual modules, not its files: locate pi's files with
+  `tools/lib/pi-package-dir.ts`, never beside `process.argv[1]`.
 
 ## Packages (npm)
 
@@ -263,10 +267,8 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
   the ctx is stale and every `pi.*` call throws — inside a timer that is an
   uncaughtException, and pi exits. A timer calling `invalidate()`/
   `requestRender()` counts.
-- **Clipboard paste** uses pi's `readClipboardImage`
-  (`dist/utils/clipboard-image.js`). `process.argv[1]` is the
-  `/opt/homebrew/bin/pi` symlink: `realpathSync` it before resolving `utils/…`,
-  or pastes silently insert the raw temp path. If the module cannot load, leave
+- **Clipboard paste** loads pi's `dist/utils/clipboard-image.js` on the first
+  paste, not at startup (~36 ms under our bundle). If the file is missing, leave
   `onPasteImage` unset so pi's default path-insert takes over.
 
 ## Custom tools
@@ -520,8 +522,8 @@ injected in the `context` hook telling the model to call that tool
 
 0. **Update pi with `bash pi-setup/update-pi.sh <ver>`, never `pi update --self`.**
    Self-update repoints `bin/pi` at `dist/bundle/cli.js`, which disables every
-   core patch. The script runs npm outside `~` and refuses if stock patched
-   files drifted from `pi-core-patches/base-version`.
+   core patch. It and `install.sh` refuse a pi whose stock patched files (listed
+   once, in `pi-core-patches/patches.sh`) differ from `base-version`'s.
 1. **`bash pi-setup/verify-patches.sh`** — always first.
 2. **Grep our own CLI call sites.** An import-level audit cannot see a change in
    how pi reads the arguments `pi-spawn.ts` passes (`--model --thinking --tools
@@ -529,8 +531,9 @@ injected in the `context` hook telling the model to call that tool
    way. When a release touches model resolution, tool filtering or CLI
    arguments, call one real sub-agent before declaring it clean.
 3. **pi core update** → re-derive the 4 core patches against the new stock
-   files (never blind-copy; see `pi-migrations.md`) + the width patch. The
-   `@mariozechner/*` compat aliases will eventually go — then rename imports.
+   files (never blind-copy; see `pi-migrations.md`) + the width patch, then
+   rebuild (`update-pi.sh` does). The `@mariozechner/*` compat aliases will
+   eventually go — then rename imports.
 4. **Any `pi install` / package update** → `verify-patches.sh` (width patcher
    check included).
 5. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`

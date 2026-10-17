@@ -12,6 +12,40 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## pi runs our bundle of the patched files (2026-10-17)
+
+- `pi` → `dist/muzzpi-bundle/cli.js`, built by `pi-bundle/build-pi-bundle.mjs`:
+  pi's `scripts/build-coding-agent-bundle.mjs` at v1.3.0 (sha256 `bb8134c8…`,
+  unchanged since v1.2.0) with esbuild 0.28.2, pi's root devDependency. Changes
+  from upstream: paths of an npm install; OAuth flows read from pi-ai's compiled
+  `load.js` (npm ships no `src/`); output staged, swapped in file by file, and
+  the previous build's chunks kept; a smoke test with every extension loaded.
+- Measured on 1.3.0 (median of 11–15, interleaved): editor on screen 447 → 274
+  ms; full start 376 → 212; sub-agent 350 → 187; `--version` 271 → 111 (pi's
+  own bundle 110); peak RSS 163 → 138 MB. Prompt and tool declarations
+  byte-identical, `--export` HTML and the TUI render identical; the width patch
+  is live (pi's unpatched bundle wraps `्र्` later). pi's own bundle with this
+  setup takes 730 ms to start (likely its eager MCP connects; not isolated).
+- Fidelity: stock 1.3.0 through our builder gives 75 of 80 files byte-identical
+  to pi's `dist/bundle`; the other 5 trace to dependencies npm resolved newer
+  than pi's lockfile (`lru-cache` 11.4.0 → 11.5.3, `@smithy/core` 3.33.3 →
+  3.36.0, `gaxios` 7.1.4 → 7.3.1), which the modular install runs as well.
+- Editor paste: under a bundle `dirname(argv[1])/utils/clipboard-image.js` does
+  not exist, so pastes inserted the raw temp path. `tools/lib/pi-package-dir.ts`
+  finds it now, and it loads on the first paste (13–36 ms; 0 under `dist/cli.js`).
+- Trap: a lookup of `esbuild` from the repo finds `~/node_modules/esbuild`
+  0.27.0, and Node caches the lookup across the install that follows.
+- For other people's machines: the builder finds pi-ai in npm-global, hoisted
+  npm/bun and pnpm layouts (tested on all four); `install.sh` refuses, before
+  writing anything, a pi whose stock patched files differ from `base-version`'s
+  (pi 1.0.3: 3 files; 1.2.0: none, so it installs); `verify-patches.sh` reports a
+  provider with no listed models as a login to do (WARN), not a FAIL.
+- On each pi update: the builder fetches the new tag's recipe and root
+  `package.json` and refuses any change (pi stays on `dist/cli.js`, WARN). Then
+  diff upstream's recipe from v1.3.0, mirror it in `runRecipe`, bump `UPSTREAM`,
+  and run `node pi-setup/port-harness/bundle-fidelity.mjs <version>`: only
+  dependency drift may differ.
+
 ## edit/write sent non-strict (2026-10-17)
 
 - pi 0.86.0 made its built-in tools `strict: "prefer"`, and every Claude model

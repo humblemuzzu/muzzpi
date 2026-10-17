@@ -7,10 +7,10 @@
  * nothing a tool registers is lost. Sub-agents get buildSubAgentPrompt instead.
  */
 
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { readAgentPrompt } from "./tools/lib/pi-spawn";
+import { piPackageDir } from "./tools/lib/pi-package-dir";
 import { interpolatePromptVars } from "./tools/lib/interpolate";
 import { describeAgentModels, loadAgentModels } from "./tools/lib/agent-models";
 import {
@@ -25,17 +25,6 @@ const IDENTITY = "Coding agent";
 
 // pi's built-in bash guideline; our bash override does not set PI_* model or session vars.
 const UNTRUE_HERE = new Set(["You can inspect PI_* environment variables for current model and session details."]);
-
-function piPackageDir(): string | undefined {
-	try {
-		let dir = dirname(realpathSync(process.argv[1] ?? ""));
-		for (let i = 0; i < 4; i++) {
-			if (existsSync(join(dir, "docs", "codemode.md"))) return dir;
-			dir = dirname(dir);
-		}
-	} catch {}
-	return undefined;
-}
 
 export function piDocs(dir: string): string {
 	return `Pi documentation (read only when the user asks about the cli itself, its SDK, extensions, themes, skills, or TUI):

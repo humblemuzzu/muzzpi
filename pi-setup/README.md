@@ -15,9 +15,11 @@ prompt, config file and patch, and where each one is installed.
 ```
 
 The script finds pi from the `pi` on `PATH` (`pi-location.sh`; Homebrew, nvm or any npm
-prefix), backs up everything it overwrites (pi's own stock files are kept as `*.stock`),
-re-links `pi` off the bundled build so the core patches load, installs npm deps and the pi
-packages, re-applies all patches, and runs `verify-patches.sh` at the end.
+prefix), refuses before changing anything if that pi changed the files the patches replace
+(it prints the command that installs the pi they were made on), backs up everything it
+overwrites (pi's own stock files are kept as `*.stock`),
+installs npm deps and the pi packages, re-applies all patches, builds pi from the patched
+files (`pi-bundle/`) and points `pi` at that build, and runs `verify-patches.sh` at the end.
 
 After **any** pi/package update, re-run the audit first:
 
@@ -175,7 +177,8 @@ pi-setup/
 ├── themes/                     # pi themes
 ├── pi-skills/                  # pi-level skills (→ ~/.pi/agent/skills/); currently empty
 ├── config-skills/              # config skills (→ ~/.config/agents/skills/)
-├── pi-core-patches/            # resource-loader + session-pinning + pi-tui width patches
+├── pi-core-patches/            # 4 patched pi core files + the pi-tui width patch; patches.sh lists them
+├── pi-bundle/                  # build-pi-bundle.mjs: pi's bundle recipe run on the patched files
 ├── pi-migrations.md            # Per-update record. Read before updating pi
 ├── 2026-*.md                   # Investigations: migrations, the bdsqqq port, MCP, cache, login
 └── README.md                   # This file

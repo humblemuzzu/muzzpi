@@ -21,10 +21,9 @@ import type { KeybindingsManager } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage, AssistantMessage, ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
 import { hasToolCost } from "../tools/lib/tool-cost";
+import { clipboardImageModule } from "../tools/lib/pi-package-dir";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,8 +42,9 @@ const execFileAsync = promisify(execFile);
 //
 // the editor-swap path in core only wires its default paste handler when ours
 // is unset (`if (!customEditor.onPasteImage)`), so if pi's clipboard-image
-// module can't be loaded we simply DON'T set onPasteImage and pi's default
-// (insert path) transparently takes back over.
+// module is missing or no longer exports readClipboardImage we simply DON'T set onPasteImage and pi's default
+// (insert path) transparently takes back over. it loads on the first paste:
+// under our bundle that pulls in a second pi-tui (~36 ms), which startup must not pay.
 // ---------------------------------------------------------------------------
 
 interface PastedImage {
@@ -90,19 +90,16 @@ let agentRunning = false;
 
 type ClipboardImage = { bytes: Uint8Array; mimeType: string };
 
+type ClipboardModule = { readClipboardImage?: () => Promise<ClipboardImage | null> };
+
 function loadClipboardImageReader(): (() => Promise<ClipboardImage | null>) | null {
-	try {
-		const entry = process.argv[1];
-		if (!entry) return null;
-		const piEntry = realpathSync(entry);
-		const req = createRequire(piEntry);
-		const mod = req(join(dirname(piEntry), "utils/clipboard-image.js")) as {
-			readClipboardImage?: () => Promise<ClipboardImage | null>;
-		};
-		return typeof mod.readClipboardImage === "function" ? () => mod.readClipboardImage!() : null;
-	} catch {
-		return null;
-	}
+	const file = clipboardImageModule();
+	if (!file) return null;
+	let mod: ClipboardModule | undefined;
+	return async () => {
+		mod ??= createRequire(file)(file) as ClipboardModule;
+		return typeof mod.readClipboardImage === "function" ? mod.readClipboardImage() : null;
+	};
 }
 
 interface Label {

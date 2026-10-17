@@ -14,6 +14,7 @@ FAIL=0
 
 pass() { printf '\033[32mPASS\033[0m  %s\n' "$1"; }
 fail() { printf '\033[31mFAIL\033[0m  %s\n    fix: %s\n' "$1" "$2"; FAIL=1; }
+note() { printf '\033[33mWARN\033[0m  %s\n    fix: %s\n' "$1" "$2"; }
 
 PI_BIN="" PI_PKG="" PI_DIST="" PI_PREFIX=""
 # shellcheck source=pi-location.sh
@@ -24,15 +25,22 @@ else
          "install pi (npm install -g @earendil-works/pi-coding-agent), or rerun with PI_PKG_DIR=/path/to/@earendil-works/pi-coding-agent"
 fi
 
-# ── pi entrypoint: modular CLI, not the bundled runtime ──
-# dist/bundle/cli.js inlines its own resource-loader, keybindings,
-# session-selector and pi-tui, so under the bundle every core patch below is
-# inert while its check still passes.
+# ── pi entrypoint: our bundle of the patched files ──
+# pi's own dist/bundle/cli.js was built before any patch, so under it every core
+# patch below is inert while its check still passes. Ours is built from the
+# patched files and goes stale when one of them changes.
+BUILD_FIX="node pi-setup/pi-bundle/build-pi-bundle.mjs --pkg '$PI_PKG' --link '$PI_BIN'"
 if declare -F pi_bin_is_bundle >/dev/null && pi_bin_is_bundle; then
-    fail "pi entrypoint: bundled runtime — every core patch is inert" \
-         "ln -sfn '$PI_PKG/dist/cli.js' '$PI_BIN' && bash pi-setup/verify-patches.sh"
+    # npm (re)installed pi, which also undid every patch
+    fail "pi entrypoint: pi's own bundle — every core patch is inert" "bash pi-setup/install.sh"
+elif declare -F pi_bin_is_our_bundle >/dev/null && pi_bin_is_our_bundle; then
+    if STALE=$(node "$SCRIPT_DIR/pi-bundle/build-pi-bundle.mjs" --pkg "$PI_PKG" --check 2>&1); then
+        pass "pi entrypoint: our bundle, current with the patched files"
+    else
+        fail "pi entrypoint: our bundle is out of date (${STALE//$'\n'/; })" "$BUILD_FIX"
+    fi
 else
-    pass "pi entrypoint: modular CLI (dist/cli.js — patches load)"
+    note "pi entrypoint: modular CLI (patches load, every start ~170 ms slower)" "$BUILD_FIX"
 fi
 
 # ── pi core: tool-conflict suppression (pi won't START without it) ──
@@ -218,21 +226,31 @@ fi
 
 # ── sub-agents: agent-models.json loads cleanly and every model is in pi's catalog ──
 # Parsed by the loader the tools bundle is built from, so this cannot drift from
-# what the tools read. A model missing from `pi --list-models` would be refused at call time.
+# what the tools read. `pi --list-models` lists only providers you are logged in
+# to: a provider with nothing listed is a login still to do, not a broken model.
 AM_REPORT=$(cd "$SCRIPT_DIR/extensions/tools" 2>/dev/null && bun -e '
 const { loadAgentModels } = await import("./lib/agent-models.ts");
 const { execFileSync } = await import("node:child_process");
 const config = loadAgentModels();
-const listed = new Set(execFileSync("pi", ["--list-models"], { encoding: "utf-8" })
+const listed = new Set(execFileSync("pi", ["--list-models"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
   .split("\n").map((l) => l.trim().split(/\s+/)).filter((c) => c.length > 1).map(([p, m]) => `${p}/${m}`));
-const missing = Object.entries(config.models).filter(([, m]) => !listed.has(m.id)).map(([n, m]) => `${n} → ${m.id} not listed`);
-console.log([...config.problems, ...missing].join("; "));
+const provider = (id) => id.split("/")[0];
+const providers = new Set([...listed].map(provider));
+const missing = Object.entries(config.models).filter(([, m]) => !listed.has(m.id));
+const unknown = missing.filter(([, m]) => providers.has(provider(m.id))).map(([n, m]) => `${n} → ${m.id}: pi has no such model`);
+console.log(`problems:${[...config.problems, ...unknown].join("; ")}`);
+console.log(`login:${[...new Set(missing.map(([, m]) => provider(m.id)).filter((p) => !providers.has(p)))].join(", ")}`);
 ' 2>&1)
-if [ -f "$PI_AGENT/agent-models.json" ] && [ -z "$AM_REPORT" ]; then
-    pass "sub-agents: agent-models.json valid, every model listed by pi"
-else
-    fail "sub-agents: agent-models.json — ${AM_REPORT:-missing}" \
+AM_PROBLEMS=$(sed -n 's/^problems://p' <<<"$AM_REPORT")
+AM_LOGIN=$(sed -n 's/^login://p' <<<"$AM_REPORT")
+grep -q '^login:' <<<"$AM_REPORT" || AM_PROBLEMS="${AM_REPORT:-the check did not run}"
+if [ ! -f "$PI_AGENT/agent-models.json" ] || [ -n "$AM_PROBLEMS" ]; then
+    fail "sub-agents: agent-models.json — ${AM_PROBLEMS:-missing}" \
          "cp pi-setup/agent-models.json $PI_AGENT/agent-models.json  # then fix the named entries"
+else
+    pass "sub-agents: agent-models.json valid, every model of a provider you use is listed by pi"
+    [ -z "$AM_LOGIN" ] || note "sub-agents: not logged in to $AM_LOGIN yet, so sub-agents set to those models run on your main model" \
+        "/login <provider> inside pi, or set that provider's API key (e.g. DEEPSEEK_API_KEY)"
 fi
 
 # pi-spawn.ts starts children with --no-extensions -e <the four they use>; that

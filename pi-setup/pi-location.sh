@@ -42,3 +42,8 @@ for (;;) {
 pi_bin_is_bundle() {
     [[ "$(readlink "$PI_BIN" 2>/dev/null)" == *dist/bundle/cli.js ]]
 }
+
+# Ours: pi's recipe run on the patched files by pi-bundle/build-pi-bundle.mjs.
+pi_bin_is_our_bundle() {
+    [[ "$(readlink "$PI_BIN" 2>/dev/null)" == *dist/muzzpi-bundle/cli.js ]]
+}
