@@ -12,6 +12,26 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## edit/write sent non-strict (2026-10-17)
+
+- pi 0.86.0 made its built-in tools `strict: "prefer"`, and every Claude model
+  has `supportsStrictTools: true`. When `edit-write.ts` started wrapping pi's
+  tools (`da254fb`) it copied that, so Edit and Write went out `strict: true`.
+  Anthropic's strict decoding cannot emit `\u`: Claude's non-ASCII arrived as
+  `\b2014`, `\ndash`, `\ttt`, a literal `\u2014`, or was dropped (pi #10074).
+- Measured: 32 of 131 failed edit/write calls since the swap, plus 54 edits only
+  rescued by our escape decoder, and four lines of this file written with a
+  literal `\u2014`. Same task on Opus 5.5, strict on vs off: ours 11 errors +
+  28 rescued in 63 calls vs 0 in 48; vanilla pi 2 in 38 vs 0 in 36.
+- Strict buys nothing now: pi's edit schema accepts invented keys (the #6278
+  reason for strict), Claude's 22,834 non-strict calls since 2026-09-23 had no
+  structural schema failure, and Claude Code sends its Edit tool non-strict.
+- Both tools also refuse a control character the file never had (U+0000 to
+  U+001F except tab, LF, CR, and U+007F), named by code point. None of 61,486
+  recorded changes ever added one.
+- On each pi update: if pi drops `strict: "prefer"` for Claude upstream, the
+  override can go; the assertion in `edit-write.test.ts` shows pi's value.
+
 ## Setup on pi 1.3.0 (2026-10-16): built-in MCP, a 4th core patch, psst and goal in-house
 
 - `pi-codex-goal` 0.6.1 vendored as `extensions/goal` and bundled (it was 40
@@ -440,9 +460,9 @@ OpenAI Codex default. One jump, not twelve.
   `namespace`, `annotations`, `outputSchema`, `prepareLoadout()`, `ctx.executeTool()`.
 - `defaultTools` gained `+name` / `-name` entries; `extensions` gained `-builtin:<name>`.
 - Built-in `read`/`bash`/`edit`/`write` now declare
-  `constrainedSampling: { type: "json_schema", strict: "prefer" }`. Inactive for us:
-  our replacements set none, and `resolveJsonSchemaStrictSampling` short-circuits on
-  an absent config rather than throwing.
+  `constrainedSampling: { type: "json_schema", strict: "prefer" }`. Inactive for us
+  then: our replacements set none. Since the edit/write swap (`da254fb`) ours wrap
+  pi's, and they set `constrainedSampling: false` (see the 2026-10-17 entry).
 - Theme engine gained `system` (new default), OKHSL colors and an `appearance` field;
   additive, so the gruvbox theme file is untouched.
 - Node requirement is now `>=22.19.0` (machine runs 22.23.1).
@@ -956,14 +976,14 @@ One scare worth recording: `netlify` was missing from PATH afterwards. It was
 are npm's *temporary* names (`.netlify-3lxmSHT1`, `.ntl-egPpTo9E`) from an
 install interrupted on 5 Mar. Check timestamps before blaming your own change.
 
-**Second pass, same day \u2014 stale artifacts (~5.1 GB more).** Eight backup dirs
+**Second pass, same day — stale artifacts (~5.1 GB more).** Eight backup dirs
 from earlier migrations (2.6 GB `~/.pi/agent-backup-20260517`, 2.2 GB
 `~/.pi-backup-20260423-204604`, `pi-cleanup-`, `pi-port-`, four `pi-update-`),
 `~/.pi/agent/extensions-disabled/`, a Feb `agent/backups/` settings snapshot, one
 stale md-export file, and an empty untracked `pi-setup/extensions/tools/.pi/todos`.
 
 Each was **proved** redundant rather than assumed: the two large backups' session
-files were diffed by name against the live store \u2014 2,235 and 619 sessions,
+files were diffed by name against the live store — 2,235 and 619 sessions,
 **zero unique to either**; every extension inside them was confirmed in git
 history (`git log --all -- <path>`). `pi-sessions-extracted/` was kept as a
 directory because `md-export.ts:584` uses it as a fallback output dir.
@@ -971,7 +991,7 @@ directory because `md-export.ts:584` uses it as a fallback output dir.
 **A third hazard surfaced in that pass:** the repo's own
 `pi-setup/extensions/tools/node_modules` held 3 **unpatched** pi-tui copies, and
 install.sh copies that directory straight into the loaded path (`:102`). It
-re-patches at `:250`, so ordering saved it \u2014 but correctness depending on step
+re-patches at `:250`, so ordering saved it — but correctness depending on step
 order inside one script is fragile, and a manual `cp -R` deploy would have
 installed unpatched copies into the live path. `apply-pi-tui-width-patch.mjs`
 now also scans its own repo checkout, so the deployment SOURCE is patched.
@@ -980,7 +1000,7 @@ Final count: **7 copies, all patched** (4 loaded + 3 deployment-source).
 Verified afterwards: repo vs deployed is byte-identical for extensions, themes,
 agent prompts, config skills and every config file except `settings.json`, whose
 only diff was `lastChangelogVersion` (runtime state pi writes itself; repo bumped
-to match) and JSON formatting pi rewrote \u2014 the load-bearing
+to match) and JSON formatting pi rewrote — the load-bearing
 `{ source, skills: [] }` object form is intact.
 
 **`@benvargas/pi-claude-code-use` was NOT updated** and is still **1.0.5**,

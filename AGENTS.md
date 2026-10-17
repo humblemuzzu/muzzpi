@@ -330,8 +330,13 @@ before the write; no record, no write), `permissions.json` checked on the path
 pi resolves and its realpath, `lib/mutex.ts`, Claude's field names, and errors
 naming the first differing line, column and code point. `\uXXXX` sent as text
 is decoded only when that alone makes oldText match, refused in prose files
-without escapes; `[REDACTED]` is never written over a real value. UTF-8 text
-only; no `replace_all`, delete or move (`trash <path>` / `git mv` in bash).
+without escapes; `[REDACTED]` is never written over a real value; a control
+character the file never had is refused. UTF-8 text only; no `replace_all`,
+delete or move (`trash <path>` / `git mv` in bash).
+
+**Both go out non-strict (`constrainedSampling: false`)**: pi's `strict: "prefer"`
+makes Anthropic garble Claude's non-ASCII (pi #10074). Never copy pi's value
+back; drop the override only once pi stops sending Claude strict.
 
 - **This Mac: deletes are rejected, the agent uses `trash`. Over ssh: deletes run.** `lib/remote-command.ts`
   splits out server parts (ssh args and heredocs, `rsync --delete` to a remote
@@ -351,8 +356,8 @@ only; no `replace_all`, delete or move (`trash <path>` / `git mv` in bash).
   own extension turns into the pane's `blocked` state and its "needs you" sound.
   Its `prepareArguments` must keep parsing stringified arrays: that is what made
   pi-ask's `ask_user` unusable.
-- apply_patch is gone (envelope 9.6%, batch 6.8% failures vs ~2%). If GPT
-  models return, gate it by model id.
+- apply_patch is gone (envelope 9.6%, batch 6.8% failures). If GPT models
+  return, gate it by model id.
 - Undo/redo refuse when a later still-applied change touches the path, or the
   file drifted outside the tool (`force: true` overrides and reports the loss).
   Ordering comes from position in `activeIds`, **never `Date.now()`**. Redo

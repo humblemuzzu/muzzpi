@@ -30,6 +30,13 @@ interface Ctx {
 	sessionManager: { getSessionId(): string };
 }
 
+/**
+ * Not pi's `strict: "prefer"`: Anthropic's strict decoding cannot produce `\u`
+ * escapes, so Claude's non-ASCII text arrives as `\b2014`, `\ndash` or a literal
+ * `\u2014` (pi #10074). Claude Code sends its Edit tool non-strict too.
+ */
+const NO_STRICT_SAMPLING = false as const;
+
 /** Claude Code's spellings, which Claude reaches for first. */
 const CLAUDE_NAMES: Record<string, string> = {
 	file_path: "path",
@@ -206,6 +213,31 @@ function resolveEscapes(edits: Edit[], content: string, file: string): { edits: 
 function assertNoTextEscapes(file: string, content: string, before: string | undefined): void {
 	const sample = escapeAsText(file, content, before ?? "");
 	if (sample) throw escapeRefusal("content", sample, file);
+}
+
+const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+const controlsIn = (text: string) => new Set(text.match(CONTROL_CHARS) ?? []);
+
+function newControl(text: string, ...had: string[]): string | undefined {
+	const allowed = new Set(had.flatMap((h) => [...controlsIn(h)]));
+	return [...controlsIn(text)].find((ch) => !allowed.has(ch));
+}
+
+/** Named by code point, never echoed: the garbled text itself is what the model should not copy again. */
+function controlRefusal(where: string, ch: string): Error {
+	const code = `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
+	return new Error(
+		`nothing was changed: ${where} contains ${code}, an invisible control character the file does not have. ` +
+			"It is almost always an escape that arrived garbled. Send the character itself, not an escape.",
+	);
+}
+
+function assertNoNewControls(edits: Edit[], content: string): void {
+	edits.forEach((edit, index) => {
+		if (typeof edit?.oldText !== "string" || typeof edit?.newText !== "string") return;
+		const ch = newControl(edit.newText, edit.oldText, content);
+		if (ch) throw controlRefusal(`edits[${index}].newText`, ch);
+	});
 }
 
 /** Only when every entry is a no-op: pi applies the rest of a call around one identical entry. */
@@ -397,7 +429,7 @@ export function createEditTool(): ToolDefinition {
 		promptSnippet: base.promptSnippet,
 		promptGuidelines: base.promptGuidelines,
 		parameters: base.parameters,
-		constrainedSampling: base.constrainedSampling,
+		constrainedSampling: NO_STRICT_SAMPLING,
 		prepareArguments: (args: unknown) => base.prepareArguments(withClaudeNames(args)),
 		renderCall: renderChangeCall("Edit"),
 		renderResult: renderChangeResult,
@@ -412,6 +444,7 @@ export function createEditTool(): ToolDefinition {
 				const requested: Edit[] = Array.isArray(input.edits) ? input.edits : [];
 				const escapes = current === undefined ? { edits: requested, notes: [] } : resolveEscapes(requested, toLF(current), target);
 				const edits = escapes.edits;
+				if (current !== undefined) assertNoNewControls(edits, toLF(current));
 				if (escapes.notes.length > 0) input = { ...input, edits };
 				let before: string | undefined;
 				let change: FileChangeSummary | undefined;
@@ -458,7 +491,7 @@ export function createWriteTool(): ToolDefinition {
 		promptSnippet: base.promptSnippet,
 		promptGuidelines: base.promptGuidelines,
 		parameters: base.parameters,
-		constrainedSampling: base.constrainedSampling,
+		constrainedSampling: NO_STRICT_SAMPLING,
 		prepareArguments: renameKeys,
 		renderCall: renderChangeCall("Write", "content"),
 		renderResult: renderChangeResult,
@@ -481,6 +514,8 @@ export function createWriteTool(): ToolDefinition {
 							return;
 						}
 						assertNoTextEscapes(p, content, before);
+						const control = newControl(content, before ?? "");
+						if (control) throw controlRefusal("content", control);
 						await fsp.mkdir(path.dirname(p), { recursive: true });
 						const diff = await writeRecorded(p, content, before, toolCallId, ctx);
 						change = { path: p, kind: before === undefined ? "added" : "modified", diff };

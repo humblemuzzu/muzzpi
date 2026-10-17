@@ -59,13 +59,17 @@ afterAll(() => {
 });
 
 describe("edit", () => {
-	test("what the model sees is exactly pi's: schema, description, guidelines, sampling", () => {
+	test("what the model sees is exactly pi's: schema, description, guidelines", () => {
 		const pi = createEditToolDefinition(DIR) as any;
 		expect(editTool.name).toBe(pi.name);
 		expect(editTool.parameters).toEqual(pi.parameters);
 		expect(editTool.description).toBe(pi.description);
 		expect(editTool.promptGuidelines).toEqual(pi.promptGuidelines);
-		expect(editTool.constrainedSampling).toEqual(pi.constrainedSampling);
+	});
+
+	test("is sent non-strict, unlike pi's: strict decoding garbles Claude's non-ASCII text (pi #10074)", () => {
+		expect((createEditToolDefinition(DIR) as any).constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+		expect(editTool.constrainedSampling).toBe(false);
 	});
 
 	test("applies pi's edits[] shape", async () => {
@@ -173,6 +177,10 @@ describe("write", () => {
 		expect(writeTool.parameters).toEqual(pi.parameters);
 		expect(writeTool.description).toBe(pi.description);
 		expect(writeTool.promptGuidelines).toEqual(pi.promptGuidelines);
+	});
+
+	test("is sent non-strict, like edit", () => {
+		expect(writeTool.constrainedSampling).toBe(false);
 	});
 
 	test("creates a file and its parent directories", async () => {
@@ -535,6 +543,53 @@ describe("edit / write: \\u escapes sent as text", () => {
 		const fenced = freshName(".md");
 		await write({ path: fenced, content: "Example:\n\n```json\n{\"dash\": \"\\u2014\"}\n```\n" });
 		expect(read(fenced)).toContain('"\\u2014"');
+	});
+});
+
+describe("edit / write: a control character the file never had is refused", () => {
+	test("edit: a garbled escape (\\b2014 for a dash) is named by code point, never written", async () => {
+		const f = fixture("Blocks every way to delete \u2014 rm, rmdir\n", ".md");
+		const message = await refusal(
+			edit({ path: f, old_string: "delete \u2014 rm", new_string: "delete \u00082014 rm, unlink" }),
+		);
+		expect(message).toContain("edits[0].newText contains U+0008");
+		expect(message).not.toContain("\u0008");
+		expect(read(f)).toBe("Blocks every way to delete \u2014 rm, rmdir\n");
+	});
+
+	test("edit: names which entry carried it", async () => {
+		const f = fixture("a = 1\nb = 2\n");
+		const message = await refusal(
+			edit({ path: f, edits: [{ oldText: "a = 1", newText: "a = 10" }, { oldText: "b = 2", newText: "b = \f2" }] }),
+		);
+		expect(message).toContain("edits[1].newText contains U+000C");
+		expect(read(f)).toBe("a = 1\nb = 2\n");
+	});
+
+	test("edit: tabs, newlines and CRLF are ordinary text", async () => {
+		const f = fixture("x\r\ny\r\n");
+		await edit({ path: f, old_string: "x", new_string: "x\tz\r\nw" });
+		expect(read(f)).toBe("x\tz\r\nw\r\ny\r\n");
+	});
+
+	test("edit: a control character the file already uses may be added again", async () => {
+		const f = fixture("page one\n\f\npage two\n", ".c");
+		await edit({ path: f, old_string: "page two\n", new_string: "page two\n\f\npage three\n" });
+		expect(read(f)).toBe("page one\n\f\npage two\n\f\npage three\n");
+	});
+
+	test("write: refused in a new file and in a replacement, allowed when the old content had it", async () => {
+		const fresh = freshName(".md");
+		expect(await refusal(write({ path: fresh, content: "state \u000bt rules\n" }))).toContain("content contains U+000B");
+		expect(exists(fresh)).toBe(false);
+
+		const f = fixture("plain\n");
+		expect(await refusal(write({ path: f, content: "plain \u001b[1m\n" }))).toContain("content contains U+001B");
+		expect(read(f)).toBe("plain\n");
+
+		const ansi = fixture("\u001b[0m reset\n", ".txt");
+		await write({ path: ansi, content: "\u001b[1m bold \u001b[0m reset\n" });
+		expect(read(ansi)).toBe("\u001b[1m bold \u001b[0m reset\n");
 	});
 });
 
