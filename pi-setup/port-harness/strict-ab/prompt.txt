@@ -1,0 +1,14 @@
+Make these edits. Read each file first. Use the edit tool, one edit call per change, and make every oldText the ENTIRE original line (do not shorten it). Do not use bash or write to change files.
+1. notes.md: on the migration-log line, change 'architecture' to 'design'.
+2. notes.md: on the 'Blocks every way to delete' line, change 'shred' to 'wipe'.
+3. notes.md: on the Needs line, change '22.19' to '24'.
+4. notes.md: on the GitHub tools line, change '7' to 'seven'.
+5. notes.md: on the package.json line, change 'bun test' to 'bun run test'.
+6. notes.md: on the 'Keep it short' line, change 'last 4' to 'last 5'.
+7. check.sh: on the first comment line, change 'third-party' to 'third party'.
+8. check.sh: on the compaction comment line, change 'STOCK' to 'stock'.
+9. check.sh: change 'ALL PATCHES IN PLACE' to 'ALL PATCHES OK' on its line.
+10. box.ts: on line 2, change 'extra usage' to 'extra-usage billing'.
+11. box.ts: in clamp, change 'width' to 'cols' only in the return line.
+12. box.ts: on the LOCKED line, change 'keychain' to 'the keychain'.
+When done, reply DONE.

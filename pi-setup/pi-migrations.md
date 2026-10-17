@@ -31,6 +31,9 @@ file would have silently reverted an upstream feature or fix.
   recorded changes ever added one.
 - On each pi update: if pi drops `strict: "prefer"` for Claude upstream, the
   override can go; the assertion in `edit-write.test.ts` shows pi's value.
+  Prove it first: `bash pi-setup/port-harness/strict-ab/run.sh vanilla 3` must
+  score 0 garbled. Error rates and causes on real sessions:
+  `python3 pi-setup/edit-scoreboard.py --since <date> [--list]`.
 
 ## Setup on pi 1.3.0 (2026-10-16): built-in MCP, a 4th core patch, psst and goal in-house
 
