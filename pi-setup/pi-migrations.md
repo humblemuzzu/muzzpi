@@ -12,6 +12,19 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## DeepSeek V4.1 Flash 1017 (2026-10-17)
+
+- DeepSeek's API serves DeepSeek-V4.1-Flash-1017 under `deepseek-flash` (its
+  pricing page; OpenRouter's model description says the same), so sub-agents
+  moved on their own. `/models` lists only `deepseek-flash` and `deepseek-v4-pro`.
+- pi 1.3.0 ships both in its DeepSeek provider. Our full re-declaration of
+  `deepseek-flash` (2026-09-10) became a cost-only `modelOverrides`: it had set
+  `"off": null`, which hid thinking-off that DeepSeek and stock pi support.
+  Costs are DeepSeek's off-peak rates (peak is 2x, 7 weekday hours UTC).
+- OpenRouter's DeepSeek entry left the picker: it pins snapshots (its
+  `deepseek/deepseek-v4.1-flash` is the original, 1017 has its own id) and was
+  never used once. River lists only `deepseek-ai/DeepSeek-V4.1-Flash`.
+
 ## pi runs our bundle of the patched files (2026-10-17)
 
 - `pi` → `dist/muzzpi-bundle/cli.js`, built by `pi-bundle/build-pi-bundle.mjs`:

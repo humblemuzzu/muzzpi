@@ -1,38 +1,14 @@
 {
   "providers": {
     "deepseek": {
-      "models": [
-        {
-          "id": "deepseek-flash",
-          "name": "DeepSeek V4.1 Flash",
-          "reasoning": true,
-          "input": ["text", "image"],
-          "contextWindow": 1000000,
-          "maxTokens": 384000,
-          "thinkingLevelMap": {
-            "off": null,
-            "minimal": null,
-            "low": "low",
-            "medium": null,
-            "high": "high",
-            "xhigh": null,
-            "max": "max"
-          },
-          "cost": {
-            "input": 0.15,
-            "output": 0.6,
-            "cacheRead": 0.003,
-            "cacheWrite": 0
-          },
-          "compat": {
-            "supportsStore": false,
-            "supportsDeveloperRole": false,
-            "maxTokensField": "max_tokens",
-            "requiresReasoningContentOnAssistantMessages": true,
-            "thinkingFormat": "deepseek"
-          }
+      "modelOverrides": {
+        "deepseek-flash": {
+          "cost": { "input": 0.15, "output": 0.6, "cacheRead": 0.003, "cacheWrite": 0 }
+        },
+        "deepseek-v4-pro": {
+          "cost": { "input": 0.66, "output": 1.98, "cacheRead": 0.022, "cacheWrite": 0 }
         }
-      ]
+      }
     },
     "river": {
       "baseUrl": "https://api.river.ai/v1",

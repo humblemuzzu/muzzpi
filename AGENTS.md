@@ -47,9 +47,9 @@ Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
 
 `enabledModels` (what `/model` shows): opus-5-5, sonnet-5-5, haiku-5-5,
 `deepseek/deepseek-flash`, `deepseek/deepseek-v4-pro`,
-`river/deepseek-ai/DeepSeek-V4.1-Flash`, and via openrouter
-`deepseek/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash` (picker only: sub-agents
-use DeepSeek's own API). The catalog still has
+`river/deepseek-ai/DeepSeek-V4.1-Flash`, and `openrouter/z-ai/glm-5.3-flash`
+(picker only). DeepSeek's `deepseek-flash` always serves its newest release, so it
+needs no update; `models.json` only sets its off-peak cost. The catalog still has
 xai, openai-codex, kimi and llama models; a model must be in `enabledModels`
 for `/model` to see it.
 
@@ -112,8 +112,7 @@ hardcode `/opt/homebrew` in a script**: `install.sh`, `verify-patches.sh` and
 ### pi runs our bundle of the patched files
 
 `pi-bundle/build-pi-bundle.mjs` runs pi's own bundle recipe (`UPSTREAM.tag`) on
-the patched `dist/`: pi's bundled startup (~45% faster than `dist/cli.js`).
-
+the patched `dist/` (~45% faster to start than `dist/cli.js`).
 - **A changed patched file needs a rebuild**, or pi runs the old code. Both
   installers rebuild; `verify-patches.sh` fails a stale build. Rollback:
   `ln -sfn "$PI_PKG/dist/cli.js" "$PI_BIN"`.
@@ -121,8 +120,7 @@ the patched `dist/`: pi's bundled startup (~45% faster than `dist/cli.js`).
   stays on `dist/cli.js`): re-derive, then `port-harness/bundle-fidelity.mjs`.
 - Rebuilds keep the previous chunks (a live pi imports them lazily). esbuild
   loads by path: `~/node_modules` holds an older one that a lookup finds.
-- Extensions get pi's virtual modules, not its files: locate pi's files with
-  `tools/lib/pi-package-dir.ts`, never beside `process.argv[1]`.
+- Extensions get pi's virtual modules: locate pi's files with `tools/lib/pi-package-dir.ts`.
 
 ## Packages (npm)
 
