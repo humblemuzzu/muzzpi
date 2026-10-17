@@ -90,8 +90,8 @@ the tools it has. Pick by what you need back:
   tools of 19 MCP servers (Chrome DevTools, Cloudflare, Paper, Astro; 6 on by
   default) through pi's own MCP client, patched to connect a server only when
   it is first used.
-- **13 skills** load on demand: debugging, code review, TDD, design ports, git,
-  SEO data, server work over ssh, and more.
+- **15 skills** load on demand: debugging, code review, TDD, design ports, git,
+  SEO data, server work over ssh, Paper and Chrome DevTools design work, and more.
 
 ## The TUI
 
@@ -211,7 +211,7 @@ As of October 2026:
 | pi releases lived through | 20+, from 0.67 to 1.2 |
 | Default-model changes | 17, across six providers: Opus 4.6 → GLM 5.1 → Kimi → GPT-5.5 → Grok 4.6 → Opus 5.5, and back again more than once |
 | MCP servers wired in | 19, none connected until first use |
-| Skills | 13 |
+| Skills | 15 |
 | Commits made on a Thursday | 34 |
 | Commits made between midnight and 5am | 20 |
 
@@ -274,7 +274,7 @@ muzzpi/
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do, and what can ask for approval
 │   ├── pi-core-patches/    the 3 patched pi files + the pi-tui width patch
-│   ├── config-skills/      13 skills
+│   ├── config-skills/      15 skills
 │   └── *.md                migration records and investigations
 └── ghostty/                themes, fonts, switchers
 ```

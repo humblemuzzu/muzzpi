@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "chrome-devtools": {
-      "description": "An isolated Chrome: navigate, click, fill, console, network, screenshots, performance traces, Lighthouse, heap snapshots",
+      "description": "An isolated Chrome: navigate, click, fill, console, network, screenshots, performance traces, Lighthouse, heap snapshots. Load the paper-chrome skill first",
       "command": "npx",
       "cwd": "/tmp",
       "args": [
@@ -22,7 +22,7 @@
       "url": "http://127.0.0.1:8089/mcp"
     },
     "paper": {
-      "description": "Paper Desktop, the design file open on this Mac: read and edit it. Call get_guide({ topic: \"paper-mcp-instructions\" }) first",
+      "description": "Paper Desktop, the design file open on this Mac: read and edit it. Load the paper-chrome skill first",
       "url": "http://127.0.0.1:29979/mcp"
     },
     "cloudflare": {

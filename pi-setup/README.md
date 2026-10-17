@@ -119,7 +119,8 @@ gruvbox (active), nightowl, catppuccin-mocha, black-metal.
 
 ### Skills
 Config-level (`config-skills/` → `~/.config/agents/skills/`):
-`chrome-cdp`, `dataforseo`, `design-port`, `dig`, `git`, `jev`, `review`, `server-ops`, `tmux`
+`chrome-cdp`, `dataforseo`, `design-port`, `dig`, `git`, `jev`, `paper-chrome` (Paper + Chrome DevTools MCP),
+`review`, `server-ops`, `tmux`
 plus external skills adapted for pi (author-prefixed):
 `c-sqr` (cursor — strict quality review), `mat-design` / `mat-tdd` (matt pocock), `dm-antislop` (dmmulroy).
 Mnemonic: `c-` cursor, `mat-` matt, `dm-` dmmulroy.
