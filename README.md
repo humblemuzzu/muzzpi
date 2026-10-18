@@ -68,6 +68,57 @@ Medians of 11–15 runs, alternated between versions so load hits both equally.
 
 Opening pi went from 1.1 s to 0.44 s to 0.27 s since March.
 
+### Search
+
+`find` and `grep` are answered by **searchd**, a small Rust daemon built on
+ripgrep's own crates, and fall back to `rg` whenever it cannot vouch for an
+answer.
+
+| | `rg`, every call | searchd |
+|---|---:|---:|
+| `find **/*.ts`, this repo (443 files) | 8.2 ms | **1.1 ms** |
+| `find **/AGENTS.md`, 63k files of projects | 109 ms | **14 ms** |
+| rare identifier, 63k files of projects | 1.87 s | **18 ms** |
+| `find **/AGENTS.md`, all of `~` (1.5M files) | 5.1 s | **22 ms** |
+| rare identifier, all of `~` | over 60 s | **83 ms** |
+| `find **/AGENTS.md`, the whole Mac | 25 s | **23 ms** |
+
+- **The same answers as `rg`.** It walks with ripgrep's `ignore` crate and
+  searches with its matcher and JSON printer. `searchd selftest` compares 1,296
+  queries against the `rg` on your machine, and it serves nothing until they
+  agree.
+- **Never stale.** A repo-sized scope is checked against the disk folder by
+  folder before each answer; `~` or `/` waits for macOS's change feed to
+  deliver everything that happened before the question.
+- **Only what you search.** System folders, apps, `~/Library`, toolchains,
+  package caches, agent transcripts, and dependency or build folders outside
+  git repos are never indexed (the whole disk's 3.6M entries became 190k). A
+  search inside one goes to `rg`; a search of `~` or `/` says how many it left
+  out. A repo is answered exactly or handed to `rg`, never approximated.
+- **Content index**: which 3-byte chunks each text file in `~` holds. It only
+  narrows the files read; every match comes from reading the file. 270 MB on
+  disk here, 155k files, warmed in about three minutes in the background. A
+  file is read for it only once it has been still for two minutes. Credential
+  files (`.env`, keys, `auth.json`, `credentials/`) never enter it: they are
+  read at query time instead.
+- **Costs pi nothing.** No work at startup; a call is a one-line socket round
+  trip (0.3 ms for a small listing), where starting `rg` costs 7 ms. A common
+  pattern with a small match limit can be a wash — searchd reads some files in
+  order first, as `rg` does.
+- **Optional, and macOS-only.** One native binary the installer builds from
+  [`searchd/`](pi-setup/searchd). Without Rust, or on another OS, `find` and
+  `grep` run `rg` exactly as before. `PI_SEARCHD=0` turns it off.
+- **Quiet on battery.** Idle it uses 0.03% CPU and a 23 MB footprint; a start
+  walks the disk in about 3 s and the index warms behind it, at macOS's lowest
+  priority. No Full Disk Access, and it answers only processes macOS attributes
+  to the app it was started from, so it lends no other app that app's folder
+  access.
+- **Budgets it is held to**: under 0.2% CPU and 50 MB at idle, under 300 MB at
+  peak, and an index kept under a 1 GiB cap that never takes the volume below a
+  5 GiB free-space floor.
+- **Removing it**: `~/.pi/agent/bin/searchd uninstall` stops the daemon and
+  deletes its data dir and its binary.
+
 ## 01 · Six sub-agents
 
 Each is a fresh pi process with a short prompt naming exactly the tools it has.
@@ -215,6 +266,7 @@ mentions a token stays readable.
 | MCP | every server connects at start | each connects on first use |
 | Web, GitHub, screen | none | built in |
 | Secrets in tool output | sent as is | scrubbed |
+| Search | `rg` per call | an index: milliseconds across `~` and the whole Mac |
 | Start | 0.16 s with no extensions | 0.21 s with all 17 |
 
 ## How it stays working
@@ -297,6 +349,7 @@ missing:
 | `PARALLEL_API_KEY` | `web_search` |
 | `gh auth login` | the GitHub tools |
 | `ripgrep`, `trash` | `grep` and `find`, safe deletes |
+| Rust (`cargo`) | searchd, the index behind `grep` and `find` (macOS only); without it they run `rg` |
 
 To use another default model, change `defaultProvider` and `defaultModel` in
 [`settings.json`](pi-setup/settings.json).
@@ -318,6 +371,7 @@ muzzpi/
 │   ├── permissions.json    what bash may never do
 │   ├── pi-core-patches/    4 patched pi files + the pi-tui width patch
 │   ├── pi-bundle/          pi's build recipe, run on the patched files
+│   ├── searchd/            the search index daemon behind find and grep
 │   ├── config-skills/      14 skills
 │   ├── port-harness/       benchmarks and the Claude-plan canary
 │   └── pi-migrations.md    one record per pi release
@@ -341,6 +395,8 @@ break, and [`pi-setup/README.md`](pi-setup/README.md) for the full inventory.
   [pi-claude-code-use](https://github.com/ben-vargas/pi-packages).
 - Skills adapted from Matt Pocock (`mat-*`), dmmulroy (`dm-*`) and Cursor (`c-*`).
 - Ghostty palettes inspired by [opencode](https://github.com/anomalyco/opencode).
+- searchd stands on [ripgrep](https://github.com/BurntSushi/ripgrep)'s crates;
+  its macOS change-feed code is adapted from [fsearch](https://github.com/noahdunnagan/fsearch).
 
 ## License
 

@@ -282,21 +282,43 @@ separate (`read_github` … `diff`); **there is no tool named `github`**.
 and its mailbox (`~/.pi/agent/agent-messages/`) are gone: every child process
 made a mailbox that was never cleaned up, and sub-agents could not receive.
 
+### searchd — the index behind find and grep
+
+`pi-setup/searchd` (Rust, ripgrep's `ignore`/`grep-*` crates) answers both tools over
+`~/.pi/agent/searchd/searchd.sock`; `lib/searchd.ts` is the client. **Any refusal, error or
+ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at pi startup.
+- **In a repo answers equal rg's or it refuses**; `cargo test` (fuzz included) and `searchd
+  selftest` are the contract. Outside repos it may leave out skipped and unreadable folders and
+  must say so. **Bump `Cargo.toml`'s version with any behaviour change** (stamps are per pair).
+- **Skips** (`rules.rs`) are `F_SKIP` nodes; dependency/build names only outside a repo; a repo
+  holding a skip goes to rg. `~/Desktop|Documents|Downloads` stay gated until a search inside
+  asks (`Gate`, `unlocked.json`). **A glob only narrows**, never lists a .gitignored file.
+- **One FSEvents stream on one root**, noise cut by exclusion paths (several paths broke event
+  order). **Never exclude `/System`** (nothing arrives); a deaf stream restarts without them.
+- **`sync` matches its cookie by event id and keeps `FlushSync`.** Folders compare by ctime.
+  Ungrafted folders read stale (`NOT_GRAFTED`); a root re-walk drops in-flight batches. Over
+  50k folders a scope trusts the feed.
+- **Credential files never enter the index** (`is_secret`); segments carry `index_rules` and a
+  crc checked at open, so a rule change purges them.
+- **Budgets** (`main.rs`): disk floor max(5 GiB, 5%), 1 GiB cap, index after 120 s unchanged,
+  a rebuild per 600 s at most; `status.indexBlocked` says why it stopped.
+- **Starts only on a passing stamp** (`selftest.json`, `ok`); another rg re-checks first, and
+  `ok: false` is final for that pair (the client respawns every 60 s). No responsible app,
+  bad HOME or data dir: exit before walking. Log: `<data dir>/searchd.log`.
+- **Searches only for clients of the daemon's own app** (`same_app`); others get `status` and
+  `shutdown`. Every wait is bounded (rg after 8 s). No Full Disk Access; placeholders are never
+  read. `searchd uninstall` removes it. Protocol lines start `{"type":"searchd_`.
+
 ### Sub-agents
 
-- **One spawn path.** All spawning tools (chad, delegate, oracle, finder,
-  librarian, code_review, read_session, read_web_page with `prompt`) build their
-  task and `--tools` list, then call `lib/run-sub-agent.ts` → `lib/pi-spawn.ts`.
-  Progress, error mapping and the result footer (`model: <id> · <level>`,
-  `continueId`) live there once.
+- **One spawn path.** Every spawning tool builds its task and `--tools` list,
+  then calls `lib/run-sub-agent.ts` → `lib/pi-spawn.ts`; progress, error
+  mapping and the result footer live there once.
 - **Models come from `pi-setup/agent-models.json` only** — see Sub-agent models.
 - **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only
   agent→agent edge is `delegate → finder`, depth ≤ 2. chad has no
   `chad`/`delegate` (a swarm that spawns swarms is a fork bomb) and no
   `oracle`/`finder`/`librarian` (it already has their tools).
-- delegate and chad persist to `~/.pi/agent/sessions-sub` (`SUB_AGENT_SESSION_DIR`,
-  next to `PI_SESSIONS_DIR` in `pi-spawn.ts`), out of `/resume`, resumable by
-  `continueId`.
 - **Don't use `--no-tools`** for sub-agents: it empties the registry and
   nothing can be re-activated.
 - **Children load only `CHILD_EXTENSIONS`** (`pi-spawn.ts`: tools,
@@ -317,9 +339,6 @@ flags, `WRITE_FLAGS` / `POSITIONAL_OUTPUT`, matched as `-oFILE`, `-so`, and `--o
 (`w`, `s///w`, `e`); `awk` is out. git `-c`/`--config-env`/`--exec-path=`
 are refused (config names commands to run). Check anything added for
 output/exec flags. A guardrail, not a sandbox.
-
-`oracle` returns a **verdict** and has unrestricted bash; `chad` returns
-**evidence** and can write nothing. Finding out → chads; deciding → oracle.
 
 ### edit / write — pi's tools, thinly wrapped
 
@@ -471,8 +490,6 @@ edit there, deployed by `install.sh`, read at session start.
   since pi 0.84); the loader refuses one. No default → `--model` omitted → pi's
   default. A `continueId` resume skips the defaults: pi restores the child's
   own model.
-- `thinking` is clamped by pi to what the model supports; the footer shows the
-  level that actually ran.
 
 ## Local models
 
@@ -532,11 +549,9 @@ injected in the `context` hook telling the model to call that tool
    files (never blind-copy; see `pi-migrations.md`) + the width patch, then
    rebuild (`update-pi.sh` does). The `@mariozechner/*` compat aliases will
    eventually go — then rename imports.
-4. **Any `pi install` / package update** → `verify-patches.sh` (width patcher
-   check included).
-5. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
+4. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
    there; `npm ci` (node_modules is gitignored), then `bun test` before deploying.
-6. **After any pi update, make one real `edit` and `write`**: the wrapper rides
+5. **After any pi update, make one real `edit` and `write`**: the wrapper rides
    on pi's `operations` and error strings.
 
 Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
@@ -555,6 +570,5 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
   cause, fix, every wrong turn. **Read before touching anything that shapes the prompt.**
 - `pi-setup/2026-06-15-anthropic-login-analysis.md` — `/login anthropic` vs Claude Code OAuth
 - `pi-setup/pi-migrations.md` — per-update record. **Read before `pi update`.**
-- `pi-setup/README.md` — setup docs
 - `git log -p AGENTS.md` — everything ever cut from this file
 - `git log --diff-filter=D --name-only -- pi-setup/` — deleted incident write-ups

@@ -3,4 +3,5 @@ node_modules/
 bun.lock
 package-lock.json
 .tmp-*/
+pi-setup/searchd/target/
 

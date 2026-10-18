@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGlobTool } from "./glob";
@@ -14,6 +14,13 @@ writeFileSync(join(REPO, "build", "out.txt"), "needle in the ignored dir\n");
 writeFileSync(join(REPO, "src", "notes.md"), "alpha\nbeta\ngamma\ndelta\nepsilon\n");
 writeFileSync(join(REPO, "src", "code.ts"), "gamma\n");
 writeFileSync(join(REPO, "src", "many.txt"), "hit\nhit\nhit\nhit\nhit\n");
+writeFileSync(join(REPO, ".git", "config"), "gamma\n");
+mkdirSync(join(REPO, "dated"));
+for (const [name, age] of [["old.log", 300], ["new.log", 10], ["mid.log", 100]] as const) {
+	writeFileSync(join(REPO, "dated", name), "x\n");
+	const t = Date.now() / 1000 - age;
+	utimesSync(join(REPO, "dated", name), t, t);
+}
 afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 
 const ctx = { cwd: REPO };
@@ -49,6 +56,10 @@ describe("find", () => {
 		expect((await find({ filePattern: "**/*.ts", path: "src" })).text).toBe("code.ts");
 	});
 
+	test("results come newest first", async () => {
+		expect((await find({ filePattern: "*.log", path: "dated" })).text).toBe("new.log\nmid.log\nold.log");
+	});
+
 	test("a missing path is reported as missing", async () => {
 		const r = await find({ filePattern: "*", path: "nope" });
 		expect(r.isError).toBe(true);
@@ -75,6 +86,12 @@ describe("grep", () => {
 
 	test("an ignored directory passed as path is searched", async () => {
 		expect((await grep({ pattern: "needle", path: "build" })).text).toContain("out.txt:1: needle in the ignored dir");
+	});
+
+	test("nothing inside .git is searched", async () => {
+		const r = await grep({ pattern: "gamma" });
+		expect(r.text).toContain("src/code.ts");
+		expect(r.text).not.toContain(".git");
 	});
 
 	test("path and glob are honoured together", async () => {

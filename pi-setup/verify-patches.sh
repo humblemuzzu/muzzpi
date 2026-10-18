@@ -262,6 +262,67 @@ else
          "check resource-loader.js, then call one real sub-agent; PI_SUBAGENT_ALL_EXTENSIONS=1 restores the full set meanwhile"
 fi
 
+# ── searchd: the optional index behind find and grep (without it they run rg) ──
+SD_BIN="$PI_AGENT/bin/searchd"
+SD_STAMP="$PI_AGENT/searchd/selftest.json"
+SD_REPO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$SCRIPT_DIR/searchd/Cargo.toml" 2>/dev/null | head -1)
+SD_RG="$(rg --version 2>/dev/null | head -1)"
+SD_STATE=""
+if [ -f "$SD_STAMP" ]; then
+    # "changed": the daemon re-checks itself at its next start; "failed": the
+    # check ran against this very rg and did not pass.
+    SD_STATE=$(python3 - "$SD_STAMP" "$SD_RG" <<'PY'
+import json, sys
+path, rg = sys.argv[1:3]
+try:
+    stamp = json.load(open(path))
+except Exception:
+    print("unreadable")
+    raise SystemExit
+if stamp.get("rg") != rg:
+    print("changed")
+elif stamp.get("ok") is False:
+    print("failed")
+else:
+    print("ok")
+PY
+)
+fi
+if [ ! -x "$SD_BIN" ]; then
+    note "searchd: not installed, so find and grep run rg" "install Rust (https://rustup.rs), then bash pi-setup/install.sh"
+elif [ "$("$SD_BIN" version 2>/dev/null)" != "$SD_REPO_VERSION" ]; then
+    note "searchd: the installed build is not the repo's version $SD_REPO_VERSION" "bash pi-setup/install.sh"
+elif [ ! -f "$SD_STAMP" ] || [ "$SD_STATE" = "unreadable" ]; then
+    note "searchd: no selftest stamp, so it answers nothing and find/grep run rg" "$SD_BIN selftest --stamp"
+elif [ "$SD_STATE" = "changed" ]; then
+    note "searchd: rg changed since the selftest — the daemon re-checks itself at its next start" "$SD_BIN selftest --stamp (to check now)"
+elif [ "$SD_STATE" = "failed" ]; then
+    fail "searchd: its selftest FAILED against this rg, so find/grep run rg" "$SD_BIN selftest --verbose, then bash pi-setup/install.sh"
+else
+    pass "searchd: installed, selftest passed against this rg"
+fi
+
+# A global gitignore rule that is not `**/`-prefixed is anchored to the folder rg
+# runs in, so searchd refuses every search below another folder and hands it to
+# rg: worth naming, since it costs the index silently. Read from a daemon that
+# already answers; verify-patches never starts one.
+SD_ANCHORED=""
+if [ -x "$SD_BIN" ]; then
+    SD_ANCHORED=$("$SD_BIN" status 2>/dev/null | python3 -c '
+import json, sys
+try:
+    s = json.load(sys.stdin)
+except Exception:
+    raise SystemExit
+if s.get("globalIgnoreAnchored"):
+    print("%s in %s" % (s.get("globalIgnoreRule"), s.get("globalIgnoreFile")))
+' 2>/dev/null)
+fi
+if [ -n "$SD_ANCHORED" ]; then
+    note "searchd: a global gitignore rule is anchored ($SD_ANCHORED), so searches below other folders run rg" \
+         "put '**/' in front of that rule in the file named (the daemon picks the change up itself)"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
     echo "ALL PATCHES IN PLACE ✓"

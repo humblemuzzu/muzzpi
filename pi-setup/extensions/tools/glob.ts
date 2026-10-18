@@ -1,28 +1,78 @@
 /**
- * glob tool — replaces pi's built-in find with enhanced file finding.
+ * glob tool — replaces pi's built-in find (same-name registration).
  *
- * differences from pi's built-in:
- * - uses rg --files (not fd — one less dependency)
- * - sorted by mtime (most recent first, via rg --sortr modified)
- * - pagination via offset + limit
- * - hidden files included by default (--hidden)
- * - .git/.jj excluded; .gitignore respected (an ignored directory passed as
- *   `path` is still listed — rg searches explicitly named paths)
- *
- * shadows pi's built-in `find` tool via same-name registration.
+ * - answered by searchd's index when it runs (lib/searchd.ts), else rg --files
+ * - newest first: stat after a parallel walk (rg's --sortr walks on one thread)
+ * - pagination via offset + limit; hidden files included; .git/.jj excluded
+ * - .gitignore respected, and the glob only narrows: it never lists an ignored
+ *   file (an ignored directory passed as `path` is still listed)
  */
 
-import { spawn } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
-import { createInterface } from "node:readline";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { formatHeadTail } from "./lib/output-buffer";
-import { GITIGNORE_NOTE, rgLocation } from "./lib/rg";
+import { GITIGNORE_NOTE, rgFilesNarrowed, rgLocation } from "./lib/rg";
+import { askSearchd, searchdNotices } from "./lib/searchd";
 import { renderBoxedText } from "./lib/box-format";
 import { getText } from "./lib/tui";
 
 const DEFAULT_LIMIT = 500;
+const truncatedMsg = (n: number) => `... [${n} more results, use a more specific pattern to narrow] ...`;
+const PARTIAL = "some folders could not be read; the list may be incomplete";
+
+/** Both rg and searchd exit 2 when a folder could not be read; with results, that list is partial. */
+const exitNotices = (code: number | null, total: number): string[] => (code === 2 && total > 0 ? [PARTIAL] : []);
+
+/** newest first, ties by path; a path that cannot be stat'ed goes last. */
+export function sortNewestFirst(dir: string, rels: string[]): string[] {
+	const keyed = rels.map((rel) => {
+		const st = fs.statSync(path.join(dir, rel), { throwIfNoEntry: false });
+		return { rel, mtime: st ? st.mtimeMs : -Infinity };
+	});
+	keyed.sort((a, b) => b.mtime - a.mtime || (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+	return keyed.map((k) => k.rel);
+}
+
+interface Page {
+	/** a slice, or the head then the tail of the sorted list */
+	shown: string[];
+	/** how many of `shown` are the head */
+	head: number;
+	total: number;
+}
+
+function pageOf(sorted: string[], offset: number, limit: number): Page {
+	const total = sorted.length;
+	if (offset > 0) {
+		const shown = sorted.slice(offset, offset + limit);
+		return { shown, head: shown.length, total };
+	}
+	if (total > limit) {
+		const half = Math.floor(limit / 2);
+		return { shown: [...sorted.slice(0, half), ...sorted.slice(total - half)], head: half, total };
+	}
+	return { shown: sorted, head: total, total };
+}
+
+function render(p: Page, offset: number, globPattern: string, notices: string[]): any {
+	const note = notices.length > 0 ? `\n\n[${notices.join(". ")}]` : "";
+	if (p.total === 0) {
+		return { content: [{ type: "text" as const, text: `no files found matching pattern (${GITIGNORE_NOTE})${note}` }] };
+	}
+	let output: string;
+	if (offset > 0) {
+		output = `${p.shown.join("\n")}\n\n(showing ${offset + 1}-${offset + p.shown.length} of ${p.total} results)`;
+	} else if (p.total > p.shown.length) {
+		const head = p.shown.slice(0, p.head);
+		const tail = p.shown.slice(p.head);
+		output = `${[...head, "", truncatedMsg(p.total - head.length - tail.length), "", ...tail].join("\n")}\n\n(${p.total} total results)`;
+	} else {
+		output = formatHeadTail(p.shown, p.shown.length, truncatedMsg);
+	}
+	return { content: [{ type: "text" as const, text: output + note }], details: { header: globPattern } };
+}
 
 export function createGlobTool(): ToolDefinition {
 	return {
@@ -95,105 +145,29 @@ export function createGlobTool(): ToolDefinition {
 					isError: true,
 				} as any;
 			}
+			const aborted = { content: [{ type: "text" as const, text: "search aborted" }], isError: true } as any;
 
-			return new Promise((resolve) => {
-				const args = [
-					"--files",
-					"--hidden",
-					"--color=never",
-					"--sortr",
-					"modified",
-					"--glob",
-					"!.git",
-					"--glob",
-					"!.jj",
-					"--glob",
-					globPattern,
-					where.target,
-				];
+			const sd = await askSearchd({ op: "find", dir: where.cwd, glob: globPattern, limit, offset }, signal);
+			if (signal?.aborted) return aborted;
+			if ("lines" in sd) {
+				const shown = sd.lines.map((l) => JSON.parse(l) as string);
+				const page = { shown, head: sd.end.head ?? shown.length, total: sd.end.total ?? shown.length };
+				return render(page, offset, globPattern, [...exitNotices(sd.end.exit, page.total), ...searchdNotices(sd.end)]);
+			}
 
-				const child = spawn("rg", args, { cwd: where.cwd, stdio: ["ignore", "pipe", "pipe"] });
-				const rl = createInterface({ input: child.stdout! });
-
-				let stderr = "";
-				let aborted = false;
-				const allPaths: string[] = [];
-
-				const onAbort = () => {
-					aborted = true;
-					if (!child.killed) child.kill();
-				};
-				signal?.addEventListener("abort", onAbort, { once: true });
-
-				child.stderr?.on("data", (chunk: Buffer) => {
-					stderr += chunk.toString();
-				});
-
-				rl.on("line", (line) => {
-					const trimmed = line.trim();
-					if (!trimmed) return;
-					const rel = path.relative(where.cwd, path.resolve(where.cwd, trimmed)).replace(/\\/g, "/");
-					if (rel && !rel.startsWith("..")) {
-						allPaths.push(rel);
-					}
-				});
-
-				child.on("error", (err) => {
-					rl.close();
-					signal?.removeEventListener("abort", onAbort);
-					resolve({
-						content: [{ type: "text" as const, text: `find error: ${err.message}` }],
-						isError: true,
-					} as any);
-				});
-
-				child.on("close", (code) => {
-					rl.close();
-					signal?.removeEventListener("abort", onAbort);
-
-					if (aborted) {
-						resolve({
-							content: [{ type: "text" as const, text: "search aborted" }],
-							isError: true,
-						} as any);
-						return;
-					}
-
-					if (code !== 0 && code !== 1 && allPaths.length === 0) {
-						resolve({
-							content: [{ type: "text" as const, text: stderr.trim() || `rg exited with code ${code}` }],
-							isError: true,
-						} as any);
-						return;
-					}
-
-					if (allPaths.length === 0) {
-						resolve({
-							content: [{ type: "text" as const, text: `no files found matching pattern (${GITIGNORE_NOTE})` }],
-						} as any);
-						return;
-					}
-
-					const total = allPaths.length;
-
-					// if paginating (offset > 0), use traditional pagination
-					// otherwise use head+tail for first page
-					let output: string;
-					if (offset > 0) {
-						const paginated = allPaths.slice(offset, offset + limit);
-						output = paginated.join("\n");
-						output += `\n\n(showing ${offset + 1}-${offset + paginated.length} of ${total} results)`;
-					} else if (total > limit) {
-						output = formatHeadTail(allPaths, limit, (n) =>
-							`... [${n} more results, use a more specific pattern to narrow] ...`);
-						output += `\n\n(${total} total results)`;
-					} else {
-						output = allPaths.join("\n");
-					}
-
-					resolve({ content: [{ type: "text" as const, text: output }], details: { header: globPattern } } as any);
-				});
-			});
+			const found = await rgFilesNarrowed(where.cwd, globPattern, signal);
+			if (found.aborted) return aborted;
+			if (found.error) {
+				return { content: [{ type: "text" as const, text: `find error: ${found.error}` }], isError: true } as any;
+			}
+			if (found.code !== 0 && found.code !== 1 && found.paths.length === 0) {
+				return {
+					content: [{ type: "text" as const, text: found.stderr.trim() || `rg exited with code ${found.code}` }],
+					isError: true,
+				} as any;
+			}
+			const page = pageOf(sortNewestFirst(where.cwd, found.paths), offset, limit);
+			return render(page, offset, globPattern, exitNotices(found.code, page.total));
 		},
 	};
 }

@@ -228,6 +228,51 @@ else
 fi
 ok "Extensions installed"
 
+# ── searchd: the index behind find and grep ──
+# Optional: without a Rust toolchain the tools keep running rg. A build serves
+# only after its selftest has matched this machine's rg (it records a stamp).
+SEARCHD_SRC="$SCRIPT_DIR/searchd"
+SEARCHD_BIN="$PI_AGENT/bin/searchd"
+SEARCHD_TARGET="${XDG_CACHE_HOME:-$HOME/.cache}/muzzpi/searchd-target"
+
+# searchd needs Rust 1.88 (let-chains, edition 2024).
+rustc_new_enough() {
+    local version major minor
+    version="$(rustc --version 2>/dev/null | sed -n '1s/^rustc \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
+    [ -n "$version" ] || return 1
+    read -r major minor <<< "$version"
+    [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 88 ]; }
+}
+
+if [ "$(uname -s)" != "Darwin" ]; then
+    info "searchd is macOS-only; find and grep use rg"
+elif [ ! -d "$SEARCHD_SRC" ] || ! command -v cargo &>/dev/null; then
+    warn "cargo not found: searchd not built, find and grep use rg (https://rustup.rs enables it)"
+elif ! rustc_new_enough; then
+    warn "rustc $(rustc --version 2>/dev/null | cut -d' ' -f2) is older than the 1.88 searchd needs: not built, find and grep use rg (rustup update, then re-run)"
+else
+    info "Building searchd (the index behind find and grep)..."
+    if run env CARGO_TARGET_DIR="$SEARCHD_TARGET" cargo build --release --locked --manifest-path "$SEARCHD_SRC/Cargo.toml"; then
+        run mkdir -p "$PI_AGENT/bin"
+        # the running daemon is the old build; the next find or grep starts the new one
+        if [ -x "$SEARCHD_BIN" ]; then run "$SEARCHD_BIN" query '{"op":"shutdown"}' >/dev/null 2>&1 || true; fi
+        run cp "$SEARCHD_TARGET/release/searchd" "$SEARCHD_BIN.new.$$"
+        run mv -f "$SEARCHD_BIN.new.$$" "$SEARCHD_BIN"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            declared="$(sed -n 's/^version = "\(.*\)"/\1/p' "$SEARCHD_SRC/Cargo.toml" | head -1)"
+            built="$("$SEARCHD_BIN" version 2>/dev/null || true)"
+            [ "$built" = "$declared" ] || warn "searchd reports version '$built', Cargo.toml says '$declared'"
+        fi
+        if run "$SEARCHD_BIN" selftest --stamp; then
+            ok "searchd installed: find and grep start it on first use (remove it with: $SEARCHD_BIN uninstall)"
+        else
+            warn "searchd selftest failed: it will not serve, and find/grep keep using rg"
+        fi
+    else
+        warn "searchd build failed: find and grep keep using rg"
+    fi
+fi
+
 # ── Themes ──
 info "Installing themes..."
 sync_dir "$SCRIPT_DIR/themes" "$PI_AGENT/themes"

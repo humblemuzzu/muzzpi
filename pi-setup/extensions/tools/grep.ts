@@ -6,24 +6,25 @@
  * - 200-char line truncation (vs pi's 500)
  * - caseSensitive param (default case-sensitive)
  * - suggests literal:true when pattern contains regex metacharacters
- * - spawns rg directly (no ensureTool — nix provides rg on PATH)
+ * - answered by searchd's index when it runs (lib/searchd.ts), else rg
  * - includes ±1 context lines around matches by default (via rg --context)
  *   so the LLM sees surrounding code and show() has natural gaps to elide
  *
  * shadows pi's built-in `grep` tool via same-name registration.
  */
 
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import * as path from "node:path";
 import * as os from "node:os";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { headTail } from "./lib/output-buffer";
 import { boxRendererWindowed, osc8Link, type BoxSection, type BoxLine, type Excerpt } from "./lib/box-format";
 import { getText, getContainer } from "./lib/tui";
-import { GITIGNORE_NOTE, rgLocation } from "./lib/rg";
+import { GITIGNORE_NOTE, rgFiles, rgLocation } from "./lib/rg";
+import { askSearchd, searchdNotices } from "./lib/searchd";
 
 /** output lines past which the result shows only its first and last SHOWN_WHEN_CUT lines */
 const MAX_OUTPUT_LINES = 300;
@@ -190,28 +191,35 @@ export function createGrepTool(): ToolDefinition {
 				return { content: [{ type: "text" as const, text: where.error }], isError: true } as any;
 			}
 			const rgCwd = where.cwd;
+			const ignoreCase = params.caseSensitive === false || params.ignoreCase === true;
+
+			const sd = where.target === "."
+				? await askSearchd({
+					op: "grep",
+					dir: rgCwd,
+					pattern: params.pattern,
+					literal: params.literal === true,
+					ignoreCase,
+					context: contextLines,
+					limit: maxMatches,
+					glob: params.glob,
+				}, signal)
+				: { fallback: "a single file is searched by rg" };
+			if (signal?.aborted) {
+				return { content: [{ type: "text" as const, text: "search aborted" }], isError: true } as any;
+			}
+			// A matching --glob makes rg search ignored files too; the glob only
+			// narrows the .gitignore-respecting list, as searchd does.
+			let allowed: Set<string> | undefined;
+			if (!("lines" in sd) && params.glob && where.target === ".") {
+				const plain = await rgFiles(rgCwd, undefined, signal);
+				allowed = new Set(plain.paths.map((p) => path.resolve(rgCwd, p)));
+			}
+			const extraNotices = "lines" in sd ? searchdNotices(sd.end) : [];
 
 			return new Promise((resolve) => {
-				const args = [
-					"--json", "--line-number", "--color=never", "--hidden",
-					"--context", String(contextLines),
-				];
-
-				if (params.caseSensitive === false || params.ignoreCase === true) {
-					args.push("--ignore-case");
-				}
-				if (params.literal) {
-					args.push("--fixed-strings");
-				}
-				if (params.glob) {
-					args.push("--glob", params.glob);
-				}
-
-				args.push("--", params.pattern, where.target);
-
-				const child = spawn("rg", args, { cwd: rgCwd, stdio: ["ignore", "pipe", "pipe"] });
-				const rl = createInterface({ input: child.stdout! });
-
+				let child: ChildProcess | undefined;
+				let rl: Interface | undefined;
 				let stderr = "";
 				let totalMatches = 0;
 				let killedDueToLimit = false;
@@ -219,17 +227,16 @@ export function createGrepTool(): ToolDefinition {
 				/** all match + context events, in stream order */
 				const events: RgEvent[] = [];
 
+				const stop = () => {
+					if (child && !child.killed) child.kill();
+				};
 				const onAbort = () => {
 					aborted = true;
-					if (!child.killed) child.kill();
+					stop();
 				};
 				signal?.addEventListener("abort", onAbort, { once: true });
 
-				child.stderr?.on("data", (chunk: Buffer) => {
-					stderr += chunk.toString();
-				});
-
-				rl.on("line", (line) => {
+				const handleLine = (line: string) => {
 					if (!line.trim() || killedDueToLimit) return;
 
 					let event: any;
@@ -246,6 +253,7 @@ export function createGrepTool(): ToolDefinition {
 					const lineText: string = (event.data?.lines?.text ?? "").replace(/\r?\n$/, "");
 					if (!rawPath || typeof lineNumber !== "number") return;
 					const filePath = path.resolve(rgCwd, rawPath);
+					if (allowed && !allowed.has(filePath)) return;
 
 					if (event.type === "match") {
 						totalMatches++;
@@ -260,21 +268,12 @@ export function createGrepTool(): ToolDefinition {
 
 					if (totalMatches >= maxMatches) {
 						killedDueToLimit = true;
-						if (!child.killed) child.kill();
+						stop();
 					}
-				});
+				};
 
-				child.on("error", (err) => {
-					rl.close();
-					signal?.removeEventListener("abort", onAbort);
-					resolve({
-						content: [{ type: "text" as const, text: `grep error: ${err.message}` }],
-						isError: true,
-					} as any);
-				});
-
-				child.on("close", (code) => {
-					rl.close();
+				const finish = (code: number | null) => {
+					rl?.close();
 					signal?.removeEventListener("abort", onAbort);
 
 					if (aborted) {
@@ -297,6 +296,9 @@ export function createGrepTool(): ToolDefinition {
 						let text = `no matches found (${GITIGNORE_NOTE})`;
 						if (!params.literal && looksLikeRegex(params.pattern)) {
 							text += "\n\n(pattern contains regex characters — try literal: true if searching for exact text)";
+						}
+						if (extraNotices.length > 0) {
+							text += `\n\n[${extraNotices.join(". ")}]`;
 						}
 						resolve({ content: [{ type: "text" as const, text }] } as any);
 						return;
@@ -445,6 +447,7 @@ export function createGrepTool(): ToolDefinition {
 						);
 					}
 
+					notices.push(...extraNotices);
 					if (notices.length > 0) {
 						output += `\n\n[${notices.join(". ")}]`;
 					}
@@ -453,7 +456,42 @@ export function createGrepTool(): ToolDefinition {
 						content: [{ type: "text" as const, text: output }],
 						details: { fileGroups, notices, matchLineIndices: finalMatchIndices, firstMatchPerFile, searchPath: rgCwd },
 					} as any);
+				};
+
+				if ("lines" in sd) {
+					for (const line of sd.lines) {
+						handleLine(line);
+						if (killedDueToLimit) break;
+					}
+					finish(sd.end.exit);
+					return;
+				}
+
+				const args = [
+					"--json", "--line-number", "--color=never", "--hidden",
+					"--glob", "!.git", "--glob", "!.jj",
+					"--context", String(contextLines),
+				];
+				if (ignoreCase) args.push("--ignore-case");
+				if (params.literal) args.push("--fixed-strings");
+				if (params.glob) args.push("--glob", params.glob);
+				args.push("--", params.pattern, where.target);
+
+				child = spawn("rg", args, { cwd: rgCwd, stdio: ["ignore", "pipe", "pipe"] });
+				rl = createInterface({ input: child.stdout! });
+				child.stderr?.on("data", (chunk: Buffer) => {
+					stderr += chunk.toString();
 				});
+				rl.on("line", handleLine);
+				child.on("error", (err) => {
+					rl?.close();
+					signal?.removeEventListener("abort", onAbort);
+					resolve({
+						content: [{ type: "text" as const, text: `grep error: ${err.message}` }],
+						isError: true,
+					} as any);
+				});
+				child.on("close", finish);
 			});
 		},
 
