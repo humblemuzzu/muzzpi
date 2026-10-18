@@ -9,7 +9,7 @@
  * 2. integration tests for the 7 github tools via pi spawn.
  *    — spawns `pi --mode json` asking it to call specific tools.
  *    — guarded by PI_E2E=1 (costs real API calls + AI tokens).
- *    — validates the full flow: model → tool call → gh api → result.
+ *    — validates the full flow: model → tool call → GitHub API → result.
  *
  * the unit tests prove the plumbing works. the integration tests
  * prove the tools register, execute, and return correct results
@@ -27,7 +27,9 @@ import { describe, it, expect } from "bun:test";
 import {
 	parseRepoUrl,
 	repoSlug,
-	ghApi,
+	githubApi,
+	GithubApiError,
+	rateLimitWaitMs,
 	decodeBase64Content,
 	addLineNumbers,
 	truncate,
@@ -37,24 +39,24 @@ import { fetchWindow, matchGlob, searchPathQualifier } from "./github";
 describe("fetchWindow", () => {
 	const source = Array.from({ length: 250 }, (_, i) => i);
 	const pages: number[] = [];
-	const fetchPage = (page: number, perPage: number) => {
+	const fetchPage = async (page: number, perPage: number) => {
 		pages.push(page);
 		return source.slice((page - 1) * perPage, page * perPage);
 	};
 
-	it("offset skips exactly that many items, across a page boundary", () => {
+	it("offset skips exactly that many items, across a page boundary", async () => {
 		pages.length = 0;
-		expect(fetchWindow(95, 10, fetchPage)).toEqual([95, 96, 97, 98, 99, 100, 101, 102, 103, 104]);
+		expect(await fetchWindow(95, 10, fetchPage)).toEqual([95, 96, 97, 98, 99, 100, 101, 102, 103, 104]);
 		expect(pages).toEqual([1, 2]);
 	});
 
-	it("an offset smaller than the limit is not rounded away", () => {
-		expect(fetchWindow(5, 3, fetchPage)).toEqual([5, 6, 7]);
+	it("an offset smaller than the limit is not rounded away", async () => {
+		expect(await fetchWindow(5, 3, fetchPage)).toEqual([5, 6, 7]);
 	});
 
-	it("stops at the end of the results", () => {
+	it("stops at the end of the results", async () => {
 		pages.length = 0;
-		expect(fetchWindow(240, 50, fetchPage)).toEqual(source.slice(240));
+		expect(await fetchWindow(240, 50, fetchPage)).toEqual(source.slice(240));
 		expect(pages).toEqual([3]);
 	});
 });
@@ -268,40 +270,162 @@ describe("lib/github.ts", () => {
 	});
 });
 
+describe("rateLimitWaitMs", () => {
+	const headers = (h: Record<string, string>) => new Headers(h);
+
+	it("reads retry-after seconds on a secondary limit", () => {
+		expect(rateLimitWaitMs(403, headers({ "retry-after": "7" }), "")).toBe(7000);
+		expect(rateLimitWaitMs(429, headers({ "retry-after": "0" }), "")).toBe(0);
+	});
+
+	it("waits until x-ratelimit-reset when the primary limit is spent", () => {
+		const now = 1_000_000_000_000;
+		const h = headers({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(now / 1000 + 42) });
+		expect(rateLimitWaitMs(403, h, "API rate limit exceeded", now)).toBe(42_000);
+	});
+
+	it("a secondary limit named only in the message waits a minute", () => {
+		expect(rateLimitWaitMs(403, headers({}), "You have exceeded a secondary rate limit.")).toBe(60_000);
+		expect(rateLimitWaitMs(429, headers({}), "")).toBe(60_000);
+	});
+
+	it("a 403 that is not about rate limits is a permission error", () => {
+		expect(rateLimitWaitMs(403, headers({ "x-ratelimit-remaining": "12" }), "Resource not accessible")).toBeUndefined();
+		expect(rateLimitWaitMs(404, headers({ "retry-after": "5" }), "Not Found")).toBeUndefined();
+	});
+});
+
+describe("githubApi transport (stubbed fetch)", () => {
+	async function withFetch<T>(responses: Response[], run: (urls: string[]) => Promise<T>): Promise<T> {
+		const real = globalThis.fetch;
+		const urls: string[] = [];
+		globalThis.fetch = (async (input: any) => {
+			urls.push(String(input));
+			const next = responses.shift();
+			if (!next) throw new Error("unexpected request");
+			return next;
+		}) as typeof fetch;
+		try {
+			return await run(urls);
+		} finally {
+			globalThis.fetch = real;
+		}
+	}
+	const json = (body: unknown, init?: ResponseInit) =>
+		new Response(JSON.stringify(body), { headers: { "content-type": "application/json" }, ...init });
+
+	it("retries once after a short rate limit, then returns the data", async () => {
+		const data = await withFetch(
+			[json({ message: "secondary rate limit" }, { status: 403, headers: { "retry-after": "0" } }), json({ ok: 1 })],
+			async (urls) => {
+				const out = await githubApi("search/code", { params: { q: "a b", per_page: 3 } });
+				expect(urls).toHaveLength(2);
+				expect(urls[0]).toBe("https://api.github.com/search/code?q=a+b&per_page=3");
+				return out;
+			},
+		);
+		expect(data).toEqual({ ok: 1 });
+	});
+
+	it("a rate limit that resets too late fails at once with the reset time", async () => {
+		const reset = String(Math.floor(Date.now() / 1000) + 3600);
+		await withFetch(
+			[json({ message: "API rate limit exceeded" }, { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset } })],
+			async () => {
+				await expect(githubApi("repos/a/b")).rejects.toThrow(/HTTP 403 rate limited until .*API rate limit exceeded/);
+			},
+		);
+	});
+
+	it("a body cut off by an abort reports the abort, not invalid JSON", async () => {
+		const ctrl = new AbortController();
+		const body = new ReadableStream({
+			start(c) {
+				c.enqueue(new TextEncoder().encode('{"partial":'));
+				setTimeout(() => {
+					ctrl.abort();
+					c.error(new DOMException("aborted", "AbortError"));
+				}, 20);
+			},
+		});
+		await withFetch([new Response(body)], async () => {
+			await expect(githubApi("repos/a/b", { signal: ctrl.signal })).rejects.toThrow("GitHub API repos/a/b: aborted");
+		});
+	});
+
+	it.skipIf(Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN))("a 401 from a gh token is retried once with a fresh one", async () => {
+		const data = await withFetch(
+			[json({ message: "Bad credentials" }, { status: 401 }), json({ ok: 2 })],
+			async (urls) => {
+				const out = await githubApi("repos/a/b");
+				expect(urls).toHaveLength(2);
+				return out;
+			},
+		);
+		expect(data).toEqual({ ok: 2 });
+	});
+
+	it("an HTTP error carries its status and GitHub's message", async () => {
+		await withFetch(
+			[json({ message: "Validation Failed", errors: [{ message: "bad ref" }] }, { status: 422 })],
+			async () => {
+				const err: any = await githubApi("repos/a/b/compare/x...y").catch((e) => e);
+				expect(err).toBeInstanceOf(GithubApiError);
+				expect(err.status).toBe(422);
+				expect(err.message).toBe("GitHub API repos/a/b/compare/x...y failed: HTTP 422 Validation Failed — bad ref");
+			},
+		);
+	});
+
+	it("an aborted call stops instead of waiting out a rate limit", async () => {
+		const ctrl = new AbortController();
+		await withFetch(
+			[json({}, { status: 429, headers: { "retry-after": "30" } })],
+			async () => {
+				const pending = githubApi("repos/a/b", { signal: ctrl.signal });
+				setTimeout(() => ctrl.abort(), 20);
+				const started = Date.now();
+				await expect(pending).rejects.toThrow("GitHub API repos/a/b: aborted");
+				expect(Date.now() - started).toBeLessThan(2000);
+			},
+		);
+	});
+});
+
 // ============================================================
-// layer 1b: gh api integration (no pi deps, but hits real API)
+// layer 1b: GitHub API integration (no pi deps, but hits real API)
 // ============================================================
 
-describe("ghApi", () => {
-	it("fetches repo info", () => {
-		const data = ghApi("repos/bdsqqq/dots");
+describe("githubApi", () => {
+	it("fetches repo info", async () => {
+		const data = await githubApi("repos/bdsqqq/dots");
 		expect(data.full_name).toBe("bdsqqq/dots");
 		expect(data.default_branch).toBeTruthy();
 	});
 
-	it("passes query params correctly", () => {
-		const data = ghApi("repos/bdsqqq/dots/commits", { params: { per_page: 1 } });
+	it("passes query params correctly", async () => {
+		const data = await githubApi("repos/bdsqqq/dots/commits", { params: { per_page: 1 } });
 		expect(Array.isArray(data)).toBe(true);
 		expect(data.length).toBe(1);
 	});
 
-	it("reads file contents via contents API", () => {
-		const data = ghApi("repos/bdsqqq/dots/contents/flake.nix");
+	it("reads file contents via contents API", async () => {
+		const data = await githubApi("repos/bdsqqq/dots/contents/flake.nix");
 		expect(data.type).toBe("file");
 		expect(data.content).toBeTruthy();
 		const decoded = decodeBase64Content(data.content);
 		expect(decoded).toContain("description");
 	});
 
-	it("lists directory via contents API", () => {
-		const data = ghApi("repos/bdsqqq/dots/contents/");
+	it("lists directory via contents API", async () => {
+		const data = await githubApi("repos/bdsqqq/dots/contents/");
 		expect(Array.isArray(data)).toBe(true);
 		const names = data.map((e: any) => e.name);
 		expect(names).toContain("flake.nix");
 	});
 
-	it("searches code", () => {
-		const data = ghApi("search/code", {
+	it("searches code", async () => {
+		const data = await githubApi("search/code", {
 			params: { q: "nixpkgs repo:bdsqqq/dots", per_page: 3 },
 			accept: "application/vnd.github.text-match+json",
 		});
@@ -309,22 +433,23 @@ describe("ghApi", () => {
 		expect(data.items.length).toBeGreaterThan(0);
 	});
 
-	it("fetches git tree recursively", () => {
-		const repo = ghApi("repos/bdsqqq/dots");
-		const tree = ghApi(`repos/bdsqqq/dots/git/trees/${repo.default_branch}?recursive=1`);
+	it("fetches the default branch's tree recursively through HEAD", async () => {
+		const tree = await githubApi("repos/bdsqqq/dots/git/trees/HEAD?recursive=1");
 		expect(tree.tree.length).toBeGreaterThan(10);
 		const paths = tree.tree.map((t: any) => t.path);
 		expect(paths).toContain("flake.nix");
 	});
 
-	it("compares refs", () => {
-		const data = ghApi("repos/bdsqqq/dots/compare/HEAD~1...HEAD");
+	it("compares refs", async () => {
+		const data = await githubApi("repos/bdsqqq/dots/compare/HEAD~1...HEAD");
 		expect(data.status).toBeTruthy();
 		expect(data.files).toBeTruthy();
 	});
 
-	it("throws on nonexistent repo", () => {
-		expect(() => ghApi("repos/bdsqqq/nonexistent-repo-12345")).toThrow();
+	it("a nonexistent repo is an HTTP 404", async () => {
+		const err: any = await githubApi("repos/bdsqqq/nonexistent-repo-12345").catch((e) => e);
+		expect(err).toBeInstanceOf(GithubApiError);
+		expect(err.status).toBe(404);
 	});
 });
 

@@ -5,7 +5,7 @@
  * tools. the librarian spawns a pi process with `--tools <these names>` (see
  * lib/pi-spawn.ts), which gates built-in, extension and custom tools alike.
  *
- * all tools use `gh api` CLI under the hood. requires authenticated gh CLI.
+ * all tools call the GitHub REST API with fetch (lib/github.ts), using gh's token.
  *
  * tool schemas:
  *   read_github, search_github, list_directory_github,
@@ -20,7 +20,7 @@ import {
 	repoSlug,
 	canonicalRepoSlug,
 	renameNote,
-	ghApi,
+	githubApi,
 	decodeBase64Content,
 	addLineNumbers,
 	truncate,
@@ -47,8 +47,7 @@ import { resolveParam } from "./lib/params";
 const REPOSITORY_PARAM = Type.Optional(
 	Type.String({
 		description:
-			"REQUIRED. URL of the REMOTE repository to query, e.g. https://github.com/owner/repo. " +
-			"This tool never reads the local working copy.",
+			"REQUIRED. Remote repository URL or owner/repo, e.g. https://github.com/owner/repo. Never the local working copy.",
 	}),
 );
 
@@ -61,12 +60,16 @@ const API_PAGE_SIZE = 100;
  * items [offset, offset + limit) from a page-numbered API: a true skip, fetching
  * only the pages that cover the window.
  */
-export function fetchWindow<T>(offset: number, limit: number, fetchPage: (page: number, perPage: number) => T[]): T[] {
+export async function fetchWindow<T>(
+	offset: number,
+	limit: number,
+	fetchPage: (page: number, perPage: number) => Promise<T[]>,
+): Promise<T[]> {
 	const out: T[] = [];
 	let page = Math.floor(offset / API_PAGE_SIZE) + 1;
 	let skip = offset % API_PAGE_SIZE;
 	while (out.length < limit) {
-		const items = fetchPage(page, API_PAGE_SIZE);
+		const items = await fetchPage(page, API_PAGE_SIZE);
 		out.push(...items.slice(skip, skip + (limit - out.length)));
 		if (items.length < API_PAGE_SIZE) break;
 		skip = 0;
@@ -110,33 +113,26 @@ export function createReadGithubTool(): ToolDefinition {
 		name: "read_github",
 		label: "Read GitHub",
 		description:
-			"Read the contents of a file from a GitHub repository.\n\n" +
-			"WHEN TO USE THIS TOOL:\n" +
-			"- When you need to examine the contents of a specific file in a remote repo\n" +
-			"- When you want to understand implementation details across repositories\n\n" +
-			"PARAMETERS:\n" +
-			"- path: The file path to read\n" +
-			"- repository: Repository URL (e.g., https://github.com/owner/repo)\n" +
-			"- read_range: Optional [start_line, end_line] to read only specific lines",
+			"Read a file from a remote GitHub repository, with line numbers. For the working copy use `read`.",
 
 		parameters: Type.Object({
-			path: Type.String({ description: "The path to the file to read" }),
+			path: Type.String({ description: "File path in the repository" }),
 			repository: REPOSITORY_PARAM,
 			read_range: Type.Optional(
 				Type.Array(Type.Number(), {
 					minItems: 2,
 					maxItems: 2,
-					description: "Optional [start_line, end_line] to read only specific lines",
+					description: "[start_line, end_line], 1-based and inclusive",
 				}),
 			),
 		}),
 
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			try {
 				const repo = requireRepository(params as any, "read_github", "read");
 				if ("error" in repo) return repo.error;
 				const ref = parseRepoUrl(repo.value);
-				const data = ghApi<any>(`repos/${repoSlug(ref)}/contents/${params.path}`);
+				const data = await githubApi<any>(`repos/${repoSlug(ref)}/contents/${params.path}`, { signal });
 
 				if (Array.isArray(data)) {
 					return { content: [{ type: "text" as const, text: "Path is a directory, not a file. Use list_directory_github instead." }], isError: true };
@@ -226,29 +222,25 @@ export function createSearchGithubTool(): ToolDefinition {
 		name: "search_github",
 		label: "Search GitHub",
 		description:
-			"Search code in a REMOTE GitHub repository over the API. Requires `repository`. " +
-			"This never looks at the local working copy — to search the code in this session use `grep`.\n\n" +
-			"WHEN TO USE THIS TOOL:\n" +
-			"- Finding code patterns in a repository you have NOT cloned locally\n" +
-			"- Understanding how some other project implements something\n\n" +
-			"Supports GitHub search qualifiers (language:, path:, extension:, etc.).",
+			"Search code in a remote GitHub repository's default branch (large files are not indexed). " +
+			"For the working copy use `grep`.",
 
 		parameters: Type.Object({
 			pattern: Type.String({
-				description: "The search pattern. Supports GitHub search operators (AND, OR, NOT) and qualifiers.",
+				description: "Search terms; supports AND/OR/NOT and qualifiers like language: and extension:",
 			}),
 			repository: REPOSITORY_PARAM,
-			path: Type.Optional(Type.String({ description: "Optional directory or file path to limit the search to" })),
-			limit: Type.Optional(Type.Number({ description: "Max results (default: 30, max: 100)", minimum: 1, maximum: 100 })),
-			offset: Type.Optional(Type.Number({ description: "Results to skip for pagination (default: 0)", minimum: 0 })),
+			path: Type.Optional(Type.String({ description: "Directory or file to limit the search to" })),
+			limit: Type.Optional(Type.Number({ description: "Max results (default 30)", minimum: 1, maximum: 100 })),
+			offset: Type.Optional(Type.Number({ description: "Results to skip", minimum: 0 })),
 		}),
 
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			try {
 				const repo = requireRepository(params as any, "search_github", "grep");
 				if ("error" in repo) return repo.error;
 				const ref = parseRepoUrl(repo.value);
-				const slug = canonicalRepoSlug(ref);
+				const slug = await canonicalRepoSlug(ref, signal);
 				const note = renameNote(ref, slug);
 				const limit = params.limit ?? 30;
 				let query = `${params.pattern} repo:${slug}`;
@@ -256,10 +248,11 @@ export function createSearchGithubTool(): ToolDefinition {
 				if (pathQualifier) query += ` ${pathQualifier}`;
 
 				let total = 0;
-				const items = fetchWindow(params.offset ?? 0, limit, (page, perPage) => {
-					const data = ghApi<any>("search/code", {
+				const items = await fetchWindow(params.offset ?? 0, limit, async (page, perPage) => {
+					const data = await githubApi<any>("search/code", {
 						params: { q: query, per_page: perPage, page },
 						accept: "application/vnd.github.text-match+json",
+						signal,
 					});
 					total = data.total_count ?? 0;
 					return data.items ?? [];
@@ -321,19 +314,15 @@ export function createListDirectoryGithubTool(): ToolDefinition {
 		name: "list_directory_github",
 		label: "List Directory GitHub",
 		description:
-			"List the contents of a directory in a GitHub repository.\n\n" +
-			"WHEN TO USE THIS TOOL:\n" +
-			"- When you need to understand the structure of a directory\n" +
-			"- When exploring a codebase to find relevant files\n\n" +
-			"Returns files and directories with trailing / for directories.",
+			"List a directory in a remote GitHub repository; directories end in /. For the working copy use `ls`.",
 
 		parameters: Type.Object({
-			path: Type.Optional(Type.String({ description: "The directory path to list (default: the repository root)" })),
+			path: Type.Optional(Type.String({ description: "Directory (default: repository root)" })),
 			repository: REPOSITORY_PARAM,
-			limit: Type.Optional(Type.Number({ description: "Max entries (default: 100, max: 1000)", minimum: 1, maximum: 1000 })),
+			limit: Type.Optional(Type.Number({ description: "Max entries (default 100)", minimum: 1, maximum: 1000 })),
 		}),
 
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			try {
 				const repo = requireRepository(params as any, "list_directory_github", "ls");
 				if ("error" in repo) return repo.error;
@@ -341,7 +330,7 @@ export function createListDirectoryGithubTool(): ToolDefinition {
 				const limit = params.limit ?? 100;
 				const apiPath = !params.path || params.path === "." || params.path === "/" ? "" : params.path;
 
-				const data = ghApi<any[]>(`repos/${repoSlug(ref)}/contents/${apiPath}`);
+				const data = await githubApi<any[]>(`repos/${repoSlug(ref)}/contents/${apiPath}`, { signal });
 
 				if (!Array.isArray(data)) {
 					return { content: [{ type: "text" as const, text: "Path is a file, not a directory. Use read_github instead." }], isError: true };
@@ -382,23 +371,18 @@ export function createListRepositoriesTool(): ToolDefinition {
 		name: "list_repositories",
 		label: "List Repositories",
 		description:
-			"List and search for repositories on GitHub.\n\n" +
-			"WHEN TO USE THIS TOOL:\n" +
-			"- When you need to find repositories by name\n" +
-			"- When exploring repositories in an organization\n" +
-			"- When you need repository metadata (stars, forks, descriptions)\n\n" +
-			"Results come from GitHub repository search sorted by stars, and include private repositories " +
-			"your gh login can see. Pass `pattern` and/or `organization`; with neither it lists GitHub's most-starred repositories.",
+			"Search GitHub repositories, most stars first, with stars, forks and description; includes private " +
+			"repositories your gh login can see. With neither `pattern` nor `organization` it lists the most-starred repositories.",
 
 		parameters: Type.Object({
-			pattern: Type.Optional(Type.String({ description: "Pattern to match in repository names" })),
-			organization: Type.Optional(Type.String({ description: "Organization name to filter" })),
-			language: Type.Optional(Type.String({ description: "Programming language to filter" })),
-			limit: Type.Optional(Type.Number({ description: "Max results (default: 30, max: 100)", minimum: 1, maximum: 100 })),
-			offset: Type.Optional(Type.Number({ description: "Results to skip (default: 0)", minimum: 0 })),
+			pattern: Type.Optional(Type.String({ description: "Search terms, matched in name, description and topics; add in:name for names only" })),
+			organization: Type.Optional(Type.String({ description: "Organization or user" })),
+			language: Type.Optional(Type.String({ description: "Primary language" })),
+			limit: Type.Optional(Type.Number({ description: "Max results (default 30)", minimum: 1, maximum: 100 })),
+			offset: Type.Optional(Type.Number({ description: "Results to skip", minimum: 0 })),
 		}),
 
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			try {
 				const limit = params.limit ?? 30;
 				const queryParts: string[] = [];
@@ -408,9 +392,10 @@ export function createListRepositoriesTool(): ToolDefinition {
 				if (queryParts.length === 0) queryParts.push("stars:>0");
 
 				let total = 0;
-				const items = fetchWindow(params.offset ?? 0, limit, (page, perPage) => {
-					const data = ghApi<any>("search/repositories", {
+				const items = await fetchWindow(params.offset ?? 0, limit, async (page, perPage) => {
+					const data = await githubApi<any>("search/repositories", {
 						params: { q: queryParts.join(" "), sort: "stars", per_page: perPage, page },
+						signal,
 					});
 					total = data.total_count ?? 0;
 					return data.items ?? [];
@@ -458,29 +443,24 @@ export function createGlobGithubTool(): ToolDefinition {
 		name: "glob_github",
 		label: "Glob GitHub",
 		description:
-			"Find files matching a glob pattern in a GitHub repository.\n\n" +
-			"WHEN TO USE THIS TOOL:\n" +
-			"- When you need to find specific file types (e.g., all TypeScript files)\n" +
-			"- When exploring codebase structure quickly\n\n" +
-			"Uses the git tree API to list all files, then filters by pattern.\n\n" +
-			"Pass the glob pattern as `filePattern` (or its alias `pattern`) — one of the two is required.",
+			"Find files by glob on a remote GitHub repository's default branch. For the working copy use `find`.",
 
 		// `filePattern` is the canonical name, but models overwhelmingly guess
 		// `pattern` (matching grep/glob conventions) and then fail schema validation.
 		// both are accepted; at least one is required, enforced in execute().
 		parameters: Type.Object({
 			filePattern: Type.Optional(
-				Type.String({ description: 'Glob pattern (e.g., "**/*.ts", "src/**/*.test.js")' }),
+				Type.String({ description: 'Required glob, e.g. "src/**/*.test.ts"; `pattern` is an alias' }),
 			),
 			pattern: Type.Optional(
-				Type.String({ description: "Alias for filePattern." }),
+				Type.String({ description: "Alias for filePattern" }),
 			),
 			repository: REPOSITORY_PARAM,
-			limit: Type.Optional(Type.Number({ description: "Max results (default: 100)" })),
-			offset: Type.Optional(Type.Number({ description: "Results to skip (default: 0)" })),
+			limit: Type.Optional(Type.Number({ description: "Max results (default 100)" })),
+			offset: Type.Optional(Type.Number({ description: "Results to skip" })),
 		}),
 
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			try {
 				const filePattern = params.filePattern ?? params.pattern;
 				if (!filePattern) {
@@ -495,34 +475,28 @@ export function createGlobGithubTool(): ToolDefinition {
 				const limit = params.limit ?? 100;
 				const offset = params.offset ?? 0;
 
-				// get default branch
-				const repoData = ghApi<any>(`repos/${repoSlug(ref)}`);
-				const branch = repoData.default_branch || "main";
-
-				// get full tree
-				const tree = ghApi<any>(`repos/${repoSlug(ref)}/git/trees/${branch}?recursive=1`);
+				const tree = await githubApi<any>(`repos/${repoSlug(ref)}/git/trees/HEAD?recursive=1`, { signal });
 
 				if (!tree.tree) {
 					return { content: [{ type: "text" as const, text: "Could not read repository tree." }], isError: true };
 				}
 
-				// filter by glob pattern using simple matching
-				const pattern = filePattern;
 				const files = tree.tree
 					.filter((item: any) => item.type === "blob")
 					.map((item: any) => item.path as string)
-					.filter((path: string) => matchGlob(path, pattern));
+					.filter((path: string) => matchGlob(path, filePattern));
 
 				const total = files.length;
 				const sliced = files.slice(offset, offset + limit);
 
 				const output = [
-					`Found ${total} files matching "${pattern}" (showing ${sliced.length}):`,
+					`Found ${total} files matching "${filePattern}" (showing ${sliced.length}):`,
+					...(tree.truncated ? ["(GitHub truncated this repository's tree, so some files are missing: use search_github or list_directory_github)"] : []),
 					"",
 					...sliced,
 				];
 
-				return { content: [{ type: "text" as const, text: output.join("\n") }], details: { header: `${pattern} in ${repoSlug(ref)}` } };
+				return { content: [{ type: "text" as const, text: output.join("\n") }], details: { header: `${filePattern} in ${repoSlug(ref)}` } };
 			} catch (e: any) {
 				return { content: [{ type: "text" as const, text: e.message }], isError: true };
 			}
@@ -556,27 +530,22 @@ export function createCommitSearchTool(): ToolDefinition {
 		name: "commit_search",
 		label: "Commit Search",
 		description:
-			"Search commit history in a GitHub repository.\n\n" +
-			"With `query`, searches commit messages across the full history of the default branch " +
-			"(GitHub commit search); `path` cannot be combined with `query`. Without `query`, lists " +
-			"commits newest first, filtered by author, dates and path.\n\n" +
-			"WHEN TO USE THIS TOOL:\n" +
-			"- When you need to understand how code evolved over time\n" +
-			"- When looking for commits by a specific author or date range\n" +
-			"- When finding commits that changed specific files",
+			"List or search commits in a remote GitHub repository. With `query`, searches commit messages across the " +
+			"default branch's history and cannot take `path`. Without it, lists commits newest first, filtered by " +
+			"author, dates and path.",
 
 		parameters: Type.Object({
 			repository: REPOSITORY_PARAM,
-			query: Type.Optional(Type.String({ description: "Text to search for in commit messages (full history)" })),
-			author: Type.Optional(Type.String({ description: "Filter by author username (or email when listing without query)" })),
-			since: Type.Optional(Type.String({ description: 'ISO 8601 date for earliest commit (e.g., "2024-01-01T00:00:00Z")' })),
-			until: Type.Optional(Type.String({ description: 'ISO 8601 date for latest commit (e.g., "2024-02-01T00:00:00Z")' })),
-			path: Type.Optional(Type.String({ description: "Filter commits that changed specific files/directories" })),
-			limit: Type.Optional(Type.Number({ description: "Max commits (default: 50, max: 100)", minimum: 1, maximum: 100 })),
-			offset: Type.Optional(Type.Number({ description: "Commits to skip (default: 0)", minimum: 0 })),
+			query: Type.Optional(Type.String({ description: "Text to search for in commit messages" })),
+			author: Type.Optional(Type.String({ description: "Author username (or email when listing without query)" })),
+			since: Type.Optional(Type.String({ description: 'Earliest commit date, ISO 8601 (e.g. "2024-01-01T00:00:00Z")' })),
+			until: Type.Optional(Type.String({ description: "Latest commit date, ISO 8601" })),
+			path: Type.Optional(Type.String({ description: "Only commits that changed this file or directory" })),
+			limit: Type.Optional(Type.Number({ description: "Max commits (default 50)", minimum: 1, maximum: 100 })),
+			offset: Type.Optional(Type.Number({ description: "Commits to skip", minimum: 0 })),
 		}),
 
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			try {
 				const repo = requireRepository(params as any, "commit_search", "bash (git log)");
 				if ("error" in repo) return repo.error;
@@ -597,25 +566,30 @@ export function createCommitSearchTool(): ToolDefinition {
 				let commits: any[];
 				let note = "";
 				if (params.query) {
-					const slug = canonicalRepoSlug(ref);
+					const slug = await canonicalRepoSlug(ref, signal);
 					note = renameNote(ref, slug);
 					const q = [params.query, `repo:${slug}`];
 					if (params.author) q.push(`author:${params.author}`);
 					if (params.since) q.push(`committer-date:>=${params.since}`);
 					if (params.until) q.push(`committer-date:<=${params.until}`);
-					commits = fetchWindow(offset, limit, (page, perPage) =>
-						ghApi<any>("search/commits", {
+					commits = await fetchWindow(offset, limit, async (page, perPage) => {
+						const data = await githubApi<any>("search/commits", {
 							params: { q: q.join(" "), sort: "committer-date", order: "desc", per_page: perPage, page },
-						}).items ?? [],
-					);
+							signal,
+						});
+						return data.items ?? [];
+					});
 				} else {
 					const filters: Record<string, string> = {};
 					if (params.author) filters.author = params.author;
 					if (params.since) filters.since = params.since;
 					if (params.until) filters.until = params.until;
 					if (params.path) filters.path = params.path;
-					commits = fetchWindow(offset, limit, (page, perPage) => {
-						const data = ghApi<any[]>(`repos/${repoSlug(ref)}/commits`, { params: { ...filters, per_page: perPage, page } });
+					commits = await fetchWindow(offset, limit, async (page, perPage) => {
+						const data = await githubApi<any[]>(`repos/${repoSlug(ref)}/commits`, {
+							params: { ...filters, per_page: perPage, page },
+							signal,
+						});
 						return Array.isArray(data) ? data : [];
 					});
 				}
@@ -660,28 +634,25 @@ export function createDiffTool(): ToolDefinition {
 		name: "diff",
 		label: "Diff",
 		description:
-			"Get a diff between two commits, branches, or tags in a GitHub repository.\n\n" +
-			"WHEN TO USE THIS TOOL:\n" +
-			"- When you need to see what changed between two points in history\n" +
-			"- When reviewing changes across branches\n" +
-			"- When understanding the scope of a release",
+			"Compare two refs in a remote GitHub repository: ahead/behind counts and changed files, optionally with patches.",
 
 		parameters: Type.Object({
-			base: Type.String({ description: 'The base ref to compare from (e.g., "main", "v1.0.0", or commit SHA)' }),
-			head: Type.String({ description: 'The head ref to compare to (e.g., "feature-branch", "v2.0.0", or commit SHA)' }),
+			base: Type.String({ description: 'Ref to compare from: branch, tag or SHA (e.g. "v1.0.0")' }),
+			head: Type.String({ description: "Ref to compare to" }),
 			repository: REPOSITORY_PARAM,
 			includePatches: Type.Optional(Type.Boolean({
-				description: "Include unified diff patches per file (token heavy). Default false.",
+				description: "Include each file's unified diff (token heavy; default false)",
 			})),
 		}),
 
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			try {
 				const repo = requireRepository(params as any, "diff", "bash (git diff)");
 				if ("error" in repo) return repo.error;
 				const ref = parseRepoUrl(repo.value);
-				const data = ghApi<any>(
+				const data = await githubApi<any>(
 					`repos/${repoSlug(ref)}/compare/${encodeURIComponent(params.base)}...${encodeURIComponent(params.head)}`,
+					{ signal },
 				);
 
 				const lines: string[] = [
