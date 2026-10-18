@@ -20,6 +20,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { unlinkSync, existsSync } from "node:fs";
 import { describe, it, expect, afterAll } from "bun:test";
+import { parseReviewMarkdown } from "./code-review";
 
 // --- constants ---
 
@@ -444,7 +445,7 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		costs.push({ test: "web_search", parent: c.parent, subAgent: c.subAgent, total: c.parent + c.subAgent, durationMs: Date.now() - t0 });
 	}, 60_000);
 
-	it("code_review: sub-agent reviews a diff and produces XML report", async () => {
+	it("code_review: sub-agent reviews a diff and produces a Markdown report", async () => {
 		const t0 = Date.now();
 		const { events, exitCode } = await runPi(
 			'Use the code_review tool with diff_description "the last commit on the current branch (git diff HEAD~1)". Just call the tool, nothing else.',
@@ -464,9 +465,10 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.isError).toBe(false);
 		expect(result.model).toContain("claude");
-		// should produce XML review output
-		expect(result.content).toContain("<codeReview>");
-		expect(result.content).toContain("<comment>");
+		expect(result.content).toContain("# Code review");
+		const comments = parseReviewMarkdown(result.content);
+		expect(comments.length).toBeGreaterThan(0);
+		expect(comments.every((c) => c.severity !== "")).toBe(true);
 		expect(result.usage?.turns).toBeGreaterThanOrEqual(1);
 
 		const c = getCosts(events);
