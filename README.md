@@ -12,14 +12,15 @@ fast as stock, with every patch inside.
 
 ```bash
 git clone https://github.com/humblemuzzu/muzzpi.git && cd muzzpi
-npm install -g @earendil-works/pi-coding-agent@"$(cat pi-setup/pi-core-patches/base-version)"
-./install.sh pi --dry-run    # every change it would make, nothing written
-./install.sh pi
+./install.sh pi --with-deps    # installs what is missing, then the harness
 ```
 
 The installer checks your pi before it touches anything, backs up whatever it
 overwrites, and ends with an audit that prints the exact fix for anything that
-did not land.
+did not land. `--with-deps` installs the Homebrew formulae it needs, pi at the
+version its patches were made on, and Rust if searchd is to be built. Without
+it, the installer installs nothing you are missing and names what it is;
+`--dry-run` prints every change and makes none.
 
 Built and used daily by [Muzzammil](https://itsmuzz.com) since March 2026.
 
@@ -333,10 +334,15 @@ git pull && ./install.sh pi            # update muzzpi
 
 ## Install
 
-**Needs:** macOS, node ≥ 22.19, bun, and pi at the
-version in [`base-version`](pi-setup/pi-core-patches/base-version) (the quick
-start installs it). A newer pi works if it left the patched files alone; the
+**Needs:** macOS, and unless you use `--with-deps`, node ≥ 22.19, bun, and pi
+at the version in [`base-version`](pi-setup/pi-core-patches/base-version).
+`--with-deps` installs exactly those with Homebrew, pi at that version, and
+Rust for searchd. A newer pi works if it left the patched files alone; the
 installer checks. Homebrew, nvm and any other npm prefix work.
+
+Without `--with-deps`, the two commands it would run are
+`npm install -g @earendil-works/pi-coding-agent@"$(cat pi-setup/pi-core-patches/base-version)"`
+and `brew install oven-sh/bun/bun ripgrep gh trash`.
 
 **Logins and keys**, one feature each; the installer and the audit say what is
 missing:
@@ -349,7 +355,7 @@ missing:
 | `PARALLEL_API_KEY` | `web_search` |
 | `gh auth login` | the GitHub tools |
 | `ripgrep`, `trash` | `grep` and `find`, safe deletes |
-| Rust (`cargo`) | searchd, the index behind `grep` and `find` (macOS only); without it they run `rg` |
+| Rust (`cargo`) | searchd, the index behind `grep` and `find` (macOS only); without it they run `rg`. `--with-deps` installs it |
 
 To use another default model, change `defaultProvider` and `defaultModel` in
 [`settings.json`](pi-setup/settings.json).

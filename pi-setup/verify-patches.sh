@@ -289,7 +289,7 @@ PY
 )
 fi
 if [ ! -x "$SD_BIN" ]; then
-    note "searchd: not installed, so find and grep run rg" "install Rust (https://rustup.rs), then bash pi-setup/install.sh"
+    note "searchd: not installed, so find and grep run rg" "bash pi-setup/install.sh --with-deps   (installs Rust, builds it, stamps it)"
 elif [ "$("$SD_BIN" version 2>/dev/null)" != "$SD_REPO_VERSION" ]; then
     note "searchd: the installed build is not the repo's version $SD_REPO_VERSION" "bash pi-setup/install.sh"
 elif [ ! -f "$SD_STAMP" ] || [ "$SD_STATE" = "unreadable" ]; then

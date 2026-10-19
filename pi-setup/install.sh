@@ -4,9 +4,12 @@
 #
 # Usage:
 #   ./install.sh pi                      # from the repo root
-#   bash pi-setup/install.sh --dry-run   # print every change, make none
+#   ./install.sh pi --dry-run            # print every change, make none
+#   ./install.sh pi --with-deps          # install what is missing first: Homebrew
+#                                        #   formulae, pi itself, Rust for searchd
+#   ./install.sh pi --prune-cache        # drop searchd's build cache and exit
 #
-# Never installs a global npm package: pi loads packages only from
+# Never installs a pi package globally: pi loads packages only from
 # ~/.pi/agent/npm/node_modules, and a global copy ships an unpatched pi-tui.
 # Backs up every file it overwrites, including pi's own stock files (*.stock).
 
@@ -15,17 +18,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKUP_SUFFIX=".backup-$(date +%Y%m%d-%H%M%S)"
 
+# rustup installs cargo here and only adds it to zsh's PATH; a shell that does
+# not read ~/.zshenv (bash, a script, a CI job) would lose searchd silently.
+if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
+
 PI_AGENT="$HOME/.pi/agent"
 CONFIG_SKILLS="$HOME/.config/agents/skills"
+SEARCHD_TARGET="${XDG_CACHE_HOME:-$HOME/.cache}/muzzpi/searchd-target"
 
 info()  { printf "\033[1;34m→\033[0m %s\n" "$1"; }
 ok()    { printf "\033[1;32m✓\033[0m %s\n" "$1"; }
 warn()  { printf "\033[1;33m!\033[0m %s\n" "$1"; }
 
 DRY_RUN=0
+WITH_DEPS=0
+PRUNE_CACHE=0
 for arg in "$@"; do
     case "$arg" in
         -n|--dry-run) DRY_RUN=1 ;;
+        --with-deps) WITH_DEPS=1 ;;
+        --prune-cache) PRUNE_CACHE=1 ;;
         -h|--help) sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) warn "unknown option: $arg (try --help)"; exit 1 ;;
     esac
@@ -112,17 +124,61 @@ echo "╰───────────────────────�
 echo ""
 [ "$DRY_RUN" -eq 1 ] && warn "dry run: nothing below is written"
 
+if [ "$PRUNE_CACHE" -eq 1 ]; then
+    if [ -d "$SEARCHD_TARGET" ]; then
+        info "Removing searchd's build cache ($(du -sh "$SEARCHD_TARGET" | cut -f1))..."
+        run rm -rf "$SEARCHD_TARGET"
+        [ "$DRY_RUN" -eq 1 ] || ok "removed: the next install rebuilds searchd from scratch"
+    else
+        ok "no searchd build cache at $SEARCHD_TARGET"
+    fi
+    exit 0
+fi
+
 # ── Prerequisites ──
 info "Checking prerequisites..."
+PI_BASE="$(tr -d '[:space:]' < "$SCRIPT_DIR/pi-core-patches/base-version")"
+
+# --with-deps installs what this setup needs and nothing else: a brew formula,
+# pi at the pinned version. Rust is handled with searchd, further down.
+if [ "$WITH_DEPS" -eq 1 ]; then
+    if ! command -v brew &>/dev/null; then
+        warn "--with-deps installs with Homebrew, which is not installed: https://brew.sh"
+        exit 1
+    fi
+    brew_missing=()
+    command -v node  &>/dev/null || brew_missing+=("node")
+    command -v bun   &>/dev/null || brew_missing+=("oven-sh/bun/bun")
+    command -v rg    &>/dev/null || brew_missing+=("ripgrep")
+    command -v gh    &>/dev/null || brew_missing+=("gh")
+    command -v trash &>/dev/null || brew_missing+=("trash")
+    planned="${#brew_missing[@]}"
+    command -v pi &>/dev/null || planned=$((planned + 1))
+    if [ "${#brew_missing[@]}" -gt 0 ]; then
+        info "Installing with Homebrew: ${brew_missing[*]}"
+        run brew install "${brew_missing[@]}" || { warn "brew install failed: ${brew_missing[*]}"; exit 1; }
+    fi
+    if ! command -v pi &>/dev/null; then
+        info "Installing pi $PI_BASE..."
+        run npm install -g "@earendil-works/pi-coding-agent@$PI_BASE" || { warn "npm install -g failed"; exit 1; }
+    fi
+    # the rest needs pi's package directory, which only exists once pi is installed
+    if [ "$DRY_RUN" -eq 1 ] && [ "$planned" -gt 0 ]; then
+        ok "dry run: nothing was installed; run it without --dry-run to install these first"
+        exit 0
+    fi
+fi
+
 if ! command -v pi &>/dev/null; then
     warn "pi not found. Install it first:"
-    echo "  npm install -g @earendil-works/pi-coding-agent"
-    echo "  Then re-run this script."
+    echo "  npm install -g @earendil-works/pi-coding-agent@$PI_BASE"
+    echo "  Or let this script do it: ./install.sh pi --with-deps"
     exit 1
 fi
 ok "pi found: $(pi --version 2>/dev/null || echo 'version unknown')"
 if ! command -v node &>/dev/null; then
     warn "node not found. pi needs node >= 22.19; install it, then re-run."
+    echo "  Or: ./install.sh pi --with-deps"
     exit 1
 fi
 
@@ -139,7 +195,6 @@ fi
 
 # The patches replace whole files of pi $PI_BASE. Another pi gets them only when
 # it left those files alone; copied over changed ones they undo upstream fixes.
-PI_BASE="$(tr -d '[:space:]' < "$SCRIPT_DIR/pi-core-patches/base-version")"
 PI_VERSION="$(node -p "require(process.argv[1]).version" "$PI_PKG/package.json")"
 if [ "$PI_VERSION" != "$PI_BASE" ]; then
     info "pi $PI_VERSION is installed; this setup's patches are for pi $PI_BASE. Checking they still fit..."
@@ -160,18 +215,26 @@ if [ "$PI_VERSION" != "$PI_BASE" ]; then
     ok "the patches fit pi $PI_VERSION"
 fi
 
-# None of these block the install; each one turns off one feature.
+# None of these block the install; each one turns off one feature. The tools
+# come from Homebrew, so they are named once, with one line that installs them.
 [ -n "${DEEPSEEK_API_KEY:-}" ] || warn "DEEPSEEK_API_KEY not set: chad, finder, librarian, read_session and read_web_page fall back to your main model (edit agent-models.json to change)"
 [ -n "${PARALLEL_API_KEY:-}" ] || warn "PARALLEL_API_KEY not set: web_search will refuse until it is"
-if ! command -v gh &>/dev/null; then
-    warn "gh not found: the 7 GitHub tools need the GitHub CLI (brew install gh && gh auth login)"
-elif ! gh auth status &>/dev/null; then
+missing=""
+formulas=""
+add_missing() { formulas="${formulas:+$formulas }$1"; missing="${missing:+$missing, }$1 ($2)"; }
+command -v gh    &>/dev/null || add_missing gh "the 7 GitHub tools"
+command -v rg    &>/dev/null || add_missing ripgrep "grep and find"
+command -v trash &>/dev/null || add_missing trash "safe deletes"
+if [ -n "$formulas" ]; then
+    warn "missing $missing"
+    printf '    fix: brew install %s\n' "$formulas"
+fi
+if command -v gh &>/dev/null && ! gh auth status &>/dev/null; then
     warn "gh is not logged in: run gh auth login for the GitHub tools"
 fi
-command -v rg &>/dev/null || warn "rg (ripgrep) not found: grep and find need it (brew install ripgrep)"
-command -v trash &>/dev/null || warn "trash not found: permissions.json makes rm ask first and points the agent at trash (brew install trash)"
 if ! command -v bun &>/dev/null; then
     warn "bun not found. The installer bundles the extensions with it: brew install oven-sh/bun/bun"
+    echo "  Or: ./install.sh pi --with-deps"
     exit 1
 fi
 
@@ -233,7 +296,6 @@ ok "Extensions installed"
 # only after its selftest has matched this machine's rg (it records a stamp).
 SEARCHD_SRC="$SCRIPT_DIR/searchd"
 SEARCHD_BIN="$PI_AGENT/bin/searchd"
-SEARCHD_TARGET="${XDG_CACHE_HOME:-$HOME/.cache}/muzzpi/searchd-target"
 
 # searchd needs Rust 1.88 (let-chains, edition 2024).
 rustc_new_enough() {
@@ -244,32 +306,59 @@ rustc_new_enough() {
     [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 88 ]; }
 }
 
+# Losing the index costs no correctness, only speed, so the warning says what
+# it costs and what fixes it instead of being one line to scroll past.
+searchd_off() {
+    warn "searchd not built: find and grep run rg, without the index"
+    printf '    fix: %s\n' "$1"
+}
+
 if [ "$(uname -s)" != "Darwin" ]; then
     info "searchd is macOS-only; find and grep use rg"
-elif [ ! -d "$SEARCHD_SRC" ] || ! command -v cargo &>/dev/null; then
-    warn "cargo not found: searchd not built, find and grep use rg (https://rustup.rs enables it)"
-elif ! rustc_new_enough; then
-    warn "rustc $(rustc --version 2>/dev/null | cut -d' ' -f2) is older than the 1.88 searchd needs: not built, find and grep use rg (rustup update, then re-run)"
 else
-    info "Building searchd (the index behind find and grep)..."
-    if run env CARGO_TARGET_DIR="$SEARCHD_TARGET" cargo build --release --locked --manifest-path "$SEARCHD_SRC/Cargo.toml"; then
-        run mkdir -p "$PI_AGENT/bin"
-        # the running daemon is the old build; the next find or grep starts the new one
-        if [ -x "$SEARCHD_BIN" ]; then run "$SEARCHD_BIN" query '{"op":"shutdown"}' >/dev/null 2>&1 || true; fi
-        run cp "$SEARCHD_TARGET/release/searchd" "$SEARCHD_BIN.new.$$"
-        run mv -f "$SEARCHD_BIN.new.$$" "$SEARCHD_BIN"
-        if [ "$DRY_RUN" -eq 0 ]; then
-            declared="$(sed -n 's/^version = "\(.*\)"/\1/p' "$SEARCHD_SRC/Cargo.toml" | head -1)"
-            built="$("$SEARCHD_BIN" version 2>/dev/null || true)"
-            [ "$built" = "$declared" ] || warn "searchd reports version '$built', Cargo.toml says '$declared'"
+    if [ "$WITH_DEPS" -eq 1 ]; then
+        if ! command -v cargo &>/dev/null; then
+            info "Installing Rust (rustup, minimal profile) for searchd..."
+            run bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal' \
+                || warn "Rust install failed"
+            export PATH="$HOME/.cargo/bin:$PATH"
+        elif ! rustc_new_enough && command -v rustup &>/dev/null; then
+            info "Updating Rust for searchd..."
+            run rustup update stable || warn "rustup update failed"
         fi
-        if run "$SEARCHD_BIN" selftest --stamp; then
-            ok "searchd installed: find and grep start it on first use (remove it with: $SEARCHD_BIN uninstall)"
-        else
-            warn "searchd selftest failed: it will not serve, and find/grep keep using rg"
-        fi
+    fi
+    if [ ! -d "$SEARCHD_SRC" ]; then
+        warn "searchd source missing ($SEARCHD_SRC): find and grep use rg"
+    elif ! command -v cargo &>/dev/null; then
+        searchd_off "./install.sh pi --with-deps   (installs Rust, then builds and stamps it)"
+    elif ! rustc_new_enough; then
+        searchd_off "rustup update   (searchd needs rustc 1.88+, this is $(rustc --version 2>/dev/null | cut -d' ' -f2))"
     else
-        warn "searchd build failed: find and grep keep using rg"
+        info "Building searchd (the index behind find and grep)..."
+        if run env CARGO_TARGET_DIR="$SEARCHD_TARGET" cargo build --release --locked --manifest-path "$SEARCHD_SRC/Cargo.toml"; then
+            run mkdir -p "$PI_AGENT/bin"
+            # the running daemon is the old build; the next find or grep starts the new one
+            if [ -x "$SEARCHD_BIN" ]; then run "$SEARCHD_BIN" query '{"op":"shutdown"}' >/dev/null 2>&1 || true; fi
+            run cp "$SEARCHD_TARGET/release/searchd" "$SEARCHD_BIN.new.$$"
+            run mv -f "$SEARCHD_BIN.new.$$" "$SEARCHD_BIN"
+            if [ "$DRY_RUN" -eq 0 ]; then
+                declared="$(sed -n 's/^version = "\(.*\)"/\1/p' "$SEARCHD_SRC/Cargo.toml" | head -1)"
+                built="$("$SEARCHD_BIN" version 2>/dev/null || true)"
+                [ "$built" = "$declared" ] || warn "searchd reports version '$built', Cargo.toml says '$declared'"
+            fi
+            if run "$SEARCHD_BIN" selftest --stamp; then
+                ok "searchd installed: find and grep start it on first use (remove it with: $SEARCHD_BIN uninstall)"
+                # the cache buys seconds on a rare rebuild and nothing else reads it
+                if [ -d "$SEARCHD_TARGET" ]; then
+                    info "releasing searchd's build cache ($(du -sh "$SEARCHD_TARGET" | cut -f1)): the next build starts from scratch"
+                    run rm -rf "$SEARCHD_TARGET"
+                fi
+            else
+                warn "searchd selftest failed: it will not serve, and find/grep keep using rg"
+            fi
+        else
+            warn "searchd build failed: find and grep keep using rg"
+        fi
     fi
 fi
 

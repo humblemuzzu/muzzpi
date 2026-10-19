@@ -10,7 +10,8 @@ prompt, config file and patch, and where each one is installed.
 ## Install
 
 ```bash
-./install.sh pi --dry-run   # from the repo root: every change, nothing written
+./install.sh pi --with-deps   # first run: installs what is missing, then the harness
+./install.sh pi --dry-run     # from the repo root: every change, nothing written
 ./install.sh pi
 ```
 
@@ -18,8 +19,9 @@ The script finds pi from the `pi` on `PATH` (`pi-location.sh`; Homebrew, nvm or 
 prefix), refuses before changing anything if that pi changed the files the patches replace
 (it prints the command that installs the pi they were made on), backs up everything it
 overwrites (pi's own stock files are kept as `*.stock`),
-installs npm deps and the pi packages, re-applies all patches, builds pi from the patched
-files (`pi-bundle/`) and points `pi` at that build, and runs `verify-patches.sh` at the end.
+installs npm deps, builds searchd if a Rust toolchain is present, re-applies all patches,
+builds pi from the patched files (`pi-bundle/`) and points `pi` at that build, and runs
+`verify-patches.sh` at the end.
 
 After **any** pi/package update, re-run the audit first:
 
@@ -150,7 +152,7 @@ for the packages that were taken out on purpose (`verify-patches.sh` fails if on
 
 ```
 pi-setup/
-├── install.sh                  # One-command installer (deploys + re-applies patches; --dry-run)
+├── install.sh                  # One-command installer (deploys + re-applies patches; --dry-run, --with-deps, --prune-cache)
 ├── update-pi.sh                # The only supported way to update pi itself
 ├── pi-location.sh              # Finds pi's package dir from the `pi` on PATH (sourced by the scripts)
 ├── settings.json               # Pi settings (provider: anthropic, model: claude-opus-5-5)
