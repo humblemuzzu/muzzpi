@@ -1,3 +1,5 @@
+import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
+
 export const ANTHROPIC_TRIGGER_PHRASES: ReadonlyArray<readonly [phrase: string, replacement: string]> = [
 	["pi itself", "the cli itself"],
 	["pi .md files", "cli .md files"],
@@ -63,6 +65,99 @@ export function scrubAnthropicPayload(payload: unknown): Record<string, unknown>
 	}
 
 	return changed ? out : undefined;
+}
+
+export type CacheTtl = "5m" | "1h";
+
+export const PROMPT_CACHE_TTL_ENV = "PI_PROMPT_CACHE_TTL";
+export const SUBAGENT_PROMPT_CACHE_TTL_ENV = "PI_SUBAGENT_PROMPT_CACHE_TTL";
+export const FORCE_PROMPT_CACHING_5M_ENV = "PI_FORCE_PROMPT_CACHING_5M";
+export const EXTENDED_CACHE_TTL_BETA = "extended-cache-ttl-2025-04-11";
+
+/** Claude Code's defaults: the main session 1h, sub-agents 5m; each env var takes only "5m" or "1h". */
+export function resolveCacheTtl(env: Record<string, string | undefined>): CacheTtl {
+	if (env[FORCE_PROMPT_CACHING_5M_ENV] === "1") return "5m";
+	const child = Boolean(env[SUB_AGENT_TOOLS_ENV]?.trim());
+	const chosen = env[child ? SUBAGENT_PROMPT_CACHE_TTL_ENV : PROMPT_CACHE_TTL_ENV];
+	if (chosen === "5m" || chosen === "1h") return chosen;
+	return child ? "5m" : "1h";
+}
+
+const PLAN_METER_PREFIX = "anthropic-ratelimit-unified-";
+
+/** the plan meter as a response reports it, keys without the common prefix; undefined when absent */
+export function planMeter(headers: Record<string, string>): Record<string, string> | undefined {
+	const meter: Record<string, string> = {};
+	for (const [name, value] of Object.entries(headers)) {
+		if (name.startsWith(PLAN_METER_PREFIX)) meter[name.slice(PLAN_METER_PREFIX.length)] = value;
+	}
+	return Object.keys(meter).length > 0 ? meter : undefined;
+}
+
+/** Claude Code's test: the plan limit is spent and the request was served from extra usage. */
+export function isUsingOverage(headers: Record<string, string>): boolean | undefined {
+	const status = headers["anthropic-ratelimit-unified-status"];
+	if (status === undefined) return undefined;
+	const overage = headers["anthropic-ratelimit-unified-overage-status"];
+	return status === "rejected" && (overage === "allowed" || overage === "allowed_warning");
+}
+
+function withLongTtl(block: unknown): unknown {
+	if (!isPlainObject(block) || !isPlainObject(block.cache_control)) return block;
+	const cacheControl = block.cache_control;
+	if (cacheControl.type !== "ephemeral" || cacheControl.ttl === "1h") return block;
+	return { ...block, cache_control: { ...cacheControl, ttl: "1h" } };
+}
+
+/** returns the same reference when no block changed */
+function blocksWithLongTtl(blocks: unknown): unknown {
+	if (!Array.isArray(blocks)) return blocks;
+	let changed = false;
+	const next = blocks.map((block) => {
+		const out = withLongTtl(block);
+		if (out !== block) changed = true;
+		return out;
+	});
+	return changed ? next : blocks;
+}
+
+/**
+ * Every cache breakpoint pi placed (system blocks, last tool, a message's last
+ * block) gets the 1h TTL, so no 5m entry precedes a 1h one. Undefined when the
+ * payload has no breakpoint to change.
+ */
+export function extendCacheTtl(payload: unknown): Record<string, unknown> | undefined {
+	if (!isPlainObject(payload)) return undefined;
+	let changed = false;
+	const out: Record<string, unknown> = { ...payload };
+
+	for (const key of ["system", "tools"] as const) {
+		const blocks = blocksWithLongTtl(payload[key]);
+		if (blocks !== payload[key]) {
+			out[key] = blocks;
+			changed = true;
+		}
+	}
+
+	if (Array.isArray(payload.messages)) {
+		let messagesChanged = false;
+		const messages = payload.messages.map((msg) => {
+			if (!isPlainObject(msg)) return msg;
+			const content = blocksWithLongTtl(msg.content);
+			if (content === msg.content) return msg;
+			messagesChanged = true;
+			return { ...msg, content };
+		});
+		if (messagesChanged) {
+			out.messages = messages;
+			changed = true;
+		}
+	}
+
+	if (!changed) return undefined;
+	const betas = Array.isArray(payload.betas) ? payload.betas : [];
+	if (!betas.includes(EXTENDED_CACHE_TTL_BETA)) out.betas = [...betas, EXTENDED_CACHE_TTL_BETA];
+	return out;
 }
 
 export function isAnthropicRejection(errorMessage: string | undefined): boolean {

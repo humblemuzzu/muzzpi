@@ -1,8 +1,18 @@
 import { appendFileSync } from "node:fs";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { describeAnthropicRejection, scrubAnthropicPayload } from "./tools/lib/anthropic-sub";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type CacheTtl,
+	describeAnthropicRejection,
+	extendCacheTtl,
+	isUsingOverage,
+	planMeter,
+	resolveCacheTtl,
+	scrubAnthropicPayload,
+} from "./tools/lib/anthropic-sub";
+import { SUB_AGENT_TOOLS_ENV } from "./tools/lib/sub-agent-prompt";
 
 const PAYLOAD_LOG_ENV = "PI_ANTHROPIC_PAYLOAD_LOG";
+const METER_LOG_ENV = "PI_ANTHROPIC_METER_LOG";
 
 function writePayloadLog(path: string, payload: unknown): void {
 	try {
@@ -13,9 +23,32 @@ function writePayloadLog(path: string, payload: unknown): void {
 	} catch {}
 }
 
+function writeMeterLog(path: string, record: Record<string, unknown>): void {
+	try {
+		appendFileSync(path, `${JSON.stringify(record)}\n`, { encoding: "utf-8", mode: 0o600 });
+	} catch {}
+}
+
+interface UsageTokens {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cacheWrite1h?: number;
+}
+
+function isPlanRequest(ctx: ExtensionContext): boolean {
+	const model = ctx.model;
+	return model?.provider === "anthropic" && ctx.modelRegistry.isUsingOAuth(model);
+}
+
 export default function anthropicSub(pi: ExtensionAPI) {
 	let warned = false;
 	let succeeded = false;
+	const configuredTtl = resolveCacheTtl(process.env);
+	let usingOverage = false;
+	const cacheTtl = (): CacheTtl => (usingOverage ? "5m" : configuredTtl);
+	let pendingMeter: Record<string, string> | undefined;
 
 	pi.on("session_start", () => {
 		warned = false;
@@ -23,17 +56,50 @@ export default function anthropicSub(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
-		const model = ctx.model;
-		if (model?.provider !== "anthropic" || !ctx.modelRegistry.isUsingOAuth(model)) return undefined;
+		if (!isPlanRequest(ctx)) return undefined;
 		const scrubbed = scrubAnthropicPayload(event.payload);
+		const extended = cacheTtl() === "1h" ? extendCacheTtl(scrubbed ?? event.payload) : undefined;
+		const out = extended ?? scrubbed;
 		const logPath = process.env[PAYLOAD_LOG_ENV];
-		if (logPath) writePayloadLog(logPath, scrubbed ?? event.payload);
-		return scrubbed;
+		if (logPath) writePayloadLog(logPath, out ?? event.payload);
+		return out;
+	});
+
+	pi.on("after_provider_response", (event, ctx) => {
+		if (ctx.model?.provider !== "anthropic") return;
+		const overage = isUsingOverage(event.headers);
+		if (overage !== undefined) usingOverage = overage;
+		if (process.env[METER_LOG_ENV]) pendingMeter = planMeter(event.headers);
+	});
+
+	// models.json declares a 1h lifetime for the Claude models, which pi's warmer
+	// trusts; a request that actually wrote 5m would be warmed after it expired.
+	pi.on("cache_warming_decision", (_event, ctx) => {
+		if (ctx.model?.provider !== "anthropic") return undefined;
+		return isPlanRequest(ctx) && cacheTtl() === "1h" ? undefined : { action: "stop" };
 	});
 
 	pi.on("message_end", (event, ctx) => {
-		const message = event.message as { role?: string; stopReason?: string; errorMessage?: string };
+		const message = event.message as { role?: string; stopReason?: string; errorMessage?: string; usage?: UsageTokens };
 		if (message.role !== "assistant" || ctx.model?.provider !== "anthropic") return undefined;
+		const meterLog = process.env[METER_LOG_ENV];
+		if (meterLog && pendingMeter) {
+			const usage = message.usage;
+			writeMeterLog(meterLog, {
+				at: new Date().toISOString(),
+				model: ctx.model.id,
+				subagent: Boolean(process.env[SUB_AGENT_TOOLS_ENV]?.trim()),
+				meter: pendingMeter,
+				usage: usage && {
+					input: usage.input,
+					output: usage.output,
+					cacheRead: usage.cacheRead,
+					cacheWrite: usage.cacheWrite,
+					cacheWrite1h: usage.cacheWrite1h ?? 0,
+				},
+			});
+			pendingMeter = undefined;
+		}
 		if (message.stopReason !== "error") {
 			succeeded = true;
 			return undefined;

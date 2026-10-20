@@ -22,9 +22,14 @@
     "~/.pi/agent/extensions/goal"
   ],
   "compaction": {
-    "enabled": true
+    "enabled": true,
+    "modelOverrides": {
+      "anthropic/claude-opus-5-5": { "reserveTokens": 150000 },
+      "anthropic/claude-sonnet-5-5": { "reserveTokens": 150000 },
+      "anthropic/claude-haiku-5-5": { "reserveTokens": 150000 }
+    }
   },
-  "cacheWarming": "off",
+  "cacheWarming": "streaming",
   "defaultTools": [
     "+codemode"
   ],

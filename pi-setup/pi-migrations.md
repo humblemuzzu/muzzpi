@@ -12,6 +12,25 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## Claude prompt cache: 1h main session, warming, compaction at 850k (2026-10-20)
+
+- `anthropic-sub` rewrites the main session's plan requests to `ttl: "1h"` +
+  `extended-cache-ttl-2025-04-11`; `cacheWarming: "streaming"` with
+  `models.json` `promptCache.short: 3600` for opus/sonnet/haiku-5-5; Claude
+  compaction at 850k. Why and the measurements: cache playbook section 18.
+- **Re-check after every pi update**, each against pi's source:
+  - `pi-ai/dist/api/anthropic-messages.js`: `cache_control` still sits on the
+    system blocks, the last tool and a message's last block, and `onPayload`
+    still receives `params` with `betas` (the SDK turns that into the header).
+  - `dist/core/cache-warmer.js`: the TTL still comes from
+    `model.promptCache[retention]`, and `cache_warming_decision` still lets an
+    extension return `{ action: "stop" }`.
+  - `getCompactionTokenSetting` still keys `compaction.modelOverrides` by
+    `provider/id`.
+  - Then: `PI_ANTHROPIC_PAYLOAD_LOG=/tmp/p.log pi -p --no-session "hi"` shows
+    `ttl: "1h"` on all four breakpoints, and `cache-report.py --since <date>`
+    shows a 1h share near 100% for main-session writes.
+
 ## DeepSeek V4.1 Flash 1017 (2026-10-17)
 
 - DeepSeek's API serves DeepSeek-V4.1-Flash-1017 under `deepseek-flash` (its

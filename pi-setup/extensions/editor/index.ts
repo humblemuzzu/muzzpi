@@ -16,7 +16,7 @@ import { CustomEditor, Theme, estimateTokens } from "@mariozechner/pi-coding-age
 import type { TUI, EditorTheme, TuiMouseEvent } from "@mariozechner/pi-tui";
 import { Image, visibleWidth } from "@mariozechner/pi-tui";
 import { HorizontalLineWidget, WidgetRowRegistry } from "./widget-row";
-import { CacheLineWidget, collectCacheStats } from "./cache-line";
+import { type CacheStats, CacheLineWidget, collectCacheStats } from "./cache-line";
 import type { KeybindingsManager } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage, AssistantMessage, ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { execFile } from "node:child_process";
@@ -696,13 +696,14 @@ export default function (pi: ExtensionAPI) {
 	const activity = createActivityState();
 
 	/**
-	 * TTL comes from the model catalog, so a provider without `promptCache` gets no
-	 * row at all rather than a permanent fake zero. Retention mirrors pi: `long`
-	 * only when the env asks for it.
+	 * Only a model whose catalog declares cache lifetimes gets a countdown, so a
+	 * provider without `promptCache` gets no fake zero. The latest write's tier
+	 * wins over the catalog: a forced 5m or an overage spell shows as it is.
 	 */
-	const cacheTtlMs = (ctx: ExtensionContext): number | undefined => {
+	const cacheTtlMs = (ctx: ExtensionContext, stats: CacheStats): number | undefined => {
 		const catalog = ctx.model?.promptCache;
 		if (!catalog) return undefined;
+		if (stats.lastWriteTtlMs !== undefined) return stats.lastWriteTtlMs;
 		const seconds = catalog[process.env.PI_CACHE_RETENTION === "long" ? "long" : "short"];
 		return seconds === undefined ? undefined : seconds * 1000;
 	};
@@ -710,7 +711,7 @@ export default function (pi: ExtensionAPI) {
 	const syncCacheLine = (ctx: ExtensionContext): void => {
 		if (!ctx.hasUI) return;
 		const stats = collectCacheStats(ctx.sessionManager.getEntries());
-		const ttlMs = cacheTtlMs(ctx);
+		const ttlMs = cacheTtlMs(ctx, stats);
 		// A declared lifetime is enough on its own; without one, the row waits until
 		// the provider has actually reported cache activity. Only Anthropic declares
 		// a lifetime, but most providers still report reads — the countdown is the

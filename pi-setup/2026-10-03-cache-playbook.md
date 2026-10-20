@@ -29,6 +29,7 @@ concept to stick.
 15. Glossary
 16. Still open / not verified
 17. File and line index
+18. After the fix: the 5-minute TTL became the cost
 
 ---
 
@@ -873,6 +874,9 @@ cost would have raised the bill from roughly $418 to $669 in the same window,
 while saving about $10. The "fix" would have made things materially worse. That is
 only visible if you compute it.
 
+**It did not stay true.** Once the cache worked, the same measurement found the
+TTL behind two thirds of all writes. Section 18 has the numbers.
+
 ### Mistake 3: a broken marker string that returned a confident zero
 
 **What I reported.** `rulesDup: 0` on every request, meaning the rules were not in
@@ -1420,6 +1424,81 @@ Things I could not establish. Do not treat them as settled.
 | `{ls}` memoisation | `pi-setup/extensions/tools/lib/interpolate.ts:51-65`, `:79` |
 | `sync_dir` replacing the recursive deletes | `pi-setup/install.sh:55`, used at `:116`, `:127`, `:132`, `:137`, `:142` |
 | payload diffing tool | `pi-setup/cache-diag.py` |
+
+---
+
+## 18. After the fix: the 5-minute TTL became the cost
+
+Measured over 2026-10-04 to 2026-10-20 with the cache bug fixed:
+`python3 pi-setup/cache-report.py --since 2026-10-04`.
+
+```
+95 sessions, 11412 Claude turns
+cache write     201,106,368   1h share 0%
+rebuilds after a gap of 5 min or more: 329 turns, 159,733,601 tokens written
+  gap 5 min - 1 h    279 turns    136,884,965 tokens
+  gap over 1 h        50 turns     22,848,636 tokens
+  what the gap waited on: delegate 70.4M, you 26.1M, bash 26.0M, code_review 12.7M
+```
+
+68% of every token written went into rebuilding a prompt whose 5-minute entry had
+expired, mostly while pi itself waited on a sub-agent or a long command, and a
+1-hour entry would have survived those gaps. At Opus 5.5 API prices the window cost
+about $1,867 on 5m and $1,403 on 1h, although a 1h write costs 2x base input against
+1.25x. Mistake 2's arithmetic was right for a cache that rebuilt every turn; it
+flips once rebuilds come only from expiry.
+
+### What Claude Code does (2.1.304: its binary and docs agree)
+
+- The main conversation gets 1h on a subscription within plan usage; sub-agents,
+  compaction and titles get 5m; a request served from extra usage drops to 5m
+  (`status == "rejected"` and `overage-status` `allowed`/`allowed_warning`).
+- A 1h request also sends the `extended-cache-ttl-2025-04-11` beta.
+- Compaction re-sends the conversation with a summary request appended, so it
+  reads the cache; pi's compaction cannot (`cacheRetention: "none"` and the
+  conversation serialized as text, `dist/core/compaction/compaction.js`).
+
+### What muzzpi does now
+
+- `anthropic-sub` gives every `cache_control` of the main session's plan requests
+  `ttl: "1h"` and the beta; children keep 5m. Not `PI_CACHE_RETENTION=long`: that
+  variable is process-wide and makes pi send DeepSeek, River and OpenRouter
+  `prompt_cache_retention: "24h"` (`pi-ai/dist/api/openai-completions.js:582`).
+- `cacheWarming: "streaming"`: while a tool runs, pi replays the last request
+  with `max_tokens: 1` at 90% of the TTL. Its only TTL source is the catalog's
+  `promptCache.short`, so `models.json` sets 3600 for the Claude models, and
+  `anthropic-sub` vetoes warming wherever a request wrote 5m.
+- Claude models compact above 850k instead of about 984k.
+
+### Measured on the live API
+
+Haiku 5.5, a unique nonce per conversation (identical text shares cache entries
+across sessions, which contaminated the first attempt):
+
+| request 1 | request 2 | request 2 read | request 2 wrote |
+|---|---|---|---|
+| 1h | 1h | the whole previous prompt | only the new tail |
+| 5m | 5m | the whole previous prompt | only the new tail |
+| 5m | 1h | system + tools only | the conversation again |
+
+A 1h request does not reuse a conversation entry a 5m request wrote, while a 5m
+request does read a 1h one. Moving a live session to 1h therefore costs one
+re-write; dropping to 5m during overage costs nothing.
+
+Warming, with the TTL cut to 30 s in a scratch agent dir: during a 50 s `sleep`,
+two `cache_warm` entries each read 41,135 tokens and wrote 0, and their payloads
+carried `ttl: "1h"` on all four breakpoints. A child process (`PI_SUBAGENT_TOOLS`
+set) logged pi's "warm" decision and wrote no `cache_warm` entry.
+
+### Still open
+
+- How the plan meter weighs a 1h write against a 5m one. The
+  `anthropic-ratelimit-unified-*-utilization` headers carry two decimals;
+  `PI_ANTHROPIC_METER_LOG=<file>` pairs them with each request's tokens.
+- Cache-friendly compaction, and idle compaction, which only pays with it.
+  Upstream pi added the primitives in `cff1cf5` and reverted them in `8dab702`;
+  that version sent `toolChoice: "none"`, and Anthropic's invalidation table says a
+  changed `tool_choice` invalidates the messages cache.
 
 ---
 

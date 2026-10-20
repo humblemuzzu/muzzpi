@@ -6,6 +6,10 @@ const TICK_MS = 1000;
 const FILLED = "█";
 const EMPTY = "░";
 const LABEL_GAP = "  ";
+const FIVE_MINUTES_MS = 300_000;
+const ONE_HOUR_MS = 3_600_000;
+
+type Usage = Extract<SessionEntry, { type: "usage" }>["usage"];
 
 export interface CacheStats {
 	cacheRead: number;
@@ -13,13 +17,27 @@ export interface CacheStats {
 	toolCalls: number;
 	/** pi's cache-hit figure: cacheRead / prompt, most recent assistant turn only. */
 	lastHitRate?: number;
-	/** Last turn that touched the prompt cache. A read refreshes the TTL as much as a write. */
+	/** Last request that touched the prompt cache, cache warms included. A read refreshes the TTL as much as a write. */
 	lastCacheAt?: number;
+	/** Lifetime of the latest cache write, from the 1h share Anthropic reports. */
+	lastWriteTtlMs?: number;
+}
+
+function touchCache(stats: CacheStats, usage: Usage, timestamp: string): void {
+	if (usage.cacheRead > 0 || usage.cacheWrite > 0) {
+		const at = Date.parse(timestamp);
+		if (Number.isFinite(at)) stats.lastCacheAt = at;
+	}
+	if (usage.cacheWrite > 0) stats.lastWriteTtlMs = (usage.cacheWrite1h ?? 0) > 0 ? ONE_HOUR_MS : FIVE_MINUTES_MS;
 }
 
 export function collectCacheStats(entries: readonly SessionEntry[]): CacheStats {
 	const stats: CacheStats = { cacheRead: 0, cacheWrite: 0, toolCalls: 0 };
 	for (const entry of entries) {
+		if (entry.type === "usage" && entry.kind === "cache_warm") {
+			touchCache(stats, entry.usage, entry.timestamp);
+			continue;
+		}
 		if (entry.type !== "message") continue;
 		const message = entry.message;
 		if (message.role !== "assistant") continue;
@@ -31,10 +49,7 @@ export function collectCacheStats(entries: readonly SessionEntry[]): CacheStats 
 			stats.toolCalls += message.content.filter((block) => block.type === "toolCall").length;
 		}
 		if (prompt > 0) stats.lastHitRate = usage.cacheRead / prompt;
-		if (usage.cacheRead > 0 || usage.cacheWrite > 0) {
-			const at = Date.parse(entry.timestamp);
-			if (Number.isFinite(at)) stats.lastCacheAt = at;
-		}
+		touchCache(stats, usage, entry.timestamp);
 	}
 	return stats;
 }
@@ -89,11 +104,7 @@ export class CacheLineWidget {
 		return line ? [line] : [];
 	}
 
-	/**
-	 * Derived, not reported: Anthropic returns no TTL. This is
-	 * `lastCacheTouch + promptCache.short` from the model catalog — the same
-	 * lifetime pi's own cache warmer uses.
-	 */
+	/** Derived, not reported: Anthropic returns no expiry, only how much of a write was 1h. */
 	private remainingMs(): number | undefined {
 		const at = this.stats?.lastCacheAt;
 		if (at === undefined || this.ttlMs === undefined) return undefined;

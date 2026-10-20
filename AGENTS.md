@@ -42,22 +42,29 @@ pi CLI (v1.3.0) — @earendil-works/pi-coding-agent
 ```
 
 Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
-`compaction.enabled: true`, `cacheWarming: "off"`, `tuiMode: "fullscreen"`,
+`cacheWarming: "streaming"`, `tuiMode: "fullscreen"`,
 `quietStartup: "header"` (`"regular"` restores normal scrollback).
 
-`enabledModels` (what `/model` shows): opus-5-5, sonnet-5-5, haiku-5-5,
-`deepseek/deepseek-flash`, `deepseek/deepseek-v4-pro`,
-`river/deepseek-ai/DeepSeek-V4.1-Flash`, and `openrouter/z-ai/glm-5.3-flash`
-(picker only). DeepSeek's `deepseek-flash` always serves its newest release, so it
-needs no update; `models.json` only sets its off-peak cost. The catalog still has
-xai, openai-codex, kimi and llama models; a model must be in `enabledModels`
-for `/model` to see it.
+`/model` shows only `settings.json` `enabledModels`; the rest of the catalog
+stays hidden. DeepSeek's `deepseek-flash` always serves its newest release, so it
+needs no update; `models.json` only sets its off-peak cost.
 
 **Claude-plan billing.** An OAuth request whose system prompt holds the phrases
 in `tools/lib/anthropic-sub.ts` bills as extra usage (here a 400). Never write
 them into a prompt or drop `anthropic-sub`; `update-pi.sh` runs
 `bun pi-setup/port-harness/anthropic-oauth-canary.ts`, run it by hand otherwise. pi's extra-usage banner
 (`warnings.anthropicExtraUsage: false`) is not a billing signal.
+
+**Prompt cache (Claude Code's rules).** `anthropic-sub` gives every `cache_control`
+of the main session's plan requests `ttl: "1h"` (+ beta `extended-cache-ttl-2025-04-11`);
+sub-agents keep pi's 5m; a response served from extra usage drops it to 5m. Knobs:
+`PI_PROMPT_CACHE_TTL` / `PI_SUBAGENT_PROMPT_CACHE_TTL` (`5m`|`1h`), `PI_FORCE_PROMPT_CACHING_5M=1`.
+**Never set `PI_CACHE_RETENTION=long`**: it is process-wide and sends DeepSeek, River
+and OpenRouter `prompt_cache_retention: "24h"`. pi's warmer reads its TTL only from
+`models.json` `promptCache.short` (3600 for the Claude models) and refreshes at 90%;
+`anthropic-sub` vetoes warming wherever a request wrote 5m. Claude compacts above 850k
+(`compaction.modelOverrides`). `cache-report.py` shows what was rebuilt after expiry;
+`PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter next to each request's tokens.
 
 ### System prompt assembly
 
@@ -123,10 +130,6 @@ the patched `dist/` (~45% faster to start than `dist/cli.js`).
 - Extensions get pi's virtual modules: locate pi's files with `tools/lib/pi-package-dir.ts`.
 
 ## Packages (npm)
-
-| Package | Ver | Purpose | Patched |
-|---|---|---|---|
-| `@earendil-works/pi-coding-agent` | 1.3.0 | pi itself | 4 core patches |
 
 No pi packages: `settings.json` has no `packages`. A future one goes there
 and in `install.sh`, pinned; move a pin with `pi install npm:<pkg>@<ver>` (a
@@ -216,7 +219,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | Extension | Purpose |
 |---|---|
 | `system-prompt.ts` | parent template / sub-agent generated prompt |
-| `anthropic-sub.ts` | Claude-plan billing: scrubs the trigger phrases, warns on a refusal, `PI_ANTHROPIC_PAYLOAD_LOG` feeds `cache-diag.py`. Parent and children |
+| `anthropic-sub.ts` | Claude-plan billing: scrubs the trigger phrases, the 1h/5m cache TTL and warming veto, warns on a refusal, `PI_ANTHROPIC_PAYLOAD_LOG` feeds `cache-diag.py`. Parent and children |
 | `mentions.ts` | @mentions + agent directives |
 | `session-name.ts` | auto session naming (haiku, deliberately; a direct model call, not a sub-agent) |
 | `stats/` | `/stats`, Ctrl+Shift+S — analytics over pi, Claude Code, Codex and OpenCode sessions + git. Per-harness ledgers in `<agent dir>/cache/stats` keep sessions whose source is gone (Claude prunes after 30 days): never delete them casually. Bump `ledger.ts` `VERSION` when a parser's output changes. OpenCode is read via the `sqlite3` CLI, read-only. Nothing may reach the model: no tools, no `sendMessage`. The widget reads pi's ledger only, never a cold parse |
