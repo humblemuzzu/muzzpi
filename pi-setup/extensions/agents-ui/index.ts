@@ -115,14 +115,9 @@ export default function agentsUi(pi: ExtensionAPI): void {
 	const onTerminalInput = (data: string) => {
 		if (!tui || tui.hasOverlay()) return undefined;
 		if (!dock || isKeyRelease(data) || !matchesKey(data, "down") || dock.focused || !editorWithNothingTyped()) return undefined;
-		const mode = dock.mode();
-		if (mode === "hidden") return undefined;
-		if (mode === "full") {
-			dock.picker.select(dock.picker.current()?.id);
-			focusDock();
-		} else {
-			void openList();
-		}
+		if (dock.mode() === "hidden") return undefined;
+		dock.picker.select(dock.picker.current()?.id);
+		focusDock();
 		return { consume: true };
 	};
 

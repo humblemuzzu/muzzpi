@@ -210,15 +210,13 @@ describe("↓ on the editor", () => {
 		expect(h.dock().focused).toBe(false);
 	});
 
-	test("when the work is over and only the sentence is left, ↓ opens the list instead", async () => {
+	test("once the work is over the dock is gone and ↓ is the editor's again", () => {
 		const h = started();
 		h.broadcast([run({ id: "a" })]);
 		h.broadcast([finished({ id: "a", endedAt: Date.now() })]);
-		expect(h.dock().render(80).map(strip)).toEqual([" ✓ chad finished  ↓ to review"]);
-		expect(h.key(DOWN)).toBe(true);
-		expect(h.state.customCalls).toHaveLength(1);
-		expect(h.state.customCalls[0].opts).toMatchObject({ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left" } });
-		h.state.customCalls[0].resolve({ closed: true });
+		expect(h.dock().render(80)).toEqual([]);
+		expect(h.key(DOWN)).toBe(false);
+		expect(h.state.customCalls).toHaveLength(0);
 	});
 });
 

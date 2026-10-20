@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { visibleWidth } from "@mariozechner/pi-tui";
-import { Dock, DOCK_MAX_ROWS, IDLE_REMOVAL_MS, type DockHost } from "./dock";
+import { Dock, DOCK_MAX_ROWS, type DockHost } from "./dock";
 import type { PickerAction } from "./picker";
 import { RunStore } from "./store";
 import { fakeClock, finished, run, scheduler, strip, T0, theme } from "./test-helpers";
@@ -42,37 +42,27 @@ describe("when the dock is there", () => {
 		expect(dock.mode()).toBe("full");
 	});
 
-	test("when everything has finished it shrinks to one sentence, and leaves after ten minutes", () => {
-		const { store, clock, timers, dock, lines, events } = setup();
+	test("the moment the last run finishes it is gone, with no timer left behind", () => {
+		const { store, timers, dock, lines, events } = setup();
 		store.ingest([run({ id: "a" }), run({ id: "b" })]);
+		dock.focused = true;
 		store.ingest([finished({ id: "a" }), finished({ id: "b", status: "failed" })]);
-		expect(dock.mode()).toBe("sentence");
-		expect(lines()).toEqual([" ✕ 1 finished, 1 failed  ↓ to review"]);
-		clock.advance(IDLE_REMOVAL_MS - 1000);
-		timers.advance(IDLE_REMOVAL_MS - 1000);
-		expect(dock.mode()).toBe("sentence");
-		clock.advance(1000);
-		timers.advance(1000);
 		expect(dock.mode()).toBe("hidden");
 		expect(lines()).toEqual([]);
+		expect(timers.pending()).toBe(0);
 		expect(events.blur).toBeGreaterThan(0);
 	});
 
-	test("a single finished agent is named", () => {
-		const { store, lines } = setup();
-		store.ingest([run({ id: "a" })]);
-		store.ingest([finished({ id: "a" })]);
-		expect(lines()).toEqual([" ✓ chad finished  ↓ to review"]);
-	});
-
-	test("new work after the sentence brings the rows back and cancels the removal", () => {
-		const { store, timers, dock } = setup();
-		store.ingest([run({ id: "a" })]);
-		store.ingest([finished({ id: "a" })]);
-		expect(timers.pending()).toBe(1);
-		store.ingest([finished({ id: "a" }), run({ id: "b" })]);
-		expect(dock.mode()).toBe("full");
-		expect(timers.pending()).toBe(0);
+	test("new work brings it back without the runs of the last batch", () => {
+		const { store, clock, lines } = setup();
+		const old = finished({ id: "a", label: "old batch", endedAt: clock.now() });
+		store.ingest([run({ id: "a", label: "old batch" })]);
+		store.ingest([old]);
+		clock.advance(5_000);
+		store.ingest([old, run({ id: "b", label: "new batch" })]);
+		const text = lines(120).join("\n");
+		expect(text).toContain("new batch");
+		expect(text).not.toContain("old batch");
 	});
 });
 
