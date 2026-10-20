@@ -17,17 +17,28 @@ import deepseekPeakExtension from "./index";
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
 /** A stub pi + a stub runtime that can be made stale the way the real one is. */
-function makeHarness(options: { hasUI?: boolean } = {}) {
-	const emitted: Array<{ key: string; text: string }> = [];
+interface Emitted {
+	key: string;
+	text: string;
+	when?: string;
+}
+
+function makeHarness(options: { hasUI?: boolean; model?: { provider: string; id: string } } = {}) {
+	const emitted: Emitted[] = [];
 	const handlers = new Map<string, Handler[]>();
+	const listeners = new Map<string, Array<(data: unknown) => void>>();
 	let stale = false;
 
 	const pi = {
 		events: {
-			emit: (_channel: string, data: { key: string; text: string }) => {
+			emit: (_channel: string, data: Emitted) => {
 				// mirrors loader.js: every runtime call asserts the ctx is still active
 				if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
-				emitted.push({ key: data.key, text: data.text });
+				emitted.push({ key: data.key, text: data.text, when: data.when });
+			},
+			on: (channel: string, listener: (data: unknown) => void) => {
+				listeners.set(channel, [...(listeners.get(channel) ?? []), listener]);
+				return () => {};
 			},
 		},
 		on: (event: string, handler: Handler) => {
@@ -39,7 +50,11 @@ function makeHarness(options: { hasUI?: boolean } = {}) {
 	const ctx = {
 		hasUI: options.hasUI ?? true,
 		ui: { theme: { fg: (_color: string, text: string) => text } },
-		model: { provider: "anthropic", id: "claude-opus-5" },
+		model: options.model ?? { provider: "anthropic", id: "claude-opus-5" },
+	};
+
+	const broadcast = (channel: string, data: unknown) => {
+		for (const listener of listeners.get(channel) ?? []) listener(data);
 	};
 
 	const fire = async (event: string) => {
@@ -50,6 +65,7 @@ function makeHarness(options: { hasUI?: boolean } = {}) {
 		emitted,
 		pi,
 		fire,
+		broadcast,
 		hasHandler: (event: string) => handlers.has(event),
 		makeStale: () => {
 			stale = true;
@@ -162,6 +178,70 @@ describe("session lifecycle", () => {
 			await h.fire("session_start");
 			expect(state.tick).toBeNull();
 			expect(h.emitted).toHaveLength(0);
+		} finally {
+			state.restore();
+		}
+	});
+});
+
+describe("when the label shows", () => {
+	const last = (h: ReturnType<typeof makeHarness>, key: string) => h.emitted.filter((e) => e.key === key).at(-1);
+	const run = (status: string, model: string) => ({ id: "chad-1", status, model });
+
+	test("on another provider it waits in the detail view, and the clock asks to hide during a run", async () => {
+		const h = makeHarness();
+		const state = captureTimers();
+		try {
+			deepseekPeakExtension(h.pi as never);
+			await h.fire("session_start");
+			expect(last(h, "deepseek-peak")?.when).toBe("detail");
+			expect(last(h, "clock")?.when).toBe("idle");
+		} finally {
+			state.restore();
+		}
+	});
+
+	test("on a deepseek model it is always there", async () => {
+		const h = makeHarness({ model: { provider: "deepseek", id: "deepseek-flash" } });
+		const state = captureTimers();
+		try {
+			deepseekPeakExtension(h.pi as never);
+			await h.fire("session_start");
+			expect(last(h, "deepseek-peak")).toBeDefined();
+			expect(last(h, "deepseek-peak")?.when).toBeUndefined();
+		} finally {
+			state.restore();
+		}
+	});
+
+	test("a live deepseek sub-agent brings it up, and its end sends it back", async () => {
+		const h = makeHarness();
+		const state = captureTimers();
+		try {
+			deepseekPeakExtension(h.pi as never);
+			await h.fire("session_start");
+			h.broadcast("muzzpi:agent-runs", [run("running", "anthropic/claude-sonnet-5-5")]);
+			expect(last(h, "deepseek-peak")?.when).toBe("detail");
+			h.broadcast("muzzpi:agent-runs", [run("running", "deepseek/deepseek-flash")]);
+			expect(last(h, "deepseek-peak")?.when).toBeUndefined();
+			h.broadcast("muzzpi:agent-runs", [run("done", "deepseek/deepseek-flash")]);
+			expect(last(h, "deepseek-peak")?.when).toBe("detail");
+		} finally {
+			state.restore();
+		}
+	});
+
+	test("a run update after shutdown paints nothing", async () => {
+		const h = makeHarness();
+		const state = captureTimers();
+		try {
+			deepseekPeakExtension(h.pi as never);
+			await h.fire("session_start");
+			await h.fire("session_shutdown");
+			h.makeStale();
+			const before = h.emitted.length;
+			expect(() => h.broadcast("muzzpi:agent-runs", [run("running", "deepseek/deepseek-flash")])).not.toThrow();
+			expect(h.emitted).toHaveLength(before);
 		} finally {
 			state.restore();
 		}

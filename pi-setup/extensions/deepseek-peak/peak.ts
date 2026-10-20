@@ -35,7 +35,6 @@ export const WEEKEND_OFFPEAK_FROM_MS = Date.UTC(2026, 7, 22, 16, 0, 0, 0);
 
 const MS_MIN = 60_000;
 const MS_HOUR = 60 * MS_MIN;
-const MS_DAY = 24 * MS_HOUR;
 
 /** Beijing is UTC+8 with no DST — the weekend rule is defined in Beijing time. */
 const BEIJING_OFFSET_MS = 8 * MS_HOUR;
@@ -140,12 +139,11 @@ export function renderLabel(state: PeakState): string {
 	}
 }
 
-/** theme color key for the label, given whether the active model is deepseek. */
-export function labelColor(state: PeakState, onDeepseek: boolean): "success" | "warning" | "error" | "muted" {
-	if (state.phase === "pre-launch") return "muted";
-	if (state.phase === "off-peak") return "success";
+/** theme color key for the label, given whether DeepSeek is in use (main model or a live sub-agent); undefined is plain text. */
+export function labelColor(state: PeakState, inUse: boolean): "warning" | "error" | undefined {
+	if (state.phase === "pre-launch" || state.phase === "off-peak") return undefined;
 	// peak while actually running deepseek is the case worth shouting about
-	return onDeepseek ? "error" : "warning";
+	return inUse ? "error" : "warning";
 }
 
 /** $ per 1M tokens off-peak (V4.1 Flash). peak = 2× off-peak. */

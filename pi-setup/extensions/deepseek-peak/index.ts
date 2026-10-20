@@ -4,8 +4,8 @@
  * From 16:00 UTC on 2026-08-16 DeepSeek charges 2× during two weekday UTC
  * windows (since 2026-08-23, weekends in Beijing time are all off-peak).
  * This puts the current phase, and the time until it flips, in the
- * bottom-left slot of the custom editor's border — the prompt bar — so the
- * answer to "is deepseek cheap right now" is already on screen.
+ * bottom-left slot of the custom editor's border while DeepSeek is in use (the
+ * main model or a live sub-agent); otherwise only the detail view shows it.
  *
  * Zero network, zero cache: the windows are defined in UTC and `Date` already
  * knows UTC. See ./peak.ts for why that is the accurate choice, not the lazy
@@ -18,6 +18,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { AGENT_RUNS_CHANNEL, type RunSnapshot } from "../tools/lib/agent-channel";
 import {
 	EFFECTIVE_FROM_MS,
 	PEAK_WINDOWS_UTC,
@@ -40,6 +41,9 @@ const LABEL_KEY = "deepseek-peak";
  */
 const CLOCK_KEY = "clock";
 
+const CLOCK_PRIORITY = 30;
+const LABEL_PRIORITY = 40;
+
 /**
  * 5s poll, but each label is only re-emitted when its TEXT changes — which at
  * minute granularity is once a minute. A repaint per tick would fight the
@@ -52,6 +56,10 @@ function isDeepseekModel(ctx: ExtensionContext | null): boolean {
 	const model = ctx?.model;
 	if (!model) return false;
 	return `${model.provider ?? ""}/${model.id ?? ""}`.toLowerCase().includes("deepseek");
+}
+
+export function hasLiveDeepseekRun(runs: readonly RunSnapshot[]): boolean {
+	return runs.some((run) => (run.status === "running" || run.status === "queued") && (run.model ?? "").toLowerCase().includes("deepseek"));
 }
 
 /** the full report behind /deepseek */
@@ -117,14 +125,28 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 	let lastLabel: string | null = null;
 	let enabled = true;
 	let ctxRef: ExtensionContext | null = null;
+	let deepseekRunLive = false;
+	let lastInUse: boolean | null = null;
 
-	const emit = (key: string, text: string): void => {
-		pi.events.emit("editor:set-label", { key, text, position: "bottom", align: "left" });
+	const stopWatchingRuns = pi.events.on(AGENT_RUNS_CHANNEL, (runs: unknown) => {
+		const live = Array.isArray(runs) && hasLiveDeepseekRun(runs as RunSnapshot[]);
+		if (live === deepseekRunLive) return;
+		deepseekRunLive = live;
+		paintSafely();
+	});
+
+	const emit = (key: string, text: string, options: { priority: number; when?: "idle" | "detail" }): void => {
+		pi.events.emit("editor:set-label", { key, text, position: "bottom", align: "left", ...options });
 	};
 
 	const paint = (force = false): void => {
 		if (!enabled || !ctxRef) return;
 		const now = new Date();
+		const inUse = isDeepseekModel(ctxRef) || deepseekRunLive;
+		if (inUse !== lastInUse) {
+			lastInUse = inUse;
+			force = true;
+		}
 
 		// --- wall clock, DELIBERATELY UNCOLOURED ---
 		// Plain text lands on the terminal's default foreground (#ebdbb2 in this
@@ -138,7 +160,7 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 		const clock = formatClock(now);
 		if (force || clock !== lastClock) {
 			lastClock = clock;
-			emit(CLOCK_KEY, clock);
+			emit(CLOCK_KEY, clock, { priority: CLOCK_PRIORITY, when: "idle" });
 		}
 
 		// --- pricing phase ---
@@ -148,12 +170,13 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 		lastLabel = text;
 
 		let styled = text;
+		const color = labelColor(state, inUse);
 		try {
-			styled = ctxRef.ui.theme.fg(labelColor(state, isDeepseekModel(ctxRef)), text);
+			if (color) styled = ctxRef.ui.theme.fg(color, text);
 		} catch {
 			/* theme unavailable (print/json mode) — plain text is fine */
 		}
-		emit(LABEL_KEY, styled);
+		emit(LABEL_KEY, styled, { priority: LABEL_PRIORITY, when: inUse ? undefined : "detail" });
 	};
 
 	const stop = (): void => {
@@ -189,8 +212,8 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 		if (!ctx.hasUI) return;
 		ctxRef = ctx;
 		stop();
-		// the editor component may not exist yet at session_start; the poll
-		// re-emits, so a dropped first paint self-heals within POLL_MS.
+		// the editor extension keeps labels sent before its editor mounts, so the
+		// order of the two session_start handlers does not matter.
 		paintSafely(true);
 		// hidden (/deepseek off) or already broken — a poll that can only no-op
 		// is not worth owning.
@@ -218,6 +241,9 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 		ctxRef = null;
 		lastClock = null;
 		lastLabel = null;
+		lastInUse = null;
+		deepseekRunLive = false;
+		stopWatchingRuns();
 	});
 
 	// switching to/from deepseek changes the label's urgency color
@@ -239,6 +265,7 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 				stop();
 				lastClock = null;
 				lastLabel = null;
+				lastInUse = null;
 				// the clock is a separate label and must be cleared separately, or
 				// "/deepseek off" leaves behind a clock that no longer ticks.
 				pi.events.emit("editor:remove-label", { key: LABEL_KEY });

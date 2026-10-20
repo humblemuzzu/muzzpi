@@ -221,8 +221,8 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `md-export.ts` | `/md` session → markdown |
 | `command-palette/` | Ctrl+Shift+P |
 | `theme-studio/` | `/studio`, `/theme`, Ctrl+Shift+K — live pi + Ghostty theme/font/cursor/opacity preview. Esc reverts, Enter keeps. Writes the Ghostty config at `PI_STUDIO_GHOSTTY_CONFIG` or the default path |
-| `editor/` | custom box-drawing editor, labels, clipboard image paste |
-| `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border |
+| `editor/` | box-drawn editor, clipboard image paste, one meta row below (cache, `setStatus` texts, diff); `/hud` / Ctrl+Shift+I opens the detail view. Labels take `priority` (narrow drops lowest) and `when: "idle"\|"detail"`. Values stay plain text (the user reads them); colour only for an alert |
+| `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent) |
 | `agents-ui/` | the background agents on screen: dock above the editor, `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |

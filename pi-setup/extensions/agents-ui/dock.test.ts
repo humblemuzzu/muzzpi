@@ -67,10 +67,22 @@ describe("when the dock is there", () => {
 });
 
 describe("the rows", () => {
-	test("a summary line counts what is working, queued and done, with the hint after it", () => {
+	test("a summary line counts what is working, queued and done, with the hint flush right", () => {
 		const { store, lines } = setup();
 		store.ingest([run(), run(), run({ status: "queued", startedAt: undefined }), finished()]);
-		expect(lines()[0]).toBe(" 2 working · 1 queued · 1 done   ↓ manage");
+		const summary = lines()[0]!;
+		expect(summary).toStartWith(" 2 working · 1 queued · 1 done   ");
+		expect(summary).toEndWith("↓ manage");
+		expect(visibleWidth(summary)).toBe(100);
+	});
+
+	test("the summary is grey; only a failure keeps its colour", () => {
+		const { store, dock } = setup();
+		store.ingest([run(), finished(), finished({ status: "failed" })]);
+		const summary = dock.render(100)[0]!;
+		expect(summary).toContain(theme.fg("dim", "1 working"));
+		expect(summary).toContain(theme.fg("dim", "1 done"));
+		expect(summary).toContain(theme.fg("error", "1 failed"));
 	});
 
 	test("running first with the activity beside the label, finished dimmed after them", () => {

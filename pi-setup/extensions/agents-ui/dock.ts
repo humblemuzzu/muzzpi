@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth, type Component, type Focusable } from "@mariozechner/pi-tui";
-import type { RunSnapshot } from "../tools/lib/agent-channel";
+import type { RunSnapshot, RunStatus } from "../tools/lib/agent-channel";
 import type { Styler } from "../tools/lib/agent-layout";
 import { STATUS_STYLE } from "../tools/lib/agent-style";
 import { Picker, type PickerAction } from "./picker";
@@ -25,6 +25,10 @@ const dismissalKey = (run: RunSnapshot) => `${run.id}@${run.endedAt ?? "live"}`;
 const countOf = (runs: readonly RunSnapshot[], status: RunSnapshot["status"]) => runs.filter((run) => run.status === status).length;
 
 const SUMMARY_ORDER = ["running", "queued", "done", "failed", "stopped", "interrupted"] as const;
+
+/** The summary is grey; only an outcome that needs a look keeps its colour. */
+const SUMMARY_ALERT: Partial<Record<RunStatus, string>> = { failed: STATUS_STYLE.failed.color, interrupted: STATUS_STYLE.interrupted.color };
+const HINT_GAP = 3;
 
 /**
  * The strip above the editor: one row per background agent while any runs, and
@@ -147,14 +151,16 @@ export class Dock implements Component, Focusable {
 		return lines.map((line) => ` ${truncateToWidth(line, inner)}`);
 	}
 
+	/** `2 working · 1 done      ↓ manage`: counts on the left, the hint flush right with the row columns. */
 	private summary(runs: RunSnapshot[], width: number): string {
 		const counts = SUMMARY_ORDER.map((status) => ({ status, n: countOf(runs, status) }))
 			.filter(({ n }) => n > 0)
-			.map(({ status, n }) => this.theme.fg(STATUS_STYLE[status].color, `${n} ${status === "done" ? "done" : STATUS_STYLE[status].verb}`))
+			.map(({ status, n }) => this.theme.fg(SUMMARY_ALERT[status] ?? "dim", `${n} ${status === "done" ? "done" : STATUS_STYLE[status].verb}`))
 			.join(this.theme.fg("dim", " · "));
+		const used = visibleWidth(counts);
 		for (const hint of this.hints()) {
-			const line = `${counts}   ${hint}`;
-			if (visibleWidth(line) <= width) return line;
+			const gap = width - used - visibleWidth(hint);
+			if (gap >= HINT_GAP) return counts + " ".repeat(gap) + hint;
 		}
 		return counts;
 	}

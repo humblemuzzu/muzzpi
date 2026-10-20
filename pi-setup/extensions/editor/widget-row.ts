@@ -1,172 +1,58 @@
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
-export type Align = "left" | "center" | "right";
-
-export interface InlineSegment {
-	align: Align;
-	priority?: number;
-	renderInline: (maxWidth: number) => string;
-}
-
-export interface LayoutOptions {
-	gap?: string;
-}
-
-export class WidgetRowRegistry {
-	private segments = new Map<string, InlineSegment>();
-	private _version = 0;
-
-	constructor(private tui: { requestRender(): void }) {}
-
-	get version(): number {
-		return this._version;
-	}
-
-	set(id: string, segment: InlineSegment): void {
-		this.segments.set(id, segment);
-		this._version++;
-		this.tui.requestRender();
-	}
-
-	remove(id: string): void {
-		if (this.segments.delete(id)) {
-			this._version++;
-			this.tui.requestRender();
-		}
-	}
-
-	clear(): void {
-		if (this.segments.size === 0) return;
-		this.segments.clear();
-		this._version++;
-		this.tui.requestRender();
-	}
-
-	snapshot(): InlineSegment[] {
-		return [...this.segments.values()];
-	}
-}
-
-function sortByPriority(children: InlineSegment[]): InlineSegment[] {
-	return [...children].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
-}
-
 /**
  * SINK GUARD: a widget row is ONE terminal line. Newlines/tabs/control chars
  * in segment text are width-0 to truncateToWidth but move the real cursor —
  * the TUI-desync (screen smear) class. Flatten them; keep \x1b so ANSI
  * colors in segments stay intact.
  */
-function flattenSegmentText(text: string): string {
+export function flattenSegmentText(text: string): string {
 	return text
 		.replace(/[\r\n\t\v\f]+/g, " ")
 		.replace(/[\x00-\x08\x0e-\x1a\x1c-\x1f\x7f]+/g, "");
 }
 
-function joinGroup(children: InlineSegment[], width: number, gap: string): string {
-	if (children.length === 0) return "";
-	const ordered = sortByPriority(children);
-	const parts = ordered
-		.map((child) => flattenSegmentText(child.renderInline(width)))
-		.filter((part) => part.length > 0);
-	return parts.join(gap);
+export interface RowParts {
+	left: string;
+	center?: string;
+	right?: string;
 }
 
-function clampToWidth(text: string, maxWidth: number): string {
-	if (maxWidth <= 0) return "";
-	return truncateToWidth(text, maxWidth);
+export const MIN_GAP = 2;
+
+/** `…/Code stuff/ghosttyyy (main)`: plain text cut from the start, for paths whose end is the part that matters. */
+export function keepEnd(text: string, width: number): string {
+	if (visibleWidth(text) <= width) return text;
+	if (width < 2) return "";
+	const chars = Array.from(text);
+	while (chars.length > 0 && visibleWidth(chars.join("")) > width - 1) chars.shift();
+	return `…${chars.join("")}`;
 }
 
-function layoutLine(children: InlineSegment[], width: number, gap: string): string {
+/**
+ * One line of exactly `width` columns: left flush left, right flush right,
+ * center in the space between. The center gives way first, then the right;
+ * the left is cut only when it alone is wider than the line.
+ */
+export function layoutRow(parts: RowParts, width: number): string {
 	if (width <= 0) return "";
+	let left = flattenSegmentText(parts.left);
+	let center = flattenSegmentText(parts.center ?? "");
+	let right = flattenSegmentText(parts.right ?? "");
 
-	const grouped: Record<Align, InlineSegment[]> = {
-		left: [],
-		center: [],
-		right: [],
-	};
+	if (visibleWidth(left) > width) left = truncateToWidth(left, width, "…");
+	const leftWidth = visibleWidth(left);
+	const rightRoom = Math.max(0, width - leftWidth - (leftWidth > 0 ? MIN_GAP : 0));
+	if (visibleWidth(right) > rightRoom) right = rightRoom > 1 ? truncateToWidth(right, rightRoom, "…") : "";
+	const rightWidth = visibleWidth(right);
 
-	for (const child of children) {
-		grouped[child.align].push(child);
-	}
+	const centerRoom = width - leftWidth - rightWidth - (leftWidth > 0 ? MIN_GAP : 0) - (rightWidth > 0 ? MIN_GAP : 0);
+	if (centerRoom < 1 || !center) center = "";
+	else if (visibleWidth(center) > centerRoom) center = truncateToWidth(center, centerRoom, "…");
+	const centerWidth = visibleWidth(center);
 
-	let left = joinGroup(grouped.left, width, gap);
-	let center = joinGroup(grouped.center, width, gap);
-	let right = joinGroup(grouped.right, width, gap);
-
-	let leftWidth = visibleWidth(left);
-	let centerWidth = visibleWidth(center);
-	let rightWidth = visibleWidth(right);
-
-	const shrinkCenter = () => {
-		const budget = Math.max(0, width - leftWidth - rightWidth);
-		if (centerWidth > budget) {
-			center = clampToWidth(center, budget);
-			centerWidth = visibleWidth(center);
-		}
-	};
-
-	shrinkCenter();
-
-	if (leftWidth + rightWidth > width) {
-		const leftBudget = Math.max(0, width - rightWidth);
-		if (leftWidth > leftBudget) {
-			left = clampToWidth(left, leftBudget);
-			leftWidth = visibleWidth(left);
-		}
-	}
-	if (leftWidth + rightWidth > width) {
-		const rightBudget = Math.max(0, width - leftWidth);
-		if (rightWidth > rightBudget) {
-			right = clampToWidth(right, rightBudget);
-			rightWidth = visibleWidth(right);
-		}
-	}
-
-	const availableCenter = Math.max(0, width - leftWidth - rightWidth);
-	if (centerWidth > availableCenter) {
-		center = clampToWidth(center, availableCenter);
-		centerWidth = visibleWidth(center);
-	}
-
-	const paddingForCenter = Math.max(0, availableCenter - centerWidth);
-	const padLeft = Math.floor(paddingForCenter / 2);
-	const padRight = paddingForCenter - padLeft;
-
-	const line = left + " ".repeat(padLeft) + center + " ".repeat(padRight) + right;
-	return truncateToWidth(line, width);
-}
-
-export class HorizontalLineWidget {
-	private cachedWidth?: number;
-	private cachedLines?: string[];
-	private cachedVersion?: number;
-
-	constructor(
-		private getChildren: () => InlineSegment[],
-		private options: LayoutOptions = {},
-		private getVersion?: () => number,
-	) {}
-
-	invalidate(): void {
-		this.cachedWidth = undefined;
-		this.cachedLines = undefined;
-		this.cachedVersion = undefined;
-	}
-
-	render(width: number): string[] {
-		const version = this.getVersion?.();
-		if (
-			this.cachedLines &&
-			this.cachedWidth === width &&
-			(!this.getVersion || (version != null && this.cachedVersion === version))
-		) {
-			return this.cachedLines;
-		}
-		const lines = [layoutLine(this.getChildren(), width, this.options.gap ?? "  ")];
-		this.cachedWidth = width;
-		this.cachedLines = lines;
-		this.cachedVersion = version;
-		return lines;
-	}
+	const free = width - leftWidth - centerWidth - rightWidth;
+	const before = centerWidth > 0 ? Math.floor(free / 2) : free;
+	const after = free - before;
+	return truncateToWidth(left + " ".repeat(before) + center + " ".repeat(after) + right, width);
 }

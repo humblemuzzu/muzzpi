@@ -1,8 +1,8 @@
-import type { SessionEntry, Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { Styler } from "../tools/lib/agent-layout";
+import { type Alert, ink } from "./ink";
 
 const METER_CELLS = 12;
-const TICK_MS = 1000;
 const FILLED = "█";
 const EMPTY = "░";
 const LABEL_GAP = "  ";
@@ -57,7 +57,7 @@ export function collectCacheStats(entries: readonly SessionEntry[], lastResponse
 }
 
 /** pi's footer formatter. Cache totals run from 0 to millions, so k/M beats a fixed decimal. */
-function formatCompact(count: number): string {
+export function formatCompact(count: number): string {
 	if (count < 1000) return String(count);
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
@@ -71,110 +71,73 @@ function formatRemaining(ms: number): string {
 	return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`;
 }
 
-export class CacheLineWidget {
-	private stats: CacheStats | null = null;
-	private ttlMs: number | undefined;
-	private timer: ReturnType<typeof setInterval> | undefined;
-	private width = 0;
-	private lastLine = "";
-	private disposed = false;
+export interface CacheView {
+	stats: CacheStats;
+	/** the cache lifetime; undefined for a provider that declares none */
+	ttlMs: number | undefined;
+}
 
-	constructor(
-		private tui: { requestRender(): void },
-		private theme: Theme,
-	) {}
+/**
+ * Derived, not reported: Anthropic returns no expiry, only how much of a write
+ * was 1h. `soon` is the last 5 minutes of a 1h cache, the last minute of a 5m one.
+ */
+export function cacheLifetime(view: CacheView, now: number): { remaining: number; soon: boolean } | undefined {
+	const at = view.stats.lastCacheAt;
+	if (at === undefined || view.ttlMs === undefined) return undefined;
+	const remaining = view.ttlMs - (now - at);
+	return { remaining, soon: remaining <= Math.min(FIVE_MINUTES_MS, view.ttlMs / 5) };
+}
 
-	setStats(stats: CacheStats, ttlMs: number | undefined): void {
-		if (this.disposed) return;
-		this.stats = stats;
-		this.ttlMs = ttlMs;
-		this.syncTimer();
-		this.tui.requestRender();
+function hitRate(stats: CacheStats): number | undefined {
+	return stats.cacheRead + stats.cacheWrite > 0 ? stats.lastHitRate : undefined;
+}
+
+function hitAlert(rate: number): Alert {
+	return rate >= 0.9 ? undefined : rate >= 0.5 ? "warning" : "error";
+}
+
+/**
+ * The glance figure: `cache 100% · 59m left`. Plain while healthy; colour only
+ * for a poor hit rate or a cache about to go cold. The countdown shows only
+ * while idle, because every request of a running turn renews it.
+ */
+export function compactCacheText(view: CacheView, now: number, running: boolean, paint: Styler): string {
+	const rate = hitRate(view.stats);
+	if (rate === undefined) return "";
+	const life = running ? undefined : cacheLifetime(view, now);
+	if (life && life.remaining <= 0) return "cache expired";
+	const hit = ink(paint, hitAlert(rate), `cache ${Math.round(rate * 100)}%`);
+	if (!life) return hit;
+	const left = formatRemaining(life.remaining);
+	const countdown = life.soon ? paint.fg("warning", `expires in ${left}`) : `${left} left`;
+	return `${hit}${paint.fg("dim", " · ")}${countdown}`;
+}
+
+/** The detail view: meter, hit rate, lifetime, totals. */
+export function fullCacheText(view: CacheView, now: number, paint: Styler): string {
+	const stats = view.stats;
+	const parts: string[] = [paint.fg("dim", "cache")];
+
+	const rate = hitRate(stats);
+	if (rate === undefined) {
+		parts.push(paint.fg("dim", EMPTY.repeat(METER_CELLS)));
+	} else {
+		const alert = hitAlert(rate);
+		const filled = Math.max(0, Math.min(METER_CELLS, Math.round(rate * METER_CELLS)));
+		parts.push(ink(paint, alert, FILLED.repeat(filled)) + paint.fg("dim", EMPTY.repeat(METER_CELLS - filled)));
+		parts.push(ink(paint, alert, `${Math.round(rate * 100)}% hit`));
 	}
 
-	dispose(): void {
-		this.disposed = true;
-		this.stopTimer();
+	const life = cacheLifetime(view, now);
+	if (life) {
+		parts.push(
+			life.remaining > 0 ? ink(paint, life.soon ? "warning" : undefined, `expires in ${formatRemaining(life.remaining)}`) : "expired",
+		);
 	}
 
-	invalidate(): void {}
-
-	render(width: number): string[] {
-		this.width = width;
-		const line = this.buildLine(width);
-		this.lastLine = line;
-		return line ? [line] : [];
+	parts.push(`read ${formatCompact(stats.cacheRead)}  write ${formatCompact(stats.cacheWrite)}`);
+	if (stats.toolCalls > 0) {
+		parts.push(paint.fg("dim", stats.toolCalls === 1 ? "1 call" : `${stats.toolCalls} calls`));
 	}
-
-	/** Derived, not reported: Anthropic returns no expiry, only how much of a write was 1h. */
-	private remainingMs(): number | undefined {
-		const at = this.stats?.lastCacheAt;
-		if (at === undefined || this.ttlMs === undefined) return undefined;
-		return this.ttlMs - (Date.now() - at);
-	}
-
-	private syncTimer(): void {
-		const remaining = this.remainingMs();
-		if (remaining === undefined || remaining <= 0) {
-			this.stopTimer();
-			return;
-		}
-		if (this.timer) return;
-		this.timer = setInterval(() => this.tick(), TICK_MS);
-		this.timer.unref?.();
-	}
-
-	private stopTimer(): void {
-		if (!this.timer) return;
-		clearInterval(this.timer);
-		this.timer = undefined;
-	}
-
-	/** A timer body must never throw: after session replacement pi exits on an uncaughtException. */
-	private tick(): void {
-		try {
-			if ((this.remainingMs() ?? 0) <= 0) this.stopTimer();
-			const line = this.buildLine(this.width);
-			if (line === this.lastLine) return;
-			this.lastLine = line;
-			this.tui.requestRender();
-		} catch {
-			this.stopTimer();
-		}
-	}
-
-	private buildLine(width: number): string {
-		const stats = this.stats;
-		if (!stats || width <= 0) return "";
-		const theme = this.theme;
-		const parts: string[] = [theme.fg("dim", "cache")];
-
-		const rate = stats.cacheRead + stats.cacheWrite > 0 ? stats.lastHitRate : undefined;
-		if (rate === undefined) {
-			parts.push(theme.fg("dim", EMPTY.repeat(METER_CELLS)));
-		} else {
-			const tone = rate >= 0.9 ? "success" : rate >= 0.5 ? "warning" : "error";
-			const filled = Math.max(0, Math.min(METER_CELLS, Math.round(rate * METER_CELLS)));
-			parts.push(theme.fg(tone, FILLED.repeat(filled)) + theme.fg("dim", EMPTY.repeat(METER_CELLS - filled)));
-			parts.push(theme.fg(tone, `${Math.round(rate * 100)}% hit`));
-		}
-
-		// Before read/write on purpose: truncation cuts from the right, and the
-		// remaining lifetime is the one number that has nowhere else to live.
-		const remaining = this.remainingMs();
-		if (remaining !== undefined) {
-			parts.push(
-				remaining > 0
-					? theme.fg(remaining < 60000 ? "warning" : "dim", `expires in ${formatRemaining(remaining)}`)
-					: theme.fg("dim", "expired"),
-			);
-		}
-
-		parts.push(theme.fg("muted", `read ${formatCompact(stats.cacheRead)}  write ${formatCompact(stats.cacheWrite)}`));
-		if (stats.toolCalls > 0) {
-			parts.push(theme.fg("dim", stats.toolCalls === 1 ? "1 call" : `${stats.toolCalls} calls`));
-		}
-
-		return truncateToWidth(parts.join(LABEL_GAP), width);
-	}
+	return parts.join(LABEL_GAP);
 }

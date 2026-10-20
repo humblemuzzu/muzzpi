@@ -1,51 +1,51 @@
 /**
- * editor extension — composable custom editor with box-drawing borders and label slots.
+ * editor extension — box-drawn prompt editor with label slots in its borders.
  *
- * replaces pi's default editor with ╭╮╰╯ borders. other extensions can inject
- * labels into the top/bottom border lines via the shared EventBus:
- *
+ * other extensions add labels over the shared EventBus:
  *   pi.events.emit("editor:set-label", { key: "handoff", text: "↳ handed off", position: "top", align: "left" })
  *   pi.events.emit("editor:remove-label", { key: "handoff" })
- *
- * multiple labels on the same border are separated by " · ". left labels fill
- * from the left edge, right labels from the right edge.
+ * optional `priority` (default 50): a narrow terminal drops the lowest first.
+ * optional `when`: "idle" hides the label while a run is on, "detail" shows it
+ * only in the detail view (/hud, ctrl+shift+i).
  */
 
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
-import { CustomEditor, Theme, estimateTokens } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, SessionEntry } from "@mariozechner/pi-coding-agent";
+import { CustomEditor, Theme, estimateTokens, getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { TUI, EditorTheme, TuiMouseEvent } from "@mariozechner/pi-tui";
-import { Image, visibleWidth } from "@mariozechner/pi-tui";
-import { HorizontalLineWidget, WidgetRowRegistry } from "./widget-row";
-import { type CacheStats, CacheLineWidget, collectCacheStats } from "./cache-line";
+import { Image } from "@mariozechner/pi-tui";
 import type { KeybindingsManager } from "@mariozechner/pi-coding-agent";
-import type { AgentMessage, AssistantMessage, ImageContent, TextContent } from "@mariozechner/pi-ai";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import type { AssistantMessage, ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { createRequire } from "node:module";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { hasToolCost } from "../tools/lib/tool-cost";
 import { clipboardImageModule } from "../tools/lib/pi-package-dir";
+import {
+	SPINNER_INTERVAL_MS,
+	activityLabel,
+	advanceSpinner,
+	createActivityState,
+	describeToolCall,
+	endActivity,
+	runDetail,
+	startActivity,
+} from "./activity";
+import { type BorderSegment, layoutBorder } from "./border";
+import { type CacheStats, type CacheView, collectCacheStats, formatCompact } from "./cache-line";
+import { type DiffSummary, formatChanges, readDiffSummary } from "./changes";
+import { type Alert, ink } from "./ink";
+import { MetaRow } from "./meta-row";
 
-const execFileAsync = promisify(execFile);
-
-// ---------------------------------------------------------------------------
 // clipboard image paste → compact "[image #N]" placeholder
 //
-// pi's core paste handler (interactive-mode handleClipboardImagePaste) writes
-// the clipboard image to a temp file and dumps the raw path
-// (/var/folders/.../pi-clipboard-<uuid>.png) into the editor as literal text —
-// that long path is what you end up staring at while composing.
+// pi's core paste handler writes the clipboard image to a temp file and inserts
+// its raw path into the editor. We show a short "[image #N]" token instead and
+// attach the image inline (base64) through the "input" hook on submit.
 //
-// instead we show a short "[image #N]" token in the editor and carry the real
-// image inline (base64) to the model via the "input" hook. this mirrors
-// opencode's placeholder UX without needing virtual-text / extmark support in
-// pi's plain-text editor. multiple pastes stack as [image #1], [image #2], ...
-//
-// the editor-swap path in core only wires its default paste handler when ours
-// is unset (`if (!customEditor.onPasteImage)`), so if pi's clipboard-image
-// module is missing or no longer exports readClipboardImage we simply DON'T set onPasteImage and pi's default
-// (insert path) transparently takes back over. it loads on the first paste:
-// under our bundle that pulls in a second pi-tui (~36 ms), which startup must not pay.
-// ---------------------------------------------------------------------------
+// core wires its default paste handler only when ours is unset, so if pi's
+// clipboard-image module is missing we leave onPasteImage unset and pi's
+// path-insert takes over. It loads on the first paste: under our bundle that
+// pulls in a second pi-tui (~36 ms), which startup must not pay.
 
 interface PastedImage {
 	/** bare base64 (no data: prefix) — matches pi's ImageContent.data shape */
@@ -60,7 +60,6 @@ let pasteCounter = 0;
 const IMAGE_TOKEN = /\[image #\d+\]/g;
 let showPeek: ((token: string | undefined) => void) | undefined;
 
-// ---------------------------------------------------------------------------
 // Escape gate — a running agent takes THREE escapes, not one
 //
 // pi's default onEscape aborts a streaming turn on the FIRST press, which makes
@@ -71,7 +70,6 @@ let showPeek: ((token: string | undefined) => void) | undefined;
 // Deliberately scoped to the ABORT case only. When the agent is idle the press
 // is forwarded untouched, so bash-mode exit, autocomplete cancel and the
 // double-Escape /tree action all keep their normal single/double-press feel.
-// ---------------------------------------------------------------------------
 
 /** how many escapes are needed to abort a running agent */
 const ESCAPE_HITS_REQUIRED = 3;
@@ -102,14 +100,25 @@ function loadClipboardImageReader(): (() => Promise<ClipboardImage | null>) | nu
 	};
 }
 
+type LabelWhen = "idle" | "detail";
+
+interface LabelOptions {
+	/** higher survives longer when the border is too narrow */
+	priority?: number;
+	/** "idle": hidden while a run is on; "detail": only in the detail view */
+	when?: LabelWhen;
+}
+
 interface Label {
 	key: string;
 	text: string;
 	position: "top" | "bottom";
 	align: "left" | "right";
+	priority: number;
+	when?: LabelWhen;
 }
 
-interface SetLabelPayload {
+interface SetLabelPayload extends LabelOptions {
 	key: string;
 	text: string;
 	position?: "top" | "bottom";
@@ -120,7 +129,15 @@ interface RemoveLabelPayload {
 	key: string;
 }
 
-const SEPARATOR = " · ";
+const DEFAULT_LABEL_PRIORITY = 50;
+
+/** What the border reads from the extension on every render. */
+interface HudState {
+	running(): boolean;
+	detail(): boolean;
+	/** the run's bottom-left label, empty while idle */
+	activity(): string;
+}
 
 /**
  * make a string safe to embed in a single border/status line: collapse
@@ -133,6 +150,40 @@ export function flattenLabelText(text: string): string {
 		.replace(/[\x00-\x08\x0e-\x1a\x1c-\x1f\x7f]+/g, "") // other C0/DEL (keeps \x1b: ANSI colors stay intact)
 		.replace(/ {2,}/g, " ");
 }
+/** Border labels. The extension owns them, so a label sent before the editor mounts is kept. */
+export class LabelBoard {
+	private labels = new Map<string, Label>();
+
+	/** @returns true if the stored label actually changed, so a poller resending the same text costs no repaint. */
+	set(key: string, text: string, position: "top" | "bottom" = "top", align: "left" | "right" = "left", options: LabelOptions = {}): boolean {
+		// SINK GUARD: labels are embedded into single border lines. An embedded
+		// \n renders as an extra terminal row the TUI doesn't account for —
+		// visibleWidth counts it as 0, so no width check catches it — and the
+		// differential renderer desyncs (screen smear). Flatten ALL control
+		// chars here so no label source (incl. other extensions via the
+		// editor-set-label event) can ever inject one.
+		const flat = flattenLabelText(text);
+		const priority = options.priority ?? DEFAULT_LABEL_PRIORITY;
+		const prev = this.labels.get(key);
+		if (prev && prev.text === flat && prev.position === position && prev.align === align && prev.priority === priority && prev.when === options.when) {
+			return false;
+		}
+		this.labels.set(key, { key, text: flat, position, align, priority, when: options.when });
+		return true;
+	}
+
+	remove(key: string): boolean {
+		return this.labels.delete(key);
+	}
+
+	visible(position: "top" | "bottom", align: "left" | "right", running: boolean, detail: boolean): BorderSegment[] {
+		const shown = (label: Label) => label.when === undefined || (label.when === "idle" ? !running || detail : detail);
+		return [...this.labels.values()]
+			.filter((label) => label.position === position && label.align === align && shown(label))
+			.map((label) => ({ text: label.text, priority: label.priority }));
+	}
+}
+
 const CORNER_TL = "╭";
 const CORNER_TR = "╮";
 const CORNER_BL = "╰";
@@ -141,18 +192,21 @@ const HORIZONTAL = "─";
 const VERTICAL = "│";
 
 class LabeledEditor extends CustomEditor {
-	private labels: Map<string, Label> = new Map();
+	private labels: LabelBoard;
 	private appTheme: Theme;
 	private tuiRef: TUI;
+	private hud: HudState;
 	private borderCache: Record<"top" | "bottom", { key: string; line: string } | null> = {
 		top: null,
 		bottom: null,
 	};
 
-	constructor(tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager, appTheme: Theme) {
+	constructor(tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager, appTheme: Theme, hud: HudState, labels: LabelBoard) {
 		super(tui, editorTheme, keybindings, { embedWorkingStatus: true });
 		this.appTheme = appTheme;
 		this.tuiRef = tui;
+		this.hud = hud;
+		this.labels = labels;
 		this.setupImagePaste();
 		this.setupEscapeGate();
 	}
@@ -167,15 +221,11 @@ class LabeledEditor extends CustomEditor {
 	/**
 	 * Interpose on `onEscape` so a running agent needs THREE presses.
 	 *
-	 * `CustomEditor` declares `onEscape` as a bare class field, so `super()`
-	 * has already installed an OWN data property by the time we get here — a
-	 * prototype accessor would be shadowed by it. Redefining the own property
-	 * as an accessor is what actually works.
-	 *
-	 * The getter reports `undefined` until core has assigned, because core
-	 * wires its default with `if (!customEditor.onEscape)`. Returning our gate
-	 * too early would make core skip the assignment and leave us with nothing
-	 * to delegate to — Escape would then do nothing at all.
+	 * `super()` has already installed `onEscape` as an OWN data property (a bare
+	 * class field), which would shadow a prototype accessor, so the own property
+	 * is redefined as an accessor. The getter reports `undefined` until core has
+	 * assigned, because core wires its default with `if (!customEditor.onEscape)`:
+	 * answering early would leave nothing to delegate to.
 	 */
 	private setupEscapeGate(): void {
 		Object.defineProperty(this, "onEscape", {
@@ -205,7 +255,7 @@ class LabeledEditor extends CustomEditor {
 			this.escapeTimer = setTimeout(() => {
 				this.escapeHits = 0;
 				this.escapeTimer = undefined;
-				this.removeLabel(ESCAPE_LABEL_KEY);
+				this.labels.remove(ESCAPE_LABEL_KEY);
 				this.tuiRef.requestRender();
 			}, ESCAPE_WINDOW_MS);
 		}
@@ -217,12 +267,7 @@ class LabeledEditor extends CustomEditor {
 		}
 
 		const left = ESCAPE_HITS_REQUIRED - this.escapeHits;
-		this.setLabel(
-			ESCAPE_LABEL_KEY,
-			this.appTheme.fg("warning", `esc ×${left} more to stop`),
-			"bottom",
-			"left",
-		);
+		this.labels.set(ESCAPE_LABEL_KEY, this.appTheme.fg("warning", `esc ×${left} more to stop`), "bottom", "left", { priority: 100 });
 		this.tuiRef.requestRender();
 	};
 
@@ -234,7 +279,7 @@ class LabeledEditor extends CustomEditor {
 		}
 		if (this.escapeHits > 0) {
 			this.escapeHits = 0;
-			this.removeLabel(ESCAPE_LABEL_KEY);
+			this.labels.remove(ESCAPE_LABEL_KEY);
 		}
 	}
 
@@ -294,37 +339,8 @@ class LabeledEditor extends CustomEditor {
 		return this.appTheme.fg("dim", str);
 	}
 
-	/** @returns true if the stored label actually changed (callers use this to
-	 * skip a pointless repaint — a polling label emitter would otherwise force
-	 * a render on every tick). */
-	setLabel(key: string, text: string, position: "top" | "bottom" = "top", align: "left" | "right" = "left"): boolean {
-		// SINK GUARD: labels are embedded into single border lines. An embedded
-		// \n renders as an extra terminal row the TUI doesn't account for —
-		// visibleWidth counts it as 0, so no width check catches it — and the
-		// differential renderer desyncs (screen smear). Flatten ALL control
-		// chars here so no label source (incl. other extensions via the
-		// editor-set-label event) can ever inject one.
-		const flat = flattenLabelText(text);
-		const prev = this.labels.get(key);
-		if (prev && prev.text === flat && prev.position === position && prev.align === align) return false;
-		this.labels.set(key, { key, text: flat, position, align });
-		return true;
-	}
-
-	removeLabel(key: string): boolean {
-		return this.labels.delete(key);
-	}
-
-	/** repaint the border. labels set from outside the editor (via the
-	 * editor:set-label event) have no other way to reach the render loop. */
-	requestRepaint(): void {
-		this.tuiRef.requestRender();
-	}
-
-	private getLabelsFor(position: "top" | "bottom", align: "left" | "right"): string {
-		const matching = [...this.labels.values()].filter((l) => l.position === position && l.align === align);
-		if (matching.length === 0) return "";
-		return matching.map((l) => l.text).join(SEPARATOR);
+	private labelsFor(position: "top" | "bottom", align: "left" | "right"): BorderSegment[] {
+		return this.labels.visible(position, align, this.hud.running(), this.hud.detail());
 	}
 
 	private extractScrollIndicator(originalLine: string): string {
@@ -333,23 +349,23 @@ class LabeledEditor extends CustomEditor {
 		return match ? match[0] : "";
 	}
 
-	private workingStatusText(budget: number): string {
+	/** pi's own indicator, only for what we do not draw: retry countdown, compaction, branch summary. */
+	private piStatusText(budget: number): string {
 		if (!this.embedWorkingStatus || budget < 3) return "";
 		const indicator = (
 			this as unknown as {
-				workingStatusIndicator?: { renderInBorder: (width: number) => string };
+				workingStatusIndicator?: { kind?: string; renderInBorder: (width: number) => string };
 			}
 		).workingStatusIndicator;
-		if (!indicator) return "";
+		if (!indicator || indicator.kind === "working") return "";
 		return flattenLabelText(indicator.renderInBorder(budget));
 	}
 
 	/**
-	 * build a border line like: ╭─ left label ─────── right label ─╮
+	 * build a border line like: ╭─ left · labels ─────── right · labels ─╮
 	 *
-	 * inherits scroll indicator text from the original border line if present.
 	 * originalLine is the border super.render() produced — we check it for
-	 * scroll indicators (↑/↓) and preserve that text as a right-aligned label.
+	 * scroll indicators (↑/↓) and keep that text as a right-hand label.
 	 */
 	private buildBorderLine(
 		outerWidth: number,
@@ -358,36 +374,29 @@ class LabeledEditor extends CustomEditor {
 		position: "top" | "bottom",
 		originalLine: string,
 	): string {
-		const leftText = this.getLabelsFor(position, "left");
-		const rightText = this.getLabelsFor(position, "right");
-		const scrollIndicator = this.extractScrollIndicator(originalLine);
-		const status = position === "top" ? this.workingStatusText(Math.max(8, Math.floor(outerWidth / 3))) : "";
-		const rightParts = [rightText, status, scrollIndicator].filter(Boolean);
-		const rightCombined = rightParts.join(SEPARATOR);
-		const cacheKey = `${outerWidth}|${position}|${leftText}|${rightCombined}`;
+		const left = this.labelsFor(position, "left");
+		const right = this.labelsFor(position, "right");
+		if (position === "bottom") {
+			const activity = this.hud.activity();
+			if (activity) left.unshift({ text: flattenLabelText(activity), priority: 100 });
+		} else {
+			const status = this.piStatusText(Math.max(8, outerWidth - 8));
+			if (status) right.push({ text: status, priority: 95 });
+		}
+		const scroll = this.extractScrollIndicator(originalLine);
+		if (scroll) right.push({ text: this.dim(scroll), priority: 99 });
+
+		const serialize = (segments: BorderSegment[]) => segments.map((s) => `${s.priority}:${s.text}`).join("\u0000");
+		const cacheKey = `${outerWidth}\u0001${serialize(left)}\u0001${serialize(right)}`;
 		const cached = this.borderCache[position];
 		if (cached?.key === cacheKey) return cached.line;
 
-		// layout: ╭─leftLabel────────rightLabel─╮
-		// always ─ after left corner and before right corner
-		const hasLeft = leftText.length > 0;
-		const hasRight = rightCombined.length > 0;
-
-		const leftLabelWidth = hasLeft ? visibleWidth(leftText) : 0;
-		const rightLabelWidth = hasRight ? visibleWidth(rightCombined) : 0;
-
-		// budget: outerWidth - 2 corners - 2 edge dashes (╭─...─╮)
-		const innerWidth = outerWidth - 4;
-		const fillWidth = innerWidth - leftLabelWidth - rightLabelWidth;
-
-		const line = fillWidth < 0
-			? this.dim(cornerLeft + HORIZONTAL.repeat(Math.max(0, outerWidth - 2)) + cornerRight)
-			: this.dim(cornerLeft + HORIZONTAL) +
-				(hasLeft ? leftText : "") +
-				this.dim(HORIZONTAL.repeat(fillWidth)) +
-				(hasRight ? rightCombined : "") +
-				this.dim(HORIZONTAL + cornerRight);
-
+		const line = layoutBorder(
+			outerWidth,
+			{ left: cornerLeft, right: cornerRight, horizontal: HORIZONTAL, chrome: (text) => this.dim(text) },
+			left,
+			right,
+		);
 		this.borderCache[position] = { key: cacheKey, line };
 		return line;
 	}
@@ -452,11 +461,6 @@ class LabeledEditor extends CustomEditor {
 	}
 }
 
-function formatTokens(n: number): string {
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(n);
-}
-
 function shortenPath(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE || "";
 	if (home && cwd.startsWith(home)) return "~" + cwd.slice(home.length);
@@ -472,7 +476,7 @@ function estimateContextFromEntries(entries: SessionEntry[]): number {
 	for (const entry of entries) {
 		switch (entry.type) {
 			case "message":
-				total += estimateTokens(entry.message as AgentMessage);
+				total += estimateTokens(entry.message);
 				break;
 			case "custom_message": {
 				const content = entry.content;
@@ -502,200 +506,62 @@ function estimateContextFromEntries(entries: SessionEntry[]): number {
 	return total;
 }
 
-function updateStatsLabels(editor: LabeledEditor | null, pi: ExtensionAPI, ctx: ExtensionContext, cachedLen?: { value: number }): void {
-	if (!editor) return;
-
-	// skip recomputation if branch length unchanged (cheap proxy for "nothing new happened")
-	const branch = ctx.sessionManager.getBranch();
-	if (cachedLen && branch.length === cachedLen.value) return;
-	if (cachedLen) cachedLen.value = branch.length;
-
-	// top-left: context usage + cost (parent model + sub-agents)
-	const usage = ctx.getContextUsage();
-	const model = ctx.model;
-
-	let cost = 0;
-	for (const entry of branch) {
-		if (entry.type !== "message") continue;
-		const msg = entry.message;
-		if (msg.role === "assistant") {
-			cost += (msg as AssistantMessage).usage?.cost?.total ?? 0;
-		} else if (msg.role === "toolResult") {
-			const details = (msg as { details?: unknown }).details;
-			if (hasToolCost(details)) cost += details.cost;
-		}
-	}
-
-	const topLeftParts: string[] = [];
-
-	// use provider-reported usage if available and meaningful, otherwise estimate from entries
-	if (usage?.percent != null && usage.tokens != null && usage.tokens > 0) {
-		topLeftParts.push(`${Math.round(usage.percent)}% of ${formatTokens(usage.contextWindow)}`);
-	} else if (model?.contextWindow) {
-		// fallback: estimate tokens from session entries
-		const estimatedTokens = estimateContextFromEntries(branch);
-		const percent = (estimatedTokens / model.contextWindow) * 100;
-		topLeftParts.push(`~${Math.round(percent)}% of ${formatTokens(model.contextWindow)}`);
-	}
-
-	if (cost > 0) {
-		topLeftParts.push(`$${cost.toFixed(2)}`);
-	}
-	if (topLeftParts.length > 0) {
-		editor.setLabel("stats", topLeftParts.join(" · "), "top", "left");
-	}
-
-	// top-right: model + thinking level
-	const topRightParts: string[] = [];
-	if (model) {
-		const provider = model.provider ? `(${model.provider})` : "";
-		topRightParts.push(`${provider} ${model.id}`.trim());
-	}
-	const thinkingLevel = pi.getThinkingLevel();
-	if (thinkingLevel && thinkingLevel !== "off") {
-		topRightParts.push(thinkingLevel);
-	}
-	if (topRightParts.length > 0) {
-		editor.setLabel("model", topRightParts.join(" · "), "top", "right");
-	}
+/** Plain until the context is worth watching; pi compacts Claude at 85%. */
+function contextAlert(percent: number): Alert {
+	return percent >= 85 ? "error" : percent >= 70 ? "warning" : undefined;
 }
 
+/** Tools that can change the working tree, so the diff summary refreshes after them. */
+const WRITING_TOOLS = new Set(["edit", "write", "bash", "undo_edit", "redo_edit", "format_file"]);
+const CHANGES_DEBOUNCE_MS = 1500;
 
-async function getGitDiffStats(cwd: string): Promise<string> {
+const HUD_SHORTCUT = "ctrl+shift+i";
+const hudFile = () => join(getAgentDir(), "cache", "editor-hud.json");
+
+function readDetailSetting(): boolean {
 	try {
-		const { stdout } = await execFileAsync("git", ["diff", "--stat"], {
-			cwd,
-			timeout: 3000,
-		});
-		const out = stdout.trim();
-		if (!out) return "";
-		// last line is summary: " N files changed, N insertions(+), N deletions(-)"
-		const lines = out.split("\n");
-		const summary = lines[lines.length - 1].trim();
-		const filesMatch = summary.match(/(\d+)\s+files?\s+changed/);
-		const insMatch = summary.match(/(\d+)\s+insertions?\(\+\)/);
-		const delMatch = summary.match(/(\d+)\s+deletions?\(-\)/);
-		if (!filesMatch) return "";
-		const parts = [`${filesMatch[1]} files changed`];
-		if (insMatch) parts.push(`+${insMatch[1]}`);
-		if (delMatch) parts.push(`-${delMatch[1]}`);
-		return parts.join(" ");
+		return JSON.parse(readFileSync(hudFile(), "utf8"))?.detail === true;
 	} catch {
-		return "";
+		return false;
 	}
 }
 
-// ---------------------------------------------------------------------------
-// animated activity spinner — renders rich status below the editor
-// ---------------------------------------------------------------------------
-
-const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂", "⁑", "*", "•", "·"];
-
-type ActivityPhase = "idle" | "thinking" | "tool" | "streaming";
-
-interface ActivityState {
-	phase: ActivityPhase;
-	turnIndex: number;
-	/** tool names currently in-flight (supports parallel tool calls) */
-	activeTools: Map<string, string>;
-	/** epoch ms when agent_start fired */
-	startedAt: number;
-	/** interval handle for spinner animation */
-	intervalId: ReturnType<typeof setInterval> | null;
-	/** current braille frame index */
-	frame: number;
-}
-
-function createActivityState(): ActivityState {
-	return {
-		phase: "idle",
-		turnIndex: 0,
-		activeTools: new Map(),
-		startedAt: 0,
-		intervalId: null,
-		frame: 0,
-	};
-}
-
-function formatElapsed(ms: number): string {
-	const s = Math.floor(ms / 1000);
-	if (s < 60) return `${s}s`;
-	const m = Math.floor(s / 60);
-	const rem = s % 60;
-	return `${m}m${rem > 0 ? `${rem}s` : ""}`;
-}
-
-/**
- * shorten a tool name for display: "tool_execution" → "tool_execution",
- * but we also extract a meaningful arg when possible (e.g. file path).
- */
-function describeToolCall(toolName: string, args: any): string {
-	// common pi tools have a `path` or `pattern` arg — show it if short
-	const hint = args?.path ?? args?.pattern ?? args?.query ?? args?.filePattern ?? args?.cmd;
-	if (typeof hint === "string") {
-		// ROOT-CAUSE FIX (2026-07-04 smear bug): bash `cmd` is often a MULTILINE
-		// script. The old `hint.split("/").pop()` took everything after the
-		// last "/" — unbounded, newlines included — and that string ended up
-		// embedded in a border/status line, moving the real cursor rows the
-		// TUI didn't know about → whole-screen smear. First line only, then
-		// basename only for path-like tokens, then a hard cap. flattenLabelText
-		// at the sinks is the safety net; this keeps the label meaningful.
-		const firstLine = hint.split("\n", 1)[0].trim();
-		const pathLike = firstLine.includes("/") && !firstLine.includes(" ");
-		const base = pathLike ? (firstLine.split("/").pop() ?? firstLine) : firstLine;
-		const short = base.length > 24 ? base.slice(0, 24) + "…" : base;
-		return short ? `${toolName}(${short})` : toolName;
-	}
-	return toolName;
-}
-
-function renderActivity(state: ActivityState): string {
-	if (state.phase === "idle") return "";
-
-	const parts: string[] = [];
-
-	// animated spinner
-	parts.push(SPINNER_FRAMES[state.frame % SPINNER_FRAMES.length]);
-
-	// turn number (0-indexed from the event, display as 1-indexed)
-	if (state.turnIndex > 0) {
-		parts.push(`turn ${state.turnIndex + 1}`);
-	}
-
-	// phase-specific info
-	if (state.activeTools.size > 0) {
-		const toolDescs = [...state.activeTools.values()];
-		// show up to 2 tool descriptions
-		const shown = toolDescs.slice(0, 2).join(", ");
-		const overflow = toolDescs.length > 2 ? ` +${toolDescs.length - 2}` : "";
-		parts.push(shown + overflow);
-	} else if (state.phase === "thinking") {
-		parts.push("thinking");
-	} else if (state.phase === "streaming") {
-		parts.push("writing");
-	}
-
-	// elapsed time
-	if (state.startedAt > 0) {
-		const elapsed = Date.now() - state.startedAt;
-		if (elapsed >= 1000) {
-			parts.push(formatElapsed(elapsed));
-		}
-	}
-
-	return parts.join(" · ");
+function writeDetailSetting(detail: boolean): void {
+	mkdirSync(dirname(hudFile()), { recursive: true });
+	writeFileSync(hudFile(), JSON.stringify({ detail }));
 }
 
 export default function (pi: ExtensionAPI) {
 	let editor: LabeledEditor | null = null;
-	const statsCacheBranchLen = { value: -1 };
+	let tuiRef: TUI | null = null;
+	let theme: Theme | null = null;
+	let labelsBranchLength = -1;
 	let gitBranch: string | null = null;
 	let branchUnsub: (() => void) | null = null;
-	let statusRow: WidgetRowRegistry | null = null;
-	let cacheLine: CacheLineWidget | null = null;
+	let footerData: ReadonlyFooterDataProvider | null = null;
+	let metaRow: MetaRow | null = null;
+	let cacheView: CacheView | undefined;
+	let changes: DiffSummary | undefined;
+	let changesTimer: ReturnType<typeof setTimeout> | undefined;
+	let changesGeneration = 0;
+	let changesTicket = 0;
+	const labels = new LabelBoard();
+	let spinner: ReturnType<typeof setInterval> | undefined;
+	let detail = readDetailSetting();
+	let contextDetail = "";
+	let providerDetail = "";
+	let cwd = "";
 	let requestStartedAt: number | undefined;
 	let lastResponseAt: number | undefined;
 	const activity = createActivityState();
+
+	const repaint = (): void => tuiRef?.requestRender();
+
+	const hud: HudState = {
+		running: () => agentRunning,
+		detail: () => detail,
+		activity: () => (theme ? activityLabel(activity, Date.now(), theme) : ""),
+	};
 
 	/**
 	 * Only a model whose catalog declares cache lifetimes gets a countdown, so a
@@ -710,36 +576,143 @@ export default function (pi: ExtensionAPI) {
 		return seconds === undefined ? undefined : seconds * 1000;
 	};
 
-	const syncCacheLine = (ctx: ExtensionContext): void => {
+	const syncCache = (ctx: ExtensionContext): void => {
 		if (!ctx.hasUI) return;
 		const stats = collectCacheStats(ctx.sessionManager.getEntries(), lastResponseAt);
 		const ttlMs = cacheTtlMs(ctx, stats);
-		// A declared lifetime is enough on its own; without one, the row waits until
-		// the provider has actually reported cache activity. Only Anthropic declares
-		// a lifetime, but most providers still report reads — the countdown is the
-		// only part that genuinely needs it.
+		// Without a declared lifetime, the cache figure waits until the provider
+		// has reported cache activity: most report reads, only Anthropic a lifetime.
 		const reportsActivity = stats.cacheRead > 0 || stats.cacheWrite > 0;
-		if (ttlMs === undefined && !reportsActivity) {
-			if (!cacheLine) return;
-			cacheLine.dispose();
-			cacheLine = null;
-			ctx.ui.setWidget("cache-line", undefined);
-			return;
+		cacheView = ttlMs === undefined && !reportsActivity ? undefined : { stats, ttlMs };
+		metaRow?.sync();
+	};
+
+	const statusesText = (): string => {
+		const statuses = footerData?.getExtensionStatuses();
+		if (!theme || !statuses || statuses.size === 0) return "";
+		const painter = theme;
+		return [...statuses.entries()]
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([, text]) => painter.fg("muted", flattenLabelText(text)))
+			.join(painter.fg("dim", " · "));
+	};
+
+	const placeText = (): string => (cwd ? `${shortenPath(cwd)}${gitBranch ? ` (${gitBranch})` : ""}` : "");
+
+	const sessionText = (): string => {
+		if (!theme) return "";
+		const parts = [contextDetail, providerDetail, runDetail(activity, Date.now())].filter(Boolean);
+		return parts.join(theme.fg("dim", " · "));
+	};
+
+	/** `force` for a change the branch length cannot show: a new session, model or thinking level. */
+	function updateSessionLabels(ctx: ExtensionContext, force = false): void {
+		// skip recomputation if branch length unchanged (cheap proxy for "nothing new happened")
+		const branch = ctx.sessionManager.getBranch();
+		if (!force && branch.length === labelsBranchLength) return;
+		labelsBranchLength = branch.length;
+
+		const paint = ctx.ui.theme;
+		const usage = ctx.getContextUsage();
+		const model = ctx.model;
+
+		let cost = 0;
+		for (const entry of branch) {
+			if (entry.type !== "message") continue;
+			const msg = entry.message;
+			if (msg.role === "assistant") {
+				cost += (msg as AssistantMessage).usage?.cost?.total ?? 0;
+			} else if (msg.role === "toolResult") {
+				const details = (msg as { details?: unknown }).details;
+				if (hasToolCost(details)) cost += details.cost;
+			}
 		}
-		if (cacheLine) {
-			cacheLine.setStats(stats, ttlMs);
-			return;
+
+		// provider-reported usage when there is any, otherwise a chars/4 estimate
+		let context: { tokens: number; window: number; estimated: boolean } | undefined;
+		if (usage?.percent != null && usage.tokens != null && usage.tokens > 0) {
+			context = { tokens: usage.tokens, window: usage.contextWindow, estimated: false };
+		} else if (model?.contextWindow) {
+			context = { tokens: estimateContextFromEntries(branch), window: model.contextWindow, estimated: true };
 		}
-		ctx.ui.setWidget(
-			"cache-line",
-			(tui, theme) => {
-				const widget = new CacheLineWidget(tui, theme);
-				widget.setStats(stats, ttlMs);
-				cacheLine = widget;
-				return widget;
-			},
-			{ placement: "belowEditor" },
-		);
+
+		if (context) {
+			const percent = (context.tokens / context.window) * 100;
+			const mark = context.estimated ? "~" : "";
+			labels.set("context", ink(paint, contextAlert(percent), `${mark}${Math.round(percent)}%`), "top", "left", { priority: 100 });
+			contextDetail = `context ${mark}${formatCompact(context.tokens)} of ${formatCompact(context.window)}`;
+		} else {
+			labels.remove("context");
+			contextDetail = "";
+		}
+
+		if (cost > 0) labels.set("cost", `$${cost.toFixed(2)}`, "top", "left", { priority: 60 });
+		else labels.remove("cost");
+
+		if (model) labels.set("model", model.id, "top", "right", { priority: 90 });
+		else labels.remove("model");
+		providerDetail = model?.provider ?? "";
+
+		const thinkingLevel = pi.getThinkingLevel();
+		if (thinkingLevel && thinkingLevel !== "off") {
+			labels.set("thinking", thinkingLevel, "top", "right", { priority: 70 });
+		} else {
+			labels.remove("thinking");
+		}
+	}
+
+	function updatePlaceLabel(): void {
+		if (!cwd) return;
+		const branchText = gitBranch ? ` (${gitBranch})` : "";
+		labels.set("cwd", `${basename(cwd)}${branchText}`, "bottom", "right", { priority: 35 });
+	}
+
+	/** Two refreshes can overlap (debounce 1.5s, git timeout 3s); only the newest may land. */
+	const refreshChanges = async (): Promise<void> => {
+		const generation = changesGeneration;
+		const ticket = ++changesTicket;
+		const next = await readDiffSummary(cwd);
+		if (generation !== changesGeneration || ticket !== changesTicket) return;
+		changes = next;
+		repaint();
+	};
+
+	const scheduleChanges = (delayMs: number): void => {
+		if (changesTimer) clearTimeout(changesTimer);
+		changesTimer = setTimeout(() => {
+			changesTimer = undefined;
+			refreshChanges().catch(() => undefined);
+		}, delayMs);
+		changesTimer.unref?.();
+	};
+
+	const stopSpinner = (): void => {
+		if (!spinner) return;
+		clearInterval(spinner);
+		spinner = undefined;
+	};
+
+	const startSpinner = (): void => {
+		if (spinner) return;
+		spinner = setInterval(() => {
+			try {
+				advanceSpinner(activity);
+				repaint();
+			} catch {
+				stopSpinner();
+			}
+		}, SPINNER_INTERVAL_MS);
+	};
+
+	const setDetail = (ctx: ExtensionContext, next: boolean): void => {
+		detail = next;
+		try {
+			writeDetailSetting(next);
+		} catch (err) {
+			ctx.ui.notify(`detail view not saved: ${err instanceof Error ? err.message : String(err)}`, "warning");
+		}
+		metaRow?.sync();
+		repaint();
 	};
 
 	// expand "[image #N]" paste tokens into inline image attachments at submit.
@@ -765,9 +738,7 @@ export default function (pi: ExtensionAPI) {
 			: ({ action: "continue" } as const);
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
-		if (!ctx.hasUI) return;
-
+	function mountUi(ctx: ExtensionContext): void {
 		// make tool call backgrounds transparent — removes the colored box
 		// chrome that ToolExecutionComponent forces via Box(1,1,bgFn).
 		// the Box padding (1char/1row) remains but is invisible against
@@ -802,144 +773,121 @@ export default function (pi: ExtensionAPI) {
 			);
 		};
 
-		// replace editor with labeled box-drawing version
 		ctx.ui.setEditorComponent((tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager) => {
-			editor = new LabeledEditor(tui, editorTheme, keybindings, ctx.ui.theme);
+			tuiRef = tui;
+			editor = new LabeledEditor(tui, editorTheme, keybindings, ctx.ui.theme, hud, labels);
 			return editor;
 		});
 
-		// replace footer with empty component — we show its data in the borders
-		ctx.ui.setFooter((tui: TUI, _theme: Theme, footerData) => {
-			gitBranch = footerData.getGitBranch();
-			branchUnsub = footerData.onBranchChange(() => {
-				gitBranch = footerData.getGitBranch();
-				updateBottomLabel();
+		// the footer itself draws nothing: its data lives in the borders and the meta row
+		ctx.ui.setFooter((tui: TUI, _theme: Theme, data) => {
+			footerData = data;
+			gitBranch = data.getGitBranch();
+			branchUnsub = data.onBranchChange(() => {
+				gitBranch = data.getGitBranch();
+				updatePlaceLabel();
 				tui.requestRender();
 			});
-
-			updateBottomLabel();
-
+			updatePlaceLabel();
 			return {
-				dispose: () => { branchUnsub?.(); branchUnsub = null; },
+				dispose: () => {
+					branchUnsub?.();
+					branchUnsub = null;
+					footerData = null;
+				},
 				invalidate() {},
-				render(_width: number): string[] { return []; },
+				render(_width: number): string[] {
+					return [];
+				},
 			};
 		});
 
-		ctx.ui.setWidget("status-line", (tui) => {
-			statusRow = new WidgetRowRegistry(tui);
-			return new HorizontalLineWidget(() => statusRow!.snapshot(), { gap: "  " }, () => statusRow!.version);
-		}, { placement: "belowEditor" });
+		ctx.ui.setWidget(
+			"meta-row",
+			(tui, widgetTheme) => {
+				tuiRef = tui;
+				metaRow = new MetaRow(
+					{
+						detail: () => detail,
+						running: () => agentRunning,
+						cache: () => cacheView,
+						changes: () => formatChanges(changes, widgetTheme),
+						statuses: statusesText,
+						session: sessionText,
+						place: placeText,
+					},
+					widgetTheme,
+					tui,
+				);
+				return metaRow;
+			},
+			{ placement: "belowEditor" },
+		);
+	}
 
-		// set initial bottom label with cwd
-		function updateBottomLabel() {
-			if (!editor) return;
-			const cwd = shortenPath(ctx.cwd);
-			const branchText = gitBranch ? `(${gitBranch})` : "";
-			editor.setLabel("cwd", `${cwd} ${branchText}`.trim(), "bottom", "right");
-		}
+	// pi resets every extension UI before a session is replaced, so each
+	// session_start (new, resume, fork, reload) mounts it again.
+	pi.on("session_start", async (_event, ctx) => {
+		requestStartedAt = undefined;
+		lastResponseAt = undefined;
+		if (!ctx.hasUI) return;
+		theme = ctx.ui.theme;
+		cwd = ctx.cwd;
 
-		updateBottomLabel();
-		updateStatsLabels(editor!, pi, ctx, statsCacheBranchLen);
+		// pi's working loader would be a second spinner beside ours; its retry,
+		// compaction and branch-summary indicators still show in the top border.
+		ctx.ui.setWorkingVisible(false);
 
-		cacheLine?.dispose();
-		cacheLine = null;
-		syncCacheLine(ctx);
+		stopSpinner();
+		agentRunning = false;
+		endActivity(activity, Date.now());
+		activity.lastRun = undefined;
+		mountUi(ctx);
+
+		updateSessionLabels(ctx, true);
+		updatePlaceLabel();
+		syncCache(ctx);
+		changesGeneration++;
+		changes = undefined;
+		scheduleChanges(0);
 	});
 
-	// --- animated activity spinner + git changes widget ---
-	const ACTIVITY_SEGMENT = "activity";
-	const GIT_SEGMENT = "git-changes";
-
-	/** push current activity state into the widget row */
-	const syncActivitySegment = (): void => {
-		if (activity.phase === "idle") {
-			statusRow?.remove(ACTIVITY_SEGMENT);
-			return;
-		}
-		const text = renderActivity(activity);
-		if (!text) return;
-		statusRow?.set(ACTIVITY_SEGMENT, {
-			align: "left",
-			priority: 10,
-			renderInline: () => renderActivity(activity),
-		});
-	};
-
-	const startSpinner = (): void => {
-		if (activity.intervalId) return;
-		activity.intervalId = setInterval(() => {
-			activity.frame = (activity.frame + 1) % SPINNER_FRAMES.length;
-			syncActivitySegment();
-		}, 150);
-	};
-
-	const stopSpinner = (): void => {
-		if (activity.intervalId) {
-			clearInterval(activity.intervalId);
-			activity.intervalId = null;
-		}
-	};
-
-	const updateGitSegment = (text?: string): void => {
-		if (!text) {
-			statusRow?.remove(GIT_SEGMENT);
-			return;
-		}
-		statusRow?.set(GIT_SEGMENT, {
-			align: "right",
-			priority: 0,
-			renderInline: () => text,
-		});
-	};
-
-	pi.on("agent_start", async (_event, ctx) => {
-		// suppress native spinner text — we render our own below the editor
-		ctx.ui.setWorkingMessage(" ");
-
+	pi.on("agent_start", async () => {
 		// Escape now aborts — arm the 3-press gate.
 		agentRunning = true;
 		editor?.resetEscapeGate();
-
-		activity.phase = "thinking";
-		activity.turnIndex = 0;
-		activity.activeTools.clear();
-		activity.startedAt = Date.now();
-		activity.frame = 0;
+		startActivity(activity, Date.now());
 		startSpinner();
-		syncActivitySegment();
+		metaRow?.sync();
 	});
 
-	pi.on("turn_start", async (event, _ctx) => {
+	pi.on("turn_start", async (event) => {
 		activity.turnIndex = event.turnIndex;
 		activity.phase = activity.activeTools.size > 0 ? "tool" : "thinking";
-		syncActivitySegment();
 	});
 
-	pi.on("tool_execution_start", async (event, _ctx) => {
+	pi.on("tool_execution_start", async (event) => {
 		activity.phase = "tool";
 		activity.activeTools.set(event.toolCallId, describeToolCall(event.toolName, event.args));
-		syncActivitySegment();
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {
 		activity.activeTools.delete(event.toolCallId);
 		activity.phase = activity.activeTools.size > 0 ? "tool" : "thinking";
-		syncActivitySegment();
-		if (editor) updateStatsLabels(editor, pi, ctx, statsCacheBranchLen);
-		syncCacheLine(ctx);
+		updateSessionLabels(ctx);
+		syncCache(ctx);
+		if (WRITING_TOOLS.has(event.toolName)) scheduleChanges(CHANGES_DEBOUNCE_MS);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
 		// fires before pi persists the message, so this lands one turn behind;
 		// tool_execution_end and agent_end are the post-append syncs.
-		if ((event.message as { role?: string }).role === "assistant") syncCacheLine(ctx);
+		if ((event.message as { role?: string }).role === "assistant") syncCache(ctx);
 	});
 
-	pi.on("message_start", async (event, _ctx) => {
-		if ((event.message as any).role === "assistant") {
+	pi.on("message_start", async (event) => {
+		if ((event.message as { role?: string }).role === "assistant") {
 			activity.phase = activity.activeTools.size > 0 ? "tool" : "streaming";
-			syncActivitySegment();
 		}
 	});
 
@@ -949,15 +897,10 @@ export default function (pi: ExtensionAPI) {
 		// a stale "esc ×2 more to stop" hint can't linger over an idle editor.
 		agentRunning = false;
 		editor?.resetEscapeGate();
-
-		activity.phase = "idle";
-		activity.activeTools.clear();
-		statusRow?.remove(ACTIVITY_SEGMENT);
-		if (editor) updateStatsLabels(editor, pi, ctx, statsCacheBranchLen);
-		syncCacheLine(ctx);
-
-		const diffStats = await getGitDiffStats(ctx.cwd);
-		updateGitSegment(diffStats);
+		endActivity(activity, Date.now());
+		updateSessionLabels(ctx);
+		syncCache(ctx);
+		scheduleChanges(0);
 	});
 
 	// A label set from another extension must also trigger the repaint — the
@@ -968,22 +911,24 @@ export default function (pi: ExtensionAPI) {
 	pi.events.on("editor:set-label", (data: unknown) => {
 		const payload = data as SetLabelPayload;
 		if (!payload.key || !payload.text) return;
-		if (editor?.setLabel(payload.key, payload.text, payload.position ?? "top", payload.align ?? "left")) {
-			editor.requestRepaint();
-		}
+		const options = { priority: payload.priority, when: payload.when };
+		if (labels.set(payload.key, payload.text, payload.position ?? "top", payload.align ?? "left", options)) repaint();
 	});
 
 	pi.events.on("editor:remove-label", (data: unknown) => {
 		const payload = data as RemoveLabelPayload;
 		if (!payload.key) return;
-		if (editor?.removeLabel(payload.key)) editor.requestRepaint();
+		if (labels.remove(payload.key)) repaint();
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
-		// update model display when user changes model via /model or Ctrl+P
-		statsCacheBranchLen.value = -1;
-		if (editor) updateStatsLabels(editor, pi, ctx, statsCacheBranchLen);
-		syncCacheLine(ctx);
+		updateSessionLabels(ctx, true);
+		syncCache(ctx);
+	});
+
+	pi.on("thinking_level_select", async (_event, ctx) => {
+		updateSessionLabels(ctx, true);
+		repaint();
 	});
 
 	// A cache warm during a long tool touches the cache without a message, and its usage
@@ -996,29 +941,34 @@ export default function (pi: ExtensionAPI) {
 	pi.on("after_provider_response", (event, ctx) => {
 		if (event.status < 200 || event.status >= 300 || requestStartedAt === undefined) return;
 		lastResponseAt = requestStartedAt;
-		syncCacheLine(ctx);
+		syncCache(ctx);
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
-		requestStartedAt = undefined;
-		lastResponseAt = undefined;
-		if (_event.reason === "startup" || _event.reason === "reload") return;
-		// editor component persists across session switches, just update stats
-		branchUnsub?.();
-		branchUnsub = null;
-		gitBranch = null;
-		stopSpinner();
-		activity.phase = "idle";
-		activity.activeTools.clear();
-		statusRow?.clear();
-		statsCacheBranchLen.value = -1;
-		if (editor) updateStatsLabels(editor, pi, ctx, statsCacheBranchLen);
+	pi.registerShortcut(HUD_SHORTCUT, {
+		description: "Toggle the prompt bar's detail view",
+		handler: async (ctx) => setDetail(ctx, !detail),
+	});
+
+	pi.registerCommand("hud", {
+		description: "Prompt bar detail view: full cache meter, context size, provider, run figures · /hud [on|off]",
+		handler: async (args, ctx) => {
+			const arg = (args ?? "").trim().toLowerCase();
+			if (arg && arg !== "on" && arg !== "off") {
+				ctx.ui.notify(`unknown: ${arg} · /hud [on|off]`, "error");
+				return;
+			}
+			setDetail(ctx, arg ? arg === "on" : !detail);
+		},
 	});
 
 	// pi emits this before invalidating. Afterwards every ctx call throws, and an
 	// uncaught throw inside a live timer is process.exit(1).
 	pi.on("session_shutdown", async () => {
-		cacheLine?.dispose();
-		cacheLine = null;
+		stopSpinner();
+		if (changesTimer) clearTimeout(changesTimer);
+		changesTimer = undefined;
+		changesGeneration++;
+		metaRow?.dispose();
+		metaRow = null;
 	});
 }

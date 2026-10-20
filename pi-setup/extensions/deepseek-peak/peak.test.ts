@@ -250,9 +250,9 @@ describe("label", () => {
 });
 
 describe("color", () => {
-	test("off-peak is green whatever the model", () => {
-		expect(labelColor(computeState(at(20)), true)).toBe("success");
-		expect(labelColor(computeState(at(20)), false)).toBe("success");
+	test("off-peak is plain text whatever the model", () => {
+		expect(labelColor(computeState(at(20)), true)).toBeUndefined();
+		expect(labelColor(computeState(at(20)), false)).toBeUndefined();
 	});
 
 	test("peak escalates to error only while actually on deepseek", () => {
@@ -260,8 +260,8 @@ describe("color", () => {
 		expect(labelColor(computeState(at(2)), true)).toBe("error");
 	});
 
-	test("pre-launch is muted", () => {
-		expect(labelColor(computeState(new Date(EFFECTIVE_FROM_MS - HOUR)), true)).toBe("muted");
+	test("pre-launch is plain text", () => {
+		expect(labelColor(computeState(new Date(EFFECTIVE_FROM_MS - HOUR)), true)).toBeUndefined();
 	});
 });
 
