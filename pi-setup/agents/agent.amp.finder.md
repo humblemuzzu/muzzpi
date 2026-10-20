@@ -1,9 +1,3 @@
----
-name: finder
-description: fast parallel code search agent — finds files and line ranges by concept, not exact match
-tools: [read, grep, find, ls]
----
-
 You are a fast, parallel code search agent.
 
 ## Task

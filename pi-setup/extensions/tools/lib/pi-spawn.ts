@@ -74,8 +74,6 @@ export interface UsageStats {
  */
 export interface SpawnSessionMeta {
 	continueId?: string;
-	sessionId?: string;
-	sessionFile?: string;
 	sessionDir?: string;
 }
 
@@ -89,6 +87,8 @@ export interface SpawnSessionMeta {
 export interface SpawnSessionConfig {
 	/** resume this session id; created if it does not exist yet. */
 	id?: string;
+	/** the spawning tool; names a new session id `<agent>-<uuid>`. */
+	agent?: string;
 	/** persist the conversation. false / omitted keeps the child ephemeral. */
 	persist?: boolean;
 	/**
@@ -99,8 +99,6 @@ export interface SpawnSessionConfig {
 	 * your real sessions under machine-generated ones.
 	 */
 	dir?: string;
-	/** parent session file, recorded for provenance only. */
-	parentSession?: string;
 	/**
 	 * branch leaf to continue. pi's CLI has no flag for targeting a specific
 	 * leaf, so this is REJECTED rather than silently ignored — quietly
@@ -198,7 +196,7 @@ function resolveSessionArgs(session: SpawnSessionConfig | undefined): {
 	// default stays ephemeral: only an explicit opt-in persists a sub-agent.
 	if (!session?.persist && !session?.id) return { args: ["--no-session"] };
 
-	const id = session.id ?? `delegate-${randomUUID()}`;
+	const id = session.id ?? `${session.agent ?? "agent"}-${randomUUID()}`;
 	assertSafeSessionId(id);
 
 	const args = ["--session-id", id];
@@ -208,10 +206,10 @@ function resolveSessionArgs(session: SpawnSessionConfig | undefined): {
 		// resume too, or pi looks for the session in the default directory.
 		args.unshift("--session-dir", session.dir);
 	}
-	return { args, meta: { continueId: id, sessionId: id, sessionDir: session.dir } };
+	return { args, meta: { continueId: id, sessionDir: session.dir } };
 }
 
-function readSessionHeader(file: string): { id?: unknown; cwd?: unknown } | undefined {
+function readSessionHeader(file: string): { id?: unknown; cwd?: unknown; timestamp?: unknown } | undefined {
 	let fd: number | undefined;
 	try {
 		fd = fs.openSync(file, "r");
@@ -225,6 +223,22 @@ function readSessionHeader(file: string): { id?: unknown; cwd?: unknown } | unde
 	} finally {
 		if (fd !== undefined) fs.closeSync(fd);
 	}
+}
+
+const SESSION_AGENTS: readonly string[] = ["delegate", "chad"];
+
+/** sessions started before this carry `delegate-` whichever tool made them, so a chad may resume those. */
+const AGENT_NAMED_IDS_SINCE = Date.parse("2026-10-21T00:00:00Z");
+
+function idRefusal(id: string, agent: string, started: unknown): string | undefined {
+	const owner = SESSION_AGENTS.find((name) => id.startsWith(`${name}-`));
+	if (!owner || owner === agent) return undefined;
+	const legacy = owner === "delegate" && agent === "chad" && typeof started === "string" && Date.parse(started) < AGENT_NAMED_IDS_SINCE;
+	if (legacy) return undefined;
+	return (
+		`continueId "${id}" belongs to a ${owner}, not a ${agent}. ` +
+		`Pass it to ${owner}, or omit continueId to start a new ${agent}.`
+	);
 }
 
 /**
@@ -253,8 +267,17 @@ export function unresumableReason(
 			`Pass the continueId exactly as a previous ${agent} result printed it, or omit it to start a new ${agent}.`
 		);
 	}
-	const here = path.resolve(cwd);
-	if (candidates.some((h) => typeof h!.cwd === "string" && path.resolve(h!.cwd) === here)) return undefined;
+	const refusal = idRefusal(id, agent, candidates[0]!.timestamp);
+	if (refusal) return refusal;
+	const real = (dir: string) => {
+		try {
+			return fs.realpathSync(dir);
+		} catch {
+			return path.resolve(dir);
+		}
+	};
+	const here = real(cwd);
+	if (candidates.some((h) => typeof h!.cwd === "string" && real(h!.cwd) === here)) return undefined;
 	const started = candidates.map((h) => h!.cwd).find((c) => typeof c === "string");
 	return (
 		`continueId "${id}" belongs to a ${agent} started in ${started ?? "another directory"}, and pi resumes it ` +
@@ -286,7 +309,7 @@ export function readAgentPrompt(filename: string): string {
 			const endIdx = content.indexOf("\n---", 3);
 			if (endIdx !== -1) return content.slice(endIdx + 4).trim();
 		}
-		return content;
+		return content.trim();
 	} catch { return ""; }
 }
 
@@ -353,6 +376,7 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 	let watchdog: ReturnType<typeof setInterval> | undefined;
 	/** see FORCE_RELEASE_MS. hoisted for the same reason as `watchdog`. */
 	let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+	let abortListener: (() => void) | undefined;
 
 	const result: PiSpawnResult = {
 		exitCode: 0,
@@ -566,11 +590,6 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 
 					if (config.onUpdate) config.onUpdate({ ...result });
 				}
-
-				if (event.type === "tool_result_end" && event.message) {
-					result.messages.push(event.message as Message);
-					if (config.onUpdate) config.onUpdate({ ...result });
-				}
 			};
 
 			proc.stdout.on("data", (data: Buffer) => {
@@ -612,7 +631,10 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 					}, 5000);
 				};
 				if (config.signal.aborted) killProc();
-				else config.signal.addEventListener("abort", killProc, { once: true });
+				else {
+					abortListener = killProc;
+					config.signal.addEventListener("abort", killProc, { once: true });
+				}
 			}
 		});
 
@@ -646,6 +668,7 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 	} finally {
 		if (watchdog) clearInterval(watchdog);
 		if (releaseTimer) clearTimeout(releaseTimer);
+		if (abortListener) config.signal?.removeEventListener("abort", abortListener);
 		if (tmpPromptPath) try { fs.unlinkSync(tmpPromptPath); } catch { /* ignore */ }
 		if (tmpPromptDir) try { fs.rmdirSync(tmpPromptDir); } catch { /* ignore */ }
 	}

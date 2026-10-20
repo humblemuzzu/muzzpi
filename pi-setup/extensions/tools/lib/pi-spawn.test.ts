@@ -10,10 +10,11 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { getEventListeners } from "node:events";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, piSpawn } from "./pi-spawn";
+import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, piSpawn, readAgentPrompt, unresumableReason } from "./pi-spawn";
 
 let dir: string;
 let stub: string;
@@ -367,4 +368,94 @@ describe("stall watchdog", () => {
 			if (prevBin !== undefined) process.env.PI_BIN = prevBin;
 		}
 	}, 30000);
+});
+
+describe("persisted session ids", () => {
+	test("a new id is named after the spawning tool", async () => {
+		for (const agent of ["chad", "delegate"]) {
+			const run = await launch({ session: { persist: true, agent, dir: join(dir, "sessions") } });
+			expect(run.valueOf("--session-id")).toMatch(new RegExp(`^${agent}-[0-9a-f-]{36}$`));
+		}
+	});
+
+	test("a resume passes the given id through untouched", async () => {
+		const run = await launch({ session: { id: "delegate-legacy-1", agent: "chad", dir: join(dir, "sessions") } });
+		expect(run.valueOf("--session-id")).toBe("delegate-legacy-1");
+	});
+
+	test("no session config stays ephemeral", async () => {
+		const run = await launch({});
+		expect(run.args).toContain("--no-session");
+		expect(run.args).not.toContain("--session-id");
+	});
+});
+
+describe("unresumableReason across agents", () => {
+	let sessions: string;
+
+	function saveSession(id: string, timestamp: string): void {
+		writeFileSync(
+			join(sessions, `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`),
+			JSON.stringify({ type: "session", id, timestamp, cwd: dir }) + "\n",
+		);
+	}
+
+	beforeAll(() => {
+		sessions = join(dir, "resume-sessions");
+		mkdirSync(sessions);
+		saveSession("delegate-aaa", "2026-01-01T00:00:00.000Z");
+		saveSession("chad-bbb", "2026-11-01T00:00:00.000Z");
+		saveSession("delegate-ccc", "2026-11-01T00:00:00.000Z");
+	});
+
+	test("a session resumes from the agent that made it", () => {
+		expect(unresumableReason("delegate-aaa", dir, "delegate", sessions)).toBeUndefined();
+		expect(unresumableReason("chad-bbb", dir, "chad", sessions)).toBeUndefined();
+	});
+
+	test("a chad id is refused by delegate, naming the right tool", () => {
+		const reason = unresumableReason("chad-bbb", dir, "delegate", sessions);
+		expect(reason).toContain("belongs to a chad, not a delegate");
+	});
+
+	test("a delegate- id from before agent-named ids still resumes from chad", () => {
+		expect(unresumableReason("delegate-aaa", dir, "chad", sessions)).toBeUndefined();
+	});
+
+	test("a delegate- id made since agent-named ids is refused by chad", () => {
+		expect(unresumableReason("delegate-ccc", dir, "chad", sessions)).toContain("belongs to a delegate, not a chad");
+	});
+
+	test("a session resumes from a symlinked path to the folder it started in", () => {
+		const link = join(dir, "linked-cwd");
+		symlinkSync(dir, link);
+		expect(unresumableReason("delegate-aaa", link, "delegate", sessions)).toBeUndefined();
+	});
+
+	test("an id with no known agent prefix is judged only by the saved sessions", () => {
+		expect(unresumableReason("probe-1", dir, "chad", sessions)).toMatch(/unknown continueId/);
+	});
+});
+
+describe("readAgentPrompt", () => {
+	test("strips frontmatter when present and trims a plain file the same way", () => {
+		const home = join(dir, "home");
+		mkdirSync(join(home, ".pi", "agent", "agents"), { recursive: true });
+		writeFileSync(join(home, ".pi", "agent", "agents", "with.md"), "---\nname: x\n---\n\nbody text\n");
+		writeFileSync(join(home, ".pi", "agent", "agents", "without.md"), "body text\nsecond line\n");
+		const script =
+			`import { readAgentPrompt } from ${JSON.stringify(join(import.meta.dir, "pi-spawn.ts"))};` +
+			`console.log(JSON.stringify(["with.md", "without.md", "missing.md"].map(readAgentPrompt)));`;
+		const out = Bun.spawnSync([process.execPath, "-e", script], { env: { ...process.env, HOME: home } });
+		expect(JSON.parse(out.stdout.toString())).toEqual(["body text", "body text\nsecond line", ""]);
+	});
+});
+
+describe("abort signal", () => {
+	test("its listener is removed once the child has finished", async () => {
+		const controller = new AbortController();
+		const bin = writeStub("abort-quick.sh", ["echo hi", "exit 0"]);
+		await withChild(bin, "0", { signal: controller.signal });
+		expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+	});
 });

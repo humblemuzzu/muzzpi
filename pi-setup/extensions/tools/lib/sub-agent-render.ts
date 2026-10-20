@@ -1,12 +1,7 @@
 /**
- * rendering utilities for sub-agent tool results.
- *
- * extracts DisplayItem, message parsing, and TUI tree rendering
- * from the generic subagent extension. dedicated tools (finder,
- * oracle, code_review, delegate, chad, librarian) use these for consistent renderResult display.
- *
- * reimplemented here because tools/ can't import from sub-agents/
- * (separate nix store paths).
+ * rendering utilities for sub-agent tool results: DisplayItem, message
+ * parsing and the TUI tree. every spawning tool (finder, oracle, code_review,
+ * delegate, chad, librarian) uses these for a consistent renderResult.
  */
 
 import * as os from "node:os";
@@ -33,14 +28,8 @@ export interface SingleResult {
 	thinkingLevel?: string;
 	stopReason?: string;
 	errorMessage?: string;
-	/*
-	 * populated only for sub-agents whose conversation was persisted
-	 * (currently just `delegate`). `continueId` is what a caller passes back
-	 * to resume the same child.
-	 */
+	/** set only for persisted sub-agents (delegate, chad): what a caller passes back to resume the child. */
 	continueId?: string;
-	sessionId?: string;
-	sessionFile?: string;
 }
 
 /**
@@ -55,8 +44,6 @@ function applySessionMeta(
 ): void {
 	if (!meta) return;
 	if (meta.continueId) target.continueId = meta.continueId;
-	if (meta.sessionId) target.sessionId = meta.sessionId;
-	if (meta.sessionFile) target.sessionFile = meta.sessionFile;
 }
 
 /** copy a spawn result, partial or final, onto the tool's result. exitCode stays the caller's. */
@@ -81,7 +68,6 @@ function resultFooter(details: SingleResult): string {
 	const model = modelLabel(details);
 	if (model) lines.push(`model: ${model}`);
 	if (details.continueId) lines.push(`continueId: ${details.continueId}`);
-	if (details.sessionId && details.sessionId !== details.continueId) lines.push(`sessionId: ${details.sessionId}`);
 	return lines.length > 0 ? `\n\n---\n${lines.join("\n")}` : "";
 }
 

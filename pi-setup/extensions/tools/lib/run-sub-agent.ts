@@ -5,7 +5,7 @@
  */
 
 import { describeAnthropicRejection } from "./anthropic-sub";
-import { piSpawn, zeroUsage, type PiSpawnConfig } from "./pi-spawn";
+import { piSpawn, zeroUsage, type PiSpawnConfig, type PiSpawnResult } from "./pi-spawn";
 import {
 	applySpawnResult,
 	collectSubAgentImages,
@@ -32,6 +32,17 @@ export function toolError(text: string): any {
 	return { content: [{ type: "text", text }], isError: true };
 }
 
+const NEW_SESSION_WARNING = /^Warning: No project session found with id '[^']*'; creating a new session with that id\.[ \t]*\r?\n?/gm;
+
+export function failureText(
+	result: Pick<PiSpawnResult, "stopReason" | "errorMessage" | "stderr">,
+	output: string,
+): string {
+	if (result.stopReason === "aborted") return "Stopped by the user before the sub-agent finished.";
+	const stderr = result.stderr.replace(NEW_SESSION_WARNING, "").trim();
+	return result.errorMessage || stderr || output;
+}
+
 export async function runSubAgent(run: SubAgentRun): Promise<any> {
 	let sessionId = "";
 	try {
@@ -41,6 +52,7 @@ export async function runSubAgent(run: SubAgentRun): Promise<any> {
 	const details: SingleResult = { agent: run.agent, task: run.label, exitCode: -1, messages: [], usage: zeroUsage() };
 	const result = await piSpawn({
 		...run.spawn,
+		session: run.spawn.session && { agent: run.agent, ...run.spawn.session },
 		cwd: run.ctx.cwd,
 		signal: run.signal,
 		sessionId,
@@ -54,7 +66,7 @@ export async function runSubAgent(run: SubAgentRun): Promise<any> {
 
 	const output = getFinalOutput(result.messages) || "(no output)";
 	if (result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted") {
-		const error = result.errorMessage || result.stderr || output;
+		const error = failureText(result, output);
 		const hint = describeAnthropicRejection(error, undefined);
 		return subAgentResult(hint ? `${error}\n\n${hint}` : error, details, true);
 	}

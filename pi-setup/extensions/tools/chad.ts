@@ -33,7 +33,7 @@ import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
 
 /*
  * NO mutation tool of any kind: no edit, no write, no format_file, no undo_edit.
- * `bash` is present but runs under the read-only policy (readOnlyBash below).
+ * `bash` is present but runs under the read-only policy.
  *
  * `screenshot` is in — grok sees images. `oracle`/`finder`/`librarian` are out
  * because nesting one is a whole extra process for tools chad can call itself.

@@ -53,12 +53,30 @@ run() {
     fi
 }
 
+# Keeps the newest BACKUPS_KEPT of "<target>.backup-YYYYMMDD-HHMMSS"; a dry run
+# counts the backup it would have made.
+BACKUPS_KEPT=3
+prune_backups() {
+    local target="$1" keep="$BACKUPS_KEPT" backup
+    local found=()
+    [ "$DRY_RUN" -eq 1 ] && keep=$((keep - 1))
+    for backup in "$target".backup-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+        [ -e "$backup" ] && found+=("$backup")
+    done
+    local i excess=$(( ${#found[@]} - keep ))
+    for ((i = 0; i < excess; i++)); do
+        if command -v trash &>/dev/null; then run trash "${found[i]}"; else run rm -rf "${found[i]}"; fi
+        [ "$DRY_RUN" -eq 1 ] || warn "Removed old backup $(basename "${found[i]}")"
+    done
+}
+
 backup_if_exists() {
     local target="$1"
     if [ -e "$target" ]; then
         local backup="${target}${BACKUP_SUFFIX}"
         run cp -R "$target" "$backup"
         warn "Backed up existing $(basename "$target") → $(basename "$backup")"
+        prune_backups "$target"
     fi
 }
 
@@ -275,6 +293,7 @@ if [ -d "$EXT_OLD" ]; then
         run mv "$EXT_OLD/tools/node_modules" "$EXT_LIVE/tools/"
     fi
 fi
+prune_backups "$EXT_LIVE"
 
 if command -v npm &>/dev/null; then
     TOOLS_DIR="$PI_AGENT/extensions/tools"

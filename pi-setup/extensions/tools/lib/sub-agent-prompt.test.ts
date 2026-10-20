@@ -3,9 +3,8 @@
  *
  * the invariant that matters: a child's prompt names EXACTLY the tools that
  * child was given — never one more, never one fewer. every agent brings a
- * different list (finder 4, oracle 8, code_review 8, librarian 7, delegate 12,
- * read_web_page/read_session 1), so each is checked against the same allowlist
- * function that piSpawn turns into `--tools`.
+ * different list, so each is checked against the same allowlist function that
+ * piSpawn turns into `--tools`.
  *
  * checking the real allowlists rather than hand-written lists is the point: if
  * someone adds a tool to oracle's EXTENSION_TOOLS, this suite keeps passing
@@ -70,19 +69,18 @@ describe("buildSubAgentPrompt", () => {
 		expect(prompt).toMatch(/share\s+none of its conversation context/i);
 	});
 
-	test("carries the working rules delegate would otherwise lose", () => {
+	test("carries the working habits delegate would otherwise lose", () => {
 		// delegate is the one sub-agent with no agent prompt of its own.
 		expect(prompt).toMatch(/Read first/);
 		expect(prompt).toMatch(/Verify/);
 		expect(prompt).toMatch(/root cause of the task you were given/);
+		expect(prompt).toMatch(/blocked or unverified instead of implying it is done/);
 	});
 
-	test("scopes root-cause fixing so a child cannot wander off its task", () => {
-		expect(prompt).toMatch(/not of every other/);
-	});
-
-	test("carries the comment rule, which children hit hardest", () => {
-		expect(prompt).toMatch(/no comments by default/i);
+	test("leaves the shared behaviour rules to rules.amp.md", () => {
+		expect(prompt).not.toMatch(/no comments by default/i);
+		expect(prompt).not.toMatch(/out of scope/i);
+		expect(prompt).not.toMatch(/Cite what you claim/);
 	});
 
 	test("says the final message is the whole answer", () => {

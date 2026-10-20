@@ -94,7 +94,7 @@ export default function mentionsExtension(pi: ExtensionAPI): void {
 				`registered @mention kinds (${kinds.length}):`,
 				...kinds.map((k) => `  @${k}`),
 				"",
-				"agent kinds (standalone):  @oracle  @finder  @codereview  @task",
+				"agent kinds (standalone):  @oracle  @finder  @codereview  @task  @chad",
 				"data kinds (with /value):  @commit/<sha>  @session/<id>  @handoff/<id>",
 			];
 			ctx.ui.notify(lines.join("\n"), "info");

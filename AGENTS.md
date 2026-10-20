@@ -322,6 +322,8 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
   then calls `lib/run-sub-agent.ts` → `lib/pi-spawn.ts`; progress, error
   mapping and the result footer live there once.
 - **Models come from `pi-setup/agent-models.json` only** — see Sub-agent models.
+- **Persisted ids are `<agent>-<uuid>`**; `unresumableReason` refuses another agent's id. Sessions
+  started before `AGENT_NAMED_IDS_SINCE` are all `delegate-`, so chad may resume those.
 - **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only
   agent→agent edge is `delegate → finder`, depth ≤ 2. chad has no
   `chad`/`delegate` (a swarm that spawns swarms is a fork bomb) and no

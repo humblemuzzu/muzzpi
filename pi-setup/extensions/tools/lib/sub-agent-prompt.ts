@@ -34,8 +34,9 @@ export function parseToolList(csv: string): string[] {
  * `--append-system-prompt`. this block adds only what those cannot carry:
  *
  *   - the tools this particular child holds, named exactly
- *   - the working rules, because `delegate` is the one sub-agent with no agent
- *     prompt of its own and would otherwise lose them
+ *   - the working habits specific to a child, because `delegate` is the one
+ *     sub-agent with no agent prompt of its own; the shared behaviour rules
+ *     arrive separately as the `rules` section (agents/rules.amp.md)
  */
 export function buildSubAgentPrompt(identity: string, toolCsv: string): string {
 	const tools = parseToolList(toolCsv);
@@ -67,19 +68,8 @@ export function buildSubAgentPrompt(identity: string, toolCsv: string): string {
 		"- **Read first.** Open the relevant files before changing or concluding anything.",
 		"- **Verify.** After an edit: imports resolve, signatures match callers, tests pass.",
 		"- **Match the surrounding style** — naming, indentation, error handling.",
-		"- **Match the assignment.** Questions, reviews, analysis: findings only, no",
-		"  file edits. Implementation: finish the requirements; name anything blocked",
-		"  or unverified instead of implying it is done.",
-		"- **Fix the root cause of the task you were given** — not of every other",
-		"  broken thing you find on the way. Name those in your final message instead.",
-		"  Before calling something out of scope, ask: if I skip this, does the task",
-		"  actually work? If no, it IS the task — do it, however big.",
-		"- **Cite what you claim** — a file and line, a number, or the command that",
-		"  shows it. Say plainly when you did not check something.",
-		"- **Write no comments by default.** Add one only where a careful reader would",
-		"  misread the code without it. Never explain what the code does, and never",
-		"  write a comment about the task, the fix, or the callers. An edit that is",
-		"  mostly commentary is refused before it lands.",
+		"- **Fix the root cause of the task you were given** and finish it. Name anything",
+		"  blocked or unverified instead of implying it is done.",
 		"- Your final message is the entire answer returned to the main agent — make it",
 		"  self-contained.",
 	].join("\n");
