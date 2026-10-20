@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { parseAgentModels } from "./agent-models";
+import type { RunSnapshot } from "./agent-channel";
 import type { AgentResultDetails } from "./agent-notice";
 import { AgentRuns, MAX_RUNNING, type RunEntry, type RunHost } from "./agent-runs";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
@@ -47,13 +48,15 @@ class FakeHost implements RunHost {
 	wakes: boolean[] = [];
 	records: RunEntry[] = [];
 	snapshots = 0;
+	last: RunSnapshot[] = [];
 	notify(content: string, details: AgentResultDetails, wake: boolean) {
 		this.texts.push(content);
 		this.notified.push(details);
 		this.wakes.push(wake);
 	}
-	broadcast() {
+	broadcast(runs: RunSnapshot[]) {
 		this.snapshots++;
+		this.last = runs;
 	}
 	record(entry: RunEntry) {
 		this.records.push(entry);
@@ -138,6 +141,14 @@ describe("a background run", () => {
 		expect((await runs.wait([id], 1)).text).toContain("already delivered");
 	}, 20000);
 
+	test("a child learns its own id, by which the file lock names its holder", async () => {
+		const { host, launch } = setup();
+		const id = idOf(await launch("SLEEP 0.1 who am i"));
+		await until(() => host.notified.length > 0);
+		const first = readFileSync(join(logDir, `${id}.jsonl`), "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l))[0];
+		expect(first.holder).toBe(id);
+	}, 20000);
+
 	test("a run reports what it is doing, how many tools it called and which files it wrote", async () => {
 		const { host, runs, launch } = setup();
 		const id = idOf(await launch("SLEEP 1 TOOL src/new.ts"));
@@ -146,6 +157,30 @@ describe("a background run", () => {
 		await until(() => host.notified.length > 0);
 		expect(host.notified[0]!.runs[0]).toMatchObject({ toolCount: 1, files: ["src/new.ts"] });
 		expect(host.texts[0]).toContain("files changed: src/new.ts");
+	}, 20000);
+
+	test("a run that changed a file while another run changed it too says so", async () => {
+		const { host, launch } = setup();
+		const first = idOf(await launch("SLEEP 0.8 TOOL shared.ts"));
+		const second = idOf(await launch("SLEEP 0.8 TOOL shared.ts"));
+		await until(() => host.notified.length > 0);
+		const byId = new Map(host.notified.flatMap((n) => n.runs).map((r) => [r.continueId, r]));
+		expect(byId.get(first)!.overlaps).toEqual([{ continueId: second, files: ["shared.ts"] }]);
+		expect(byId.get(second)!.overlaps).toEqual([{ continueId: first, files: ["shared.ts"] }]);
+		const lines = host.texts[0]!.split("\n").filter((line) => line.startsWith("also changed by"));
+		expect(lines.sort()).toEqual([`also changed by ${first} while this ran: shared.ts`, `also changed by ${second} while this ran: shared.ts`].sort());
+	}, 20000);
+
+	test("runs that did not overlap in time, or changed different files, say nothing", async () => {
+		const { host, runs, launch } = setup();
+		const earlier = idOf(await launch("SLEEP 0.2 TOOL shared.ts"));
+		await runs.wait([earlier], 10);
+		const later = idOf(await launch("SLEEP 0.4 TOOL shared.ts"));
+		const other = idOf(await launch("SLEEP 0.4 TOOL other.ts"));
+		const waited = await runs.wait([later, other], 10);
+		expect(waited.details.runs.map((r) => r.overlaps)).toEqual([[], []]);
+		expect(waited.text).not.toContain("also changed by");
+		expect(host.notified).toHaveLength(0);
 	}, 20000);
 
 	test("a failed run is reported as failed with the provider's error", async () => {
@@ -163,6 +198,97 @@ describe("a background run", () => {
 		expect(Date.now() - started).toBeLessThan(2_000);
 		expect(waited.text).toBe(`${id}: still running`);
 		await runs.stop([id]);
+	}, 20000);
+});
+
+describe("control requests from the agents UI", () => {
+	const snapshotOf = (host: FakeHost, id: string): RunSnapshot => host.last.findLast((run) => run.id === id) ?? ({} as RunSnapshot);
+
+	test("stop shows stopping, ends the run as stopped and still reports it to the main agent", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 30 slow"));
+		await until(() => host.last.some((run) => run.status === "running"));
+		await runs.control({ action: "stop", id });
+		await until(() => snapshotOf(host, id).stopping || snapshotOf(host, id).status === "stopped");
+		await until(() => host.notified.length > 0);
+		expect(host.notified[0]!.runs[0]).toMatchObject({ continueId: id, status: "stopped", errorMessage: "The user stopped this agent from the agents panel before it finished." });
+		expect(host.wakes).toEqual([true]);
+		await until(() => snapshotOf(host, id).status === "stopped");
+		expect(snapshotOf(host, id).stopping).toBe(false);
+	}, 20000);
+
+	test("stop on a finished run is refused on that run", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 0.1 quick"));
+		await runs.wait([id], 10);
+		await runs.control({ action: "stop", id });
+		await until(() => snapshotOf(host, id).control !== undefined);
+		expect(snapshotOf(host, id).control).toMatchObject({ action: "stop", ok: false });
+		expect(snapshotOf(host, id).control!.text).toContain("already finished");
+	}, 20000);
+
+	test("stopAll stops every live background run and nothing else", async () => {
+		const { host, runs, launch } = setup();
+		const a = idOf(await launch("SLEEP 30 one"));
+		const b = idOf(await launch("SLEEP 30 two"));
+		const done = idOf(await launch("SLEEP 0.1 quick"));
+		await runs.wait([done], 10);
+		await runs.control({ action: "stopAll" });
+		await until(() => host.notified.flatMap((n) => n.runs).length >= 2);
+		expect(host.notified.flatMap((n) => n.runs.map((r) => [r.continueId, r.status])).sort()).toEqual([[a, "stopped"], [b, "stopped"]].sort());
+	}, 20000);
+
+	test("steer on a running agent reaches it as a message from the user", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 1.5 investigate"));
+		await until(() => snapshotOf(host, id)?.status === "running");
+		await Bun.sleep(300);
+		await runs.control({ action: "steer", id, text: "look at the tests too" });
+		await until(() => snapshotOf(host, id).control?.action === "steer");
+		expect(snapshotOf(host, id).control).toMatchObject({ ok: true });
+		await until(() => host.notified.length > 0);
+		expect(host.texts[0]).toContain("steered: Message from the user while you work:\n\nlook at the tests too");
+	}, 20000);
+
+	test("steer on a finished run is refused and says to continue", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 0.1 quick"));
+		await runs.wait([id], 10);
+		await runs.control({ action: "steer", id, text: "more" });
+		await until(() => snapshotOf(host, id).control !== undefined);
+		expect(snapshotOf(host, id).control).toMatchObject({ action: "steer", ok: false });
+		expect(snapshotOf(host, id).control!.text).toContain("continue it instead");
+	}, 20000);
+
+	test("continue starts the same conversation again with the user's message and reports the new answer", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 0.1 first"));
+		await runs.wait([id], 10);
+		saveHeader(id);
+		await runs.control({ action: "continue", id, text: "now the second part" });
+		await until(() => host.notified.length > 0);
+		expect(host.notified[0]!.runs[0]).toMatchObject({ continueId: id, status: "done" });
+		expect(host.texts[0]).toContain("answer: Task: now the second part");
+		const continued = argvOf(id, 1);
+		expect(continued[continued.indexOf("--session-id") + 1]).toBe(id);
+	}, 20000);
+
+	test("continue on a running agent is refused", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 30 busy"));
+		await runs.control({ action: "continue", id, text: "more" });
+		await until(() => snapshotOf(host, id).control !== undefined);
+		expect(snapshotOf(host, id).control).toMatchObject({ action: "continue", ok: false });
+		expect(snapshotOf(host, id).control!.text).toContain("still running");
+		await runs.stop([id]);
+	}, 20000);
+
+	test("continue on a run from an earlier session is refused", async () => {
+		const { host, runs } = setup();
+		runs.restore([{ type: "custom", customType: "agent-run", data: { agent: "chad", label: "old", continueId: "chad-old", status: "done", durationMs: 5000, startedAt: 0 } }]);
+		await runs.control({ action: "continue", id: "chad-old", text: "more" });
+		await until(() => host.last.find((run) => run.id === "chad-old")?.control !== undefined);
+		expect(host.last.find((run) => run.id === "chad-old")!.control).toMatchObject({ ok: false });
 	}, 20000);
 });
 
@@ -371,5 +497,13 @@ describe("shutdown", () => {
 			{ type: "custom", customType: "other", data: {} },
 		]);
 		expect(runs.list()).toBe("oracle-1 · oracle · interrupted 5s · why");
+	});
+
+	test("a restored run keeps the model, usage and tool count its record holds", async () => {
+		const { host, runs } = setup();
+		const usage = { input: 9, output: 4, cacheRead: 0, cacheWrite: 0, cost: 0.5, contextTokens: 0, turns: 2 };
+		runs.restore([{ type: "custom", customType: "agent-run", data: { agent: "chad", label: "x", continueId: "chad-r", status: "done", durationMs: 1000, startedAt: 0, model: "fake/fake-1", usage, toolCount: 3 } }]);
+		await until(() => host.last.length > 0);
+		expect(host.last[0]).toMatchObject({ id: "chad-r", model: "fake/fake-1", usage, toolCount: 3 });
 	});
 });

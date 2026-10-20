@@ -224,6 +224,14 @@ else
          "bash pi-setup/install.sh"
 fi
 
+if [ -f "$PI_AGENT/extensions/agents-ui/index.js" ] && [ ! -e "$PI_AGENT/extensions/subagent-inspector" ] && \
+   grep -q '"~/.pi/agent/extensions/agents-ui"' "$PI_AGENT/settings.json" 2>/dev/null; then
+    pass "agents-ui: deployed and listed; the old subagent-inspector is gone"
+else
+    fail "agents-ui: missing from the live extensions dir or settings.json, or subagent-inspector is still deployed" \
+         "bash pi-setup/install.sh, then trash $PI_AGENT/extensions/subagent-inspector if it remains"
+fi
+
 # ── sub-agents: agent-models.json loads cleanly and every model is in pi's catalog ──
 # Parsed by the loader the tools bundle is built from, so this cannot drift from
 # what the tools read. `pi --list-models` lists only providers you are logged in

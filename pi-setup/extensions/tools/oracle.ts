@@ -15,12 +15,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
-import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
+import { AGENT_SHELL, fileCount, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { requireParam } from "./lib/params";
 
 /** canonical name first; the rest are what models actually guess (see lib/params.ts). */
@@ -152,15 +151,10 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 		},
 
 		renderCall(args: any, theme: any, context: any) {
-			const text = context?.lastComponent ?? new Text("", 0, 0);
-			let label = theme.fg("toolTitle", theme.bold("oracle ")) + theme.fg("dim", args.task ? clip(args.task, 80) : "...");
-			if (args.files?.length) {
-				label += theme.fg("muted", ` (${args.files.length} file${args.files.length > 1 ? "s" : ""})`);
-			}
-			text.setText(label);
-			return text;
+			return renderAgentCall("oracle", args.task || "...", theme, context, fileCount(args.files));
 		},
 
-		renderResult: renderSubAgentResult("oracle"),
+		renderShell: AGENT_SHELL,
+		renderResult: renderAgentRunResult("oracle"),
 	};
 }

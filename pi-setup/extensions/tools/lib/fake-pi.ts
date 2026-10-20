@@ -19,7 +19,7 @@ const logDir = process.env.FAKE_PI_LOG!;
 mkdirSync(logDir, { recursive: true });
 const log = (record: unknown) => appendFileSync(join(logDir, `${id}.jsonl`), `${JSON.stringify(record)}\n`);
 const emit = (event: unknown) => process.stdout.write(`${JSON.stringify(event)}\n`);
-log({ argv });
+log({ argv, holder: process.env.PI_SUBAGENT_ID });
 
 let running: { steers: string[]; finish: (stopReason: string) => void } | undefined;
 

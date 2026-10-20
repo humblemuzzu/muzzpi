@@ -37,7 +37,7 @@ import { createSearchSessionsTool } from "./search-sessions";
 import { createReadSessionTool } from "./read-session";
 import { createAskTool } from "./ask";
 import { createAgentsTool, renderAgentResult } from "./agents";
-import { AGENT_RESULT_TYPE, AGENT_RUNS_CHANNEL } from "./lib/agent-channel";
+import { AGENT_CONTROL_CHANNEL, AGENT_RESULT_TYPE, AGENT_RUNS_CHANNEL, parseControlRequest } from "./lib/agent-channel";
 import { AGENT_RUN_ENTRY, AgentRuns } from "./lib/agent-runs";
 import { SUB_AGENT_TOOLS_ENV } from "./lib/sub-agent-prompt";
 import { readAgentPrompt } from "./lib/pi-spawn";
@@ -145,7 +145,13 @@ export default function (pi: ExtensionAPI) {
 	setBlockedReporter((active, label) => pi.events.emit("herdr:blocked", { active, label }));
 
 	let stopDetachKey: (() => void) | undefined;
+	let stopControl: (() => void) | undefined;
 	pi.on("session_start", (event, ctx) => {
+		stopControl?.();
+		stopControl = pi.events.on(AGENT_CONTROL_CHANNEL, (message) => {
+			const request = parseControlRequest(message);
+			if (request) void runs.control(request).catch(() => {});
+		});
 		runs.restore(ctx.sessionManager.getBranch());
 		const handoff = event.reason === "reload" ? AgentRuns.takeReloadHandoff() : undefined;
 		if (handoff) runs.adoptReload(handoff);
@@ -165,6 +171,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (event) => {
 		stopDetachKey?.();
 		stopDetachKey = undefined;
+		stopControl?.();
+		stopControl = undefined;
 		await runs.shutdown(event.reason === "reload");
 	});
 

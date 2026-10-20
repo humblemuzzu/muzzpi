@@ -6,6 +6,12 @@ import { describeAnthropicRejection } from "./anthropic-sub";
 import type { UsageStats } from "./pi-spawn";
 import { formatDuration, formatUsageStats, getFinalOutput, modelLabel } from "./sub-agent-render";
 
+/** a run that was alive at the same time and changed some of the same files. */
+export interface Overlap {
+	continueId: string;
+	files: string[];
+}
+
 /** one finished run, as the notification, `agents wait` and stats see it. */
 export interface RunReport {
 	agent: string;
@@ -15,6 +21,7 @@ export interface RunReport {
 	durationMs: number;
 	toolCount: number;
 	files: string[];
+	overlaps?: Overlap[];
 	model?: string;
 	thinkingLevel?: string;
 	usage: UsageStats;
@@ -77,6 +84,10 @@ export function toolCallCount(n: number): string {
 	return `${n} tool call${n === 1 ? "" : "s"}`;
 }
 
+export function overlapLine(overlap: Overlap): string {
+	return `also changed by ${overlap.continueId} while this ran: ${overlap.files.join(", ")}`;
+}
+
 function runSummary(run: RunReport): string {
 	const fields = [
 		`status: ${run.status}`,
@@ -87,6 +98,7 @@ function runSummary(run: RunReport): string {
 	].filter(Boolean);
 	const lines = [`## ${run.agent}: ${run.label}`, `continueId: ${run.continueId} · ${fields.join(" · ")}`];
 	if (run.files.length > 0) lines.push(`files changed: ${run.files.join(", ")}`);
+	for (const overlap of run.overlaps ?? []) lines.push(overlapLine(overlap));
 	return lines.join("\n");
 }
 

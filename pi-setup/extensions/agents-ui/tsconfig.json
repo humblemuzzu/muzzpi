@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "paths": {
+      "@mariozechner/pi-tui": ["../tools/node_modules/@mariozechner/pi-tui"],
+      "@mariozechner/pi-coding-agent": ["../tools/node_modules/@mariozechner/pi-coding-agent"]
+    }
+  }
+}

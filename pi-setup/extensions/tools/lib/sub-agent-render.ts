@@ -8,6 +8,7 @@ import * as os from "node:os";
 import type { Message } from "@mariozechner/pi-ai";
 import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { formatTokens } from "./agent-style";
 import { normalizeForDisplay } from "./box-format";
 import type { PiSpawnResult, SpawnSessionMeta, UsageStats } from "./pi-spawn";
 import type { ToolCostDetails } from "./tool-cost";
@@ -38,15 +39,11 @@ export interface BackgroundStub {
 	task: string;
 	continueId: string;
 	background: true;
+	model?: string;
 }
 
 export function isBackgroundStub(details: unknown): details is BackgroundStub {
 	return (details as BackgroundStub | undefined)?.background === true;
-}
-
-/** the one line a background launch shows instead of the agent tree. */
-export function renderBackgroundStub(details: BackgroundStub, container: Container, theme: any): void {
-	container.addChild(new Line(`${theme.fg("accent", "↗")} ${theme.fg("muted", `in the background · ${details.continueId}`)}`));
 }
 
 /**
@@ -210,10 +207,6 @@ export function renderSubAgentResult(label: string) {
 		const container = context?.lastComponent ?? new Container();
 		container.clear();
 		const details = result.details as SingleResult | undefined;
-		if (isBackgroundStub(details)) {
-			renderBackgroundStub(details, container, theme);
-			return container;
-		}
 		if (!details) {
 			const text = result.content?.[0];
 			container.addChild(new Text(text?.type === "text" ? normalizeForDisplay(text.text) : "(no output)", 0, 0));
@@ -225,13 +218,6 @@ export function renderSubAgentResult(label: string) {
 }
 
 // --- formatting ---
-
-function formatTokens(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1000000) return `${Math.round(count / 1000)}k`;
-	return `${(count / 1000000).toFixed(1)}M`;
-}
 
 export function formatDuration(ms: number): string {
 	if (!Number.isFinite(ms) || ms < 0) return "";
@@ -321,7 +307,7 @@ export function toolArgSummary(toolName: string, args: Record<string, unknown>):
 	}
 }
 
-function renderToolLine(
+export function renderToolLine(
 	item: DisplayItem & { type: "toolCall" },
 	fg: (color: any, text: string) => string,
 ): string {

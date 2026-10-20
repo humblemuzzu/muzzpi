@@ -222,7 +222,7 @@ mentions a token stays readable.
   matched to commits, your rhythm, and a wrapped card. Local and read-only.
 - `/studio`: preview pi themes **and** your Ghostty theme, font, cursor and
   opacity live. Esc reverts, Enter keeps.
-- Any sub-agent's live transcript, a command palette, pinned sessions,
+- A dock for the agents running in the background and a full-screen view of any one's conversation, a command palette, pinned sessions,
   auto-named sessions, desktop notifications, a DeepSeek peak-price clock.
 - Hindi, Bengali and emoji cannot smear the screen: pi-tui is patched to never
   undercount a character's width.
@@ -231,7 +231,7 @@ mentions a token stays readable.
 |---|---|---|
 | `/stats` | `Ctrl+Shift+S` | usage dashboard |
 | `/studio`, `/theme` | `Ctrl+Shift+K` | live theme and Ghostty preview |
-| `/subagents` | `Ctrl+Shift+A` | sub-agent transcripts |
+| `/agents` | `Ctrl+Shift+A` | background agents: list, full-screen view of each, steer / stop / continue |
 | `/palette` | `Ctrl+Shift+P` | command palette |
 | `/ysk` | `Ctrl+Shift+Y` | a side agent that flags what you missed; off until `/ysk on` |
 | `/goal` | | a long-running goal, audited before it is marked done |

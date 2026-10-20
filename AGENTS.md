@@ -20,9 +20,8 @@ Anything added must pass all four:
    anything `ls`/`grep` answers in one call do not go here.
 3. **It is a rule or a fact, not a story.** One or two lines. No dates, test
    counts, measurement tables or reproduction steps.
-4. **It has no better home.** Per-update detail goes in `pi-setup/pi-migrations.md`,
-   never in a code comment. **Do not write a new .md file for a fix**: the
-   commit message holds the story.
+4. **It has no better home.** Per-update detail goes in `pi-setup/pi-migrations.md`, never in a code
+   comment. **Do not write a new .md file for a fix**: the commit message holds the story.
 
 **Never append a changelog entry** — `git log -p AGENTS.md` is the changelog.
 Write the one-line rule and delete whatever it supersedes.
@@ -59,43 +58,36 @@ them into a prompt or drop `anthropic-sub`; `update-pi.sh` runs
 of the main session's plan requests `ttl: "1h"` (+ beta `extended-cache-ttl-2025-04-11`);
 sub-agents keep pi's 5m; a response served from extra usage drops it to 5m. Knobs:
 `PI_PROMPT_CACHE_TTL` / `PI_SUBAGENT_PROMPT_CACHE_TTL` (`5m`|`1h`), `PI_FORCE_PROMPT_CACHING_5M=1`.
-**Never set `PI_CACHE_RETENTION=long`**: it is process-wide and sends DeepSeek, River
-and OpenRouter `prompt_cache_retention: "24h"`. pi's warmer reads its TTL only from
-`models.json` `promptCache.short` (3600 for the Claude models) and refreshes at 90%; only a
-restart applies a changed value (`/reload` keeps the session's model object), and
-`anthropic-sub` warns when it is under 1h;
-`anthropic-sub` vetoes warming wherever a request wrote 5m. Claude compacts above 850k
-(`compaction.modelOverrides`). `cache-compaction` replays the last main-session request
-with a summary instruction appended, so compaction reads the cache; any doubt (no capture,
-other session or model, overflow, 90% of the TTL gone, a summarized message not in it)
-runs pi's own. It loads after `anthropic-sub`, so it replays that payload byte for byte.
-`cache-report.py` shows what was rebuilt after expiry; `PI_ANTHROPIC_METER_LOG=<file>`
-logs the plan meter next to each request's tokens.
+**Never set `PI_CACHE_RETENTION=long`**: it is process-wide and sends DeepSeek, River and OpenRouter
+`prompt_cache_retention: "24h"`. pi's warmer reads its TTL only from `models.json`
+`promptCache.short` (3600 for the Claude models) and refreshes at 90%; only a restart applies a
+changed value (`/reload` keeps the session's model object), and `anthropic-sub` warns when it is
+under 1h; `anthropic-sub` vetoes warming wherever a request wrote 5m. Claude compacts above 850k
+(`compaction.modelOverrides`). `cache-compaction` replays the last main-session request with a
+summary instruction appended, so compaction reads the cache; any doubt (no capture, other session or
+model, overflow, 90% of the TTL gone, a summarized message not in it) runs pi's own. It loads after
+`anthropic-sub`, so it replays that payload byte for byte. `cache-report.py` shows what was rebuilt
+after expiry; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter next to each request's tokens.
 
 ### System prompt assembly
 
-1. `extensions/system-prompt.ts` sets `systemPromptOptions.customPrompt`, which
-   replaces pi's preamble, tool list, rules and docs block; pi still renders
-   project context, skills and cwd. Parent: `agents/prompt.amp.system.md`
-   interpolated (`{identity} {harness} {date} {cwd} {roots} {os} {repo}
-   {sessionId} {ls} {harness_docs_section} {agent_models}`). Parent and
-   children both get `rules.amp.md` as a `rules` section, every tool's
-   registered guidelines as `tool_guidelines`, and pi's docs block as `docs`.
-   **Never return `systemPrompt` from `before_agent_start`**: it freezes one
-   opaque prompt before later handlers' edits. Edit
-   `systemPromptOptions.sections` instead (psst does).
-2. `tools/lib/sub-agent-prompt.ts` — **sub-agents** get a short generated
-   prompt naming exactly their tools, driven by `PI_SUBAGENT_TOOLS`, which
-   `pi-spawn.ts` sets from the same array it builds `--tools` from. The child's
-   agent prompt arrives as `--append-system-prompt`.
-3. **Each fact has one home.** A tool's call shapes and when-to-use live in its
-   own description (children see those too); the template carries only
-   cross-tool routing. Do not copy tool descriptions into the template or into
-   `promptGuidelines` — every copy is paid on every request.
-4. **Nothing in the prompt or tool schemas may change mid-session.** A changed
-   prefix re-writes the whole prompt cache; `interpolate.ts` memoizes the
-   workspace listing for that reason, and the sub-agent model list is built once
-   at load.
+1. `extensions/system-prompt.ts` sets `systemPromptOptions.customPrompt`, which replaces pi's
+   preamble, tool list, rules and docs block; pi still renders project context, skills and cwd.
+   Parent: `agents/prompt.amp.system.md` interpolated (`{identity} {harness} {date} {cwd} {roots}
+   {os} {repo} {sessionId} {ls} {harness_docs_section} {agent_models}`). Parent and children both
+   get `rules.amp.md` as a `rules` section, every tool's registered guidelines as `tool_guidelines`,
+   and pi's docs block as `docs`. **Never return `systemPrompt` from `before_agent_start`**: it
+   freezes one opaque prompt before later handlers' edits. Edit `systemPromptOptions.sections`
+   instead (psst does).
+2. `tools/lib/sub-agent-prompt.ts` — **sub-agents** get a short generated prompt naming exactly
+   their tools, driven by `PI_SUBAGENT_TOOLS`, which `pi-spawn.ts` sets from the same array it
+   builds `--tools` from. The child's agent prompt arrives as `--append-system-prompt`.
+3. **Each fact has one home.** A tool's call shapes and when-to-use live in its own description
+   (children see those too); the template carries only cross-tool routing. Do not copy tool
+   descriptions into the template or into `promptGuidelines` — every copy is paid on every request.
+4. **Nothing in the prompt or tool schemas may change mid-session.** A changed prefix re-writes the
+   whole prompt cache; `interpolate.ts` memoizes the workspace listing for that reason, and the
+   sub-agent model list is built once at load.
 
 ## Patches and configs that must survive updates
 
@@ -126,9 +118,8 @@ hardcode `/opt/homebrew` in a script**: `install.sh`, `verify-patches.sh` and
 
 `pi-bundle/build-pi-bundle.mjs` runs pi's own bundle recipe (`UPSTREAM.tag`) on
 the patched `dist/` (~45% faster to start than `dist/cli.js`).
-- **A changed patched file needs a rebuild**, or pi runs the old code. Both
-  installers rebuild; `verify-patches.sh` fails a stale build. Rollback:
-  `ln -sfn "$PI_PKG/dist/cli.js" "$PI_BIN"`.
+- **A changed patched file needs a rebuild**, or pi runs the old code. Both installers rebuild;
+  `verify-patches.sh` fails a stale build. Rollback: `ln -sfn "$PI_PKG/dist/cli.js" "$PI_BIN"`.
 - A pi whose recipe or esbuild differs from `UPSTREAM` is refused (exit 3, pi
   stays on `dist/cli.js`): re-derive, then `port-harness/bundle-fidelity.mjs`.
 - Rebuilds keep the previous chunks (a live pi imports them lazily). esbuild
@@ -232,7 +223,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `theme-studio/` | `/studio`, `/theme`, Ctrl+Shift+K — live pi + Ghostty theme/font/cursor/opacity preview. Esc reverts, Enter keeps. Writes the Ghostty config at `PI_STUDIO_GHOSTTY_CONFIG` or the default path |
 | `editor/` | custom box-drawing editor, labels, clipboard image paste |
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border |
-| `subagent-inspector/` | Ctrl+Shift+A / `/subagents` — sub-agent transcripts, from the tools extension's `muzzpi:agent-runs` broadcast |
+| `agents-ui/` | the background agents on screen: dock above the editor, `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
@@ -257,24 +248,21 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
 
 ### Extension rules learned the hard way
 
-- **Every transcript component caches its lines per width.** In fullscreen
-  mode pi-tui renders the whole transcript every frame (a fresh cache per
-  frame, `layout.js`), and `Box` reuses its output only when child lines come
-  back unchanged. One row rebuilding its lines made each keystroke cost
+- **Every transcript component caches its lines per width.** In fullscreen mode pi-tui renders the
+  whole transcript every frame (a fresh cache per frame, `layout.js`), and `Box` reuses its output
+  only when child lines come back unchanged. One row rebuilding its lines made each keystroke cost
   O(session): 180 ms at 700k context. `render-cache.test.ts` pins ours.
-- **Extensions do not share module state.** Each loads with its own jiti
-  instance and `moduleCache: false`; a module-level Map imported from another
-  extension reads *empty*. Importing pure functions/constants is fine;
-  cross-extension state goes over `pi.on(...)` events.
-- **Any timer that outlives a session must be cleared on `session_shutdown`**,
-  and anything a timer calls must be in `try`/`catch`. After session replacement
-  the ctx is stale and every `pi.*` call throws — inside a timer that is an
-  uncaughtException, and pi exits. A timer calling `invalidate()`/
-  `requestRender()` counts.
-- **A `context` handler never returns a changed list**: pi then folds the system
-  messages into one (`restoreSystemMessages`) and the cache is re-written. Edit
-  `event.messages` in place for one request; store a lasting change as a
-  `context_edit` from `turn_end` (goal) or a `before_agent_start` message (mentions).
+- **Extensions do not share module state.** Each loads with its own jiti instance and `moduleCache:
+  false`; a module-level Map imported from another extension reads *empty*. Importing pure
+  functions/constants is fine; cross-extension state goes over `pi.on(...)` events.
+- **Any timer that outlives a session must be cleared on `session_shutdown`**, and anything a timer
+  calls must be in `try`/`catch`. After session replacement the ctx is stale and every `pi.*` call
+  throws — inside a timer that is an uncaughtException, and pi exits. A timer calling
+  `invalidate()`/ `requestRender()` counts.
+- **A `context` handler never returns a changed list**: pi then folds the system messages into one
+  (`restoreSystemMessages`) and the cache is re-written. Edit `event.messages` in place for one
+  request; store a lasting change as a `context_edit` from `turn_end` (goal) or a
+  `before_agent_start` message (mentions).
 - **Clipboard paste** loads pi's `dist/utils/clipboard-image.js` on the first paste,
   not at startup; if it is missing, leave `onPasteImage` unset (pi's path-insert).
 
@@ -295,55 +283,65 @@ separate (`read_github` … `diff`); **there is no tool named `github`**.
 `~/.pi/agent/searchd/searchd.sock`; `lib/searchd.ts` is the client. **Any refusal, error or
 ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at pi startup.
 - **In a repo answers equal rg's or it refuses**; `cargo test` (fuzz included) and `searchd
-  selftest` are the contract. Outside repos it may leave out skipped and unreadable folders and
-  must say so. **Bump `Cargo.toml`'s version with any behaviour change** (stamps are per pair).
+  selftest` are the contract. Outside repos it may leave out skipped and unreadable folders and must
+  say so. **Bump `Cargo.toml`'s version with any behaviour change** (stamps are per pair).
 - **Skips** (`rules.rs`) are `F_SKIP` nodes; dependency/build names only outside a repo; a repo
-  holding a skip goes to rg. `~/Desktop|Documents|Downloads` stay gated until a search inside
-  asks (`Gate`, `unlocked.json`). **A glob only narrows**, never lists a .gitignored file.
+  holding a skip goes to rg. `~/Desktop|Documents|Downloads` stay gated until a search inside asks
+  (`Gate`, `unlocked.json`). **A glob only narrows**, never lists a .gitignored file.
 - **One FSEvents stream on one root**, noise cut by exclusion paths (several paths broke event
   order). **Never exclude `/System`** (nothing arrives); a deaf stream restarts without them.
 - **`sync` matches its cookie by event id and keeps `FlushSync`.** Folders compare by ctime.
-  Ungrafted folders read stale (`NOT_GRAFTED`); a root re-walk drops in-flight batches. Over
-  50k folders a scope trusts the feed.
+  Ungrafted folders read stale (`NOT_GRAFTED`); a root re-walk drops in-flight batches. Over 50k
+  folders a scope trusts the feed.
 - **Credential files never enter the index** (`is_secret`); segments carry `index_rules` and a
   crc checked at open, so a rule change purges them.
 - **Budgets** (`main.rs`): disk floor max(5 GiB, 5%), 1 GiB cap, index after 120 s unchanged,
   a rebuild per 600 s at most; `status.indexBlocked` says why it stopped.
-- **Starts only on a passing stamp** (`selftest.json`, `ok`); another rg re-checks first, and
-  `ok: false` is final for that pair (the client respawns every 60 s). No responsible app,
-  bad HOME or data dir: exit before walking. Log: `<data dir>/searchd.log`.
+- **Starts only on a passing stamp** (`selftest.json`, `ok`); another rg re-checks first, and `ok:
+  false` is final for that pair (the client respawns every 60 s). No responsible app, bad HOME or
+  data dir: exit before walking. Log: `<data dir>/searchd.log`.
 - **Searches only for clients of the daemon's own app** (`same_app`); others get `status` and
   `shutdown`. Every wait is bounded (rg after 8 s). No Full Disk Access; placeholders are never
   read. `searchd uninstall` removes it. Protocol lines start `{"type":"searchd_`.
 
 ### Sub-agents
 
-- **One spawn path:** the six agent tools go through `lib/agent-runs.ts` (queue of 16,
-  background, notifications), `read_web_page`/`read_session` through `run-sub-agent.ts`; both
-  start the child with `pi-spawn.ts` `startChild`, in RPC mode (task over stdin, closed on
-  `agent_settled`). RPC gives a child `hasUI`: its dialogs are answered cancelled, and
-  `approval.ts` treats `PI_SUBAGENT_TOOLS` as no UI.
-- **Agent tools run in the background** only where a result can wake the caller (TUI or RPC
-  parent; never `-p`, a child or a codemode script). Results come back once, as one
-  `agent-result` message per batch (`triggerTurn` + `deliverAs: "steer"`) unless `agents
-  wait`/`stop` took them. Esc does not stop them. `session_shutdown` does, and adds unreported
-  results to the session unwoken; on `/reload` the new load continues them (`takeReloadHandoff`).
+- **One spawn path:** the six agent tools go through `lib/agent-runs.ts` (queue of 16, background,
+  notifications), `read_web_page`/`read_session` through `run-sub-agent.ts`; both start the child
+  with `pi-spawn.ts` `startChild`, in RPC mode (task over stdin, closed on `agent_settled`). RPC
+  gives a child `hasUI`: its dialogs are answered cancelled, and `approval.ts` treats
+  `PI_SUBAGENT_TOOLS` as no UI.
+- **Agent tools run in the background** only where a result can wake the caller (TUI or RPC parent;
+  never `-p`, a child or a codemode script). Results come back once, as one `agent-result` message
+  per batch (`triggerTurn` + `deliverAs: "steer"`) unless `agents wait`/`stop` took them. Esc does
+  not stop them. `session_shutdown` does, and adds unreported results to the session unwoken; on
+  `/reload` the new load continues them (`takeReloadHandoff`).
 - **All six persist `<agent>-<uuid>` sessions**; `unresumableReason` refuses another agent's id
   (pre-`AGENT_NAMED_IDS_SINCE` ids are all `delegate-`, so chad may resume those). `continueId`
-  steers a running run and continues a finished one, after `session-repair.ts` gives every call
-  a killed child left open an error result (pi's own orphan placeholder says nothing).
+  steers a running run and continues a finished one, after `session-repair.ts` gives every call a
+  killed child left open an error result (pi's own orphan placeholder says nothing).
+- **`agents-ui` owns no run state.** It reads `muzzpi:agent-runs` and acts through
+  `muzzpi:agent-runs:control` (`AgentRuns.control`: steer / continue / stop / stopAll; the answer or
+  refusal comes back as `RunSnapshot.control`, a stop in progress as `stopping`). Its dock widget
+  stays mounted and renders no lines when hidden; it ticks (`clock.frame`) only while a background
+  run runs. A UI stop is still reported to the main agent (`delivered` stays false).
+- **Never bind `ctrl+x`: it is pi's copy key** (`app.message.copy`); stop-all is `X` twice in the
+  dock or list. `↓` takes the dock only from an empty editor. The agent view's input takes every
+  printable key, so its actions sit on ctrl keys.
+- **The six agent tools render with `renderShell: "self"`** (`lib/agent-inline.ts`): a background
+  launch is one line, and its call header hides itself through the row's shared `state`.
+  `install.sh` drops `RETIRED_EXTENSIONS` instead of carrying them over.
 - **Models come from `pi-setup/agent-models.json` only** — see Sub-agent models.
-- **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only
-  agent→agent edge is `delegate → finder`, depth ≤ 2. chad has no
-  `chad`/`delegate` (a swarm that spawns swarms is a fork bomb) and no
-  `oracle`/`finder`/`librarian` (it already has their tools).
+- **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only agent→agent edge is
+  `delegate → finder`, depth ≤ 2. chad has no `chad`/`delegate` (a swarm that spawns swarms is a
+  fork bomb) and no `oracle`/`finder`/`librarian` (it already has their tools).
 - **Don't use `--no-tools`** for sub-agents: it empties the registry and
   nothing can be re-activated.
-- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub)
-  via `--no-extensions -e`, plus `-e builtin:codemode` when their tools include `codemode` (a
-  script reaches only the child's tools; `--no-extensions` drops pi's built-ins too). An
-  extension a child needs goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1` restores the full
-  set; `verify-patches.sh` fails if pi changes what `--no-extensions` keeps.
+- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub) via
+  `--no-extensions -e`, plus `-e builtin:codemode` when their tools include `codemode` (a script
+  reaches only the child's tools; `--no-extensions` drops pi's built-ins too). An extension a child
+  needs goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1` restores the full set; `verify-patches.sh`
+  fails if pi changes what `--no-extensions` keeps.
 
 ### chad — read-only
 
@@ -361,7 +359,7 @@ output/exec flags. A guardrail, not a sandbox.
 `operations`) under pi's names; schema, prompt text and matching stay upstream's
 — **never reimplement matching**. The wrapper adds only: undo records (saved
 before the write; no record, no write), `permissions.json` checked on the path
-pi resolves and its realpath, `lib/mutex.ts`, Claude's field names, and errors
+pi resolves and its realpath, `lib/mutex.ts` + `lib/file-lock.ts`, Claude's field names, and errors
 naming the first differing line, column and code point. `\uXXXX` sent as text
 is decoded only when that alone makes oldText match, refused in prose files
 without escapes; `[REDACTED]` is never written over a real value; a control
@@ -372,31 +370,30 @@ delete or move (`trash <path>` / `git mv` in bash).
 makes Anthropic garble Claude's non-ASCII (pi #10074). Never copy pi's value
 back; drop the override only once pi stops sending Claude strict.
 
-- **This Mac: deletes are rejected, the agent uses `trash`. Over ssh: deletes run.** `lib/remote-command.ts`
-  splits out server parts (ssh args and heredocs, `rsync --delete` to a remote
-  dest); local-only rules carry `where: "local"`; text it cannot place stays
-  local; keep its real-bash oracle test green. Undo of a creation: `lib/trash.ts`.
-- **Approvals are off by default (yolo).** `ask` rules (destructive SQL, Docker
-  volumes, buckets, disks), MCP DELETE and any extension
-  that calls `requestApproval` go through `lib/approval.ts`, which approves
-  without a picker and logs `"auto"` to `~/.pi/agent/approvals.jsonl`.
-  `"approvals": { "enabled": true }` in `ext-config.json` (restart pi) brings back
-  the picker (cursor on Deny; Deny ends the turn with `terminate`, typed
-  instructions deny but let the agent continue), plain confirm in RPC, refused
-  with no UI (sub-agents, `-p`). Reject beats ask beats allow.
-- **The `ask` tool and the approval prompt share `lib/choice-dialog.ts`.** `ask`
-  is parent-only: never add it to a sub-agent allowlist (`ask.test.ts` pins it).
-  While a picker is open it emits `herdr:blocked` on `pi.events`, which herdr's
-  own extension turns into the pane's `blocked` state and its "needs you" sound.
-  Its `prepareArguments` must keep parsing stringified arrays: that is what made
-  pi-ask's `ask_user` unusable.
+- **This Mac: deletes are rejected, the agent uses `trash`. Over ssh: deletes run.**
+  `lib/remote-command.ts` splits out server parts (ssh args and heredocs, `rsync --delete` to a
+  remote dest); local-only rules carry `where: "local"`; text it cannot place stays local; keep its
+  real-bash oracle test green. Undo of a creation: `lib/trash.ts`.
+- **Approvals are off by default (yolo).** `ask` rules (destructive SQL, Docker volumes, buckets,
+  disks), MCP DELETE and any extension that calls `requestApproval` go through `lib/approval.ts`,
+  which approves without a picker and logs `"auto"` to `~/.pi/agent/approvals.jsonl`. `"approvals":
+  { "enabled": true }` in `ext-config.json` (restart pi) brings back the picker (cursor on Deny;
+  Deny ends the turn with `terminate`, typed instructions deny but let the agent continue), plain
+  confirm in RPC, refused with no UI (sub-agents, `-p`). Reject beats ask beats allow.
+- **The `ask` tool and the approval prompt share `lib/choice-dialog.ts`.** `ask` is parent-only:
+  never add it to a sub-agent allowlist (`ask.test.ts` pins it). While a picker is open it emits
+  `herdr:blocked` on `pi.events`, which herdr's own extension turns into the pane's `blocked` state
+  and its "needs you" sound. Its `prepareArguments` must keep parsing stringified arrays: that is
+  what made pi-ask's `ask_user` unusable.
 - apply_patch is gone; if GPT models return, gate it by model id.
-- Undo/redo refuse when a later still-applied change touches the path, or the
-  file drifted outside the tool (`force: true` overrides and reports the loss).
-  Ordering comes from position in `activeIds`, **never `Date.now()`**. Redo
-  takes the *oldest* undone step; legacy move records pair by `movePartnerUri`.
-- `lib/mutex.ts` is a module-level Map — it does **not** span processes, so
-  concurrent delegates can collide on one file.
+- Undo/redo refuse when a later still-applied change touches the path, or the file drifted outside
+  the tool (`force: true` overrides and reports the loss). Ordering comes from position in
+  `activeIds`, **never `Date.now()`**. Redo takes the *oldest* undone step; legacy move records pair
+  by `movePartnerUri`.
+- **`lib/mutex.ts` orders writes inside one process; `lib/file-lock.ts` is the cross-process layer**
+  (one lock file per realpath in `~/.pi/agent/locks`, holding pid and time; stale when the pid is
+  dead or after 60 s; 10 s wait, then an error naming the holder, `PI_SUBAGENT_ID` for a child).
+  Only edit/write take it: bash, format_file and undo_edit can still race a sub-agent.
 
 ### bash — nothing runs unbounded
 
@@ -413,13 +410,12 @@ Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables),
   returns `undefined` on failure, degrading to output-only.
 - The idle timer runs from t=0 (pipes block-buffer), stamped on raw chunk arrival; the
   machine-sleep guard (`SLEEP_JUMP_MS`, `watchdog.ts`) is checked first and wins.
-- Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild holds stdout.
-  The child is **not** spawned `detached` (Ctrl+C must reach it). 900s sits above pi's HTTP
-  idle (300s) + retry; re-check those before shrinking it.
-- **bash keeps pi's codemode contract**: `structuredContent` on every exit code
-  (a script's `grep` miss is data, not a throw); timeout/idle/abort/signal stay
-  errors. The `tool_result` scrub hook must return `structuredContent` too —
-  `content` alone makes pi drop it.
+- Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild holds stdout. The
+  child is **not** spawned `detached` (Ctrl+C must reach it). 900s sits above pi's HTTP idle (300s)
+  + retry; re-check those before shrinking it.
+- **bash keeps pi's codemode contract**: `structuredContent` on every exit code (a script's `grep`
+  miss is data, not a throw); timeout/idle/abort/signal stay errors. The `tool_result` scrub hook
+  must return `structuredContent` too — `content` alone makes pi drop it.
 
 ### screenshot / vision budget
 
@@ -429,22 +425,22 @@ in `vision.test.ts`). Tiers: standard 1568px/1568 tokens, high-res (Claude
 
 - **`fitImageFile` is the only path from pixels to a vision model** (`screenshot`
   and `read`). `sips` is a codec, never a resizer; `planView` decides geometry.
-- **Every output must pass pi's tool-image normalizer untouched**
-  (`agent-session.js` → `normalizeToolResultImages`): side ≤ 2000px and base64
-  < `inputLimits.images.resize.maxBytes` (4.5 MiB). Anything over is silently
-  re-encoded by pi. `image-fit.test.ts` runs pi's real normalizer to pin this.
+- **Every output must pass pi's tool-image normalizer untouched** (`agent-session.js` →
+  `normalizeToolResultImages`): side ≤ 2000px and base64 < `inputLimits.images.resize.maxBytes` (4.5
+  MiB). Anything over is silently re-encoded by pi. `image-fit.test.ts` runs pi's real normalizer to
+  pin this.
 - Side cap 2000px (`maxSide`): past 20 images per request the API rejects
   larger ones, and history is resent every turn.
-- **pi does not enforce the 32 MiB request limit**; one oversized request is a
-  413 on every later turn. `lib/image-budget.ts` measures the context
-  (`buildSessionProjection`) plus in-flight calls and refuses before it.
+- **pi does not enforce the 32 MiB request limit**; one oversized request is a 413 on every later
+  turn. `lib/image-budget.ts` measures the context (`buildSessionProjection`) plus in-flight calls
+  and refuses before it.
 - Media type comes from the bytes, never the extension (a mismatch is a 400).
   sips ignores EXIF orientation, so `orient()` applies it.
 - **Chromium returns BLANK past 16384px** without erroring; `MAX_RENDERABLE_HEIGHT`
   clips and reports it. Full-page captures scroll through once first, or lazy content is missing.
-- macOS: every tab is its own `NSWindow`; `CGWindowListCopyWindowInfo` option `0`, never `1`.
-  A window is captured where it is; only after a failure, or for a Stage Manager thumbnail, is
-  its app activated, **by pid**, and focus handed back only if it still has it. Run
+- macOS: every tab is its own `NSWindow`; `CGWindowListCopyWindowInfo` option `0`, never `1`. A
+  window is captured where it is; only after a failure, or for a Stage Manager thumbnail, is its app
+  activated, **by pid**, and focus handed back only if it still has it. Run
   `port-harness/screenshot-live.ts` after touching `lib/capture.ts` (needs Screen Recording).
 - `permissions.json` blocks the capture binary in bash but deliberately not `sips`.
 
@@ -458,9 +454,9 @@ text is never modified).
 
 1. **Undercount → smear.** pi-tui measures grapheme clusters; terminals advance per spacing
    codepoint. The width patch makes `graphemeWidth()` overcount, never undercount.
-2. **Control char in a single-line sink → smear.** A `\n` is width-0 to every check yet moves
-   the cursor: editor labels (`flattenLabelText`), widget rows (`flattenSegmentText`) and any
-   truncated summary must flatten. Multi-row `renderCall` output is fine.
+2. **Control char in a single-line sink → smear.** A `\n` is width-0 to every check yet moves the
+   cursor: editor labels (`flattenLabelText`), widget rows (`flattenSegmentText`) and any truncated
+   summary must flatten. Multi-row `renderCall` output is fine.
 
 If it returns: `apply-pi-tui-width-patch.mjs --check` first, then
 `pi-setup/render-repro/`, then hunt for a control char in a single-line string.
@@ -473,18 +469,18 @@ spawning tool a default `model` + `thinking`. Changing a default is a one-line
 edit there, deployed by `install.sh`, read at session start.
 
 - Every spawning tool takes optional `model` (enum of the names) and `thinking` (pi's 7 levels;
-  "med" etc. accepted), resolved by `lib/agent-models.ts`; the parent learns the names from
-  the `{agent_models}` prompt section.
+  "med" etc. accepted), resolved by `lib/agent-models.ts`; the parent learns the names from the
+  `{agent_models}` prompt section.
 - **The enum is enforced during decoding on xAI**: a parent cannot emit a name outside the
   list and picks the nearest one. The prompt line forbidding substitution stops that; keep it.
 - **pi runs an unknown `--model` anyway**, so the resolver checks `modelRegistry.find` +
   `hasConfiguredAuth` first (an expired token still comes back as the child's error). A failing
-  **default** drops `--model` (pi's default runs, so a missing `DEEPSEEK_API_KEY` degrades);
-  a failing **explicit** model is refused.
+  **default** drops `--model` (pi's default runs, so a missing `DEEPSEEK_API_KEY` degrades); a
+  failing **explicit** model is refused.
 - **pi's `--model` resolver can fall back to another provider's look-alike**, so `pi-spawn.ts`
-  SIGKILLs a child whose first assistant message names another provider/model than requested,
-  or, with none requested, one not in `agent-models.json` (`modelViolation`). Keep every Claude
-  id `anthropic/`. Ids must be provider-qualified; a `continueId` resume keeps the child's model.
+  SIGKILLs a child whose first assistant message names another provider/model than requested, or,
+  with none requested, one not in `agent-models.json` (`modelViolation`). Keep every Claude id
+  `anthropic/`. Ids must be provider-qualified; a `continueId` resume keeps the child's model.
 
 ## Local models
 
@@ -523,20 +519,19 @@ barrel `export *` may not evaluate it). Don't add `/value` to agent mentions.
 
 ## Update workflow
 
-0. **Update pi with `bash pi-setup/update-pi.sh <ver>`, never `pi update --self`.**
-   Self-update repoints `bin/pi` at `dist/bundle/cli.js`, which disables every
-   core patch. It and `install.sh` refuse a pi whose stock patched files (listed
-   once, in `pi-core-patches/patches.sh`) differ from `base-version`'s.
+0. **Update pi with `bash pi-setup/update-pi.sh <ver>`, never `pi update --self`.** Self-update
+   repoints `bin/pi` at `dist/bundle/cli.js`, which disables every core patch. It and `install.sh`
+   refuse a pi whose stock patched files (listed once, in `pi-core-patches/patches.sh`) differ from
+   `base-version`'s.
 1. **`bash pi-setup/verify-patches.sh`** — always first.
-2. **Grep our own CLI call sites.** An import-level audit cannot see a change in how pi reads
-   the arguments `pi-spawn.ts` passes (`--model --thinking --tools --mode --session-id`) or the
-   RPC records it uses (`prompt`+`streamingBehavior`, `abort`, `agent_settled`, dialog requests);
-   pi 0.84's #7327 silently killed every sub-agent that way. When a release touches model
-   resolution, tool filtering, CLI arguments or RPC, call one real sub-agent before declaring it clean.
-3. **pi core update** → re-derive the 4 core patches against the new stock
-   files (never blind-copy; see `pi-migrations.md`) + the width patch, then
-   rebuild (`update-pi.sh` does). The `@mariozechner/*` compat aliases will
-   eventually go — then rename imports.
+2. **Grep our own CLI call sites.** An import-level audit cannot see a change in how pi reads the
+   arguments `pi-spawn.ts` passes (`--model --thinking --tools --mode --session-id`) or the RPC
+   records it uses (`prompt`+`streamingBehavior`, `abort`, `agent_settled`, dialog requests); pi
+   0.84's #7327 silently killed every sub-agent that way. When a release touches model resolution,
+   tool filtering, CLI arguments or RPC, call one real sub-agent before declaring it clean.
+3. **pi core update** → re-derive the 4 core patches against the new stock files (never blind-copy;
+   see `pi-migrations.md`) + the width patch, then rebuild (`update-pi.sh` does). The
+   `@mariozechner/*` compat aliases will eventually go — then rename imports.
 4. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
    there; `npm ci` (node_modules is gitignored), then `bun test` before deploying.
 5. **After any pi update, make one real `edit` and `write`**: the wrapper rides
@@ -548,9 +543,8 @@ Per-version record: `pi-setup/pi-migrations.md`. Read it before `pi update`.
 
 - **Don't edit `/opt/homebrew/lib/node_modules/` directly** — wiped on update.
   Edit in `pi-setup/`, deploy with `install.sh`.
-- **Don't run `install.sh` without checking what changed** — it overwrites live
-  tweaks (after backing them up).
-  `--dry-run` prints every write first.
+- **Don't run `install.sh` without checking what changed** — it overwrites live tweaks (after
+  backing them up). `--dry-run` prints every write first.
 
 ## Where the detail lives
 

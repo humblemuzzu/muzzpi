@@ -268,6 +268,7 @@ run mkdir -p "$CONFIG_SKILLS"
 info "Building and installing extensions..."
 EXT_LIVE="$PI_AGENT/extensions"
 EXT_OLD="$EXT_LIVE$BACKUP_SUFFIX"
+RETIRED_EXTENSIONS="subagent-inspector"
 if [ -d "$EXT_LIVE" ]; then
     run mv "$EXT_LIVE" "$EXT_OLD"
     warn "Backed up extensions to $(basename "$EXT_OLD")"
@@ -284,6 +285,7 @@ if [ -d "$EXT_OLD" ]; then
     for old in "$EXT_OLD"/*; do
         [ -e "$old" ] || continue
         name="$(basename "$old")"
+        case " $RETIRED_EXTENSIONS " in *" $name "*) warn "Dropped $name (retired; replaced by agents-ui)"; continue ;; esac
         if [ ! -e "$SCRIPT_DIR/extensions/$name" ] && [ ! -e "$EXT_LIVE/$name" ]; then
             run cp -R "$old" "$EXT_LIVE/"
             warn "Kept $name (not from this repo)"

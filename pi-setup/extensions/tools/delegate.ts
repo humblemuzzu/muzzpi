@@ -19,13 +19,13 @@
  */
 
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { requireParam, resolveParam } from "./lib/params";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
-import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
+import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
+import { firstLine } from "./lib/sub-agent-render";
 
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const EXTENSION_TOOLS = [
@@ -119,16 +119,14 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 		},
 
 		renderCall(args: any, theme: any, context: any) {
-			const text = context?.lastComponent ?? new Text("", 0, 0);
 			const raw =
 				args?.description ||
 				(typeof args?.prompt === "string" ? firstLine(args.prompt, "") : "") ||
 				"...";
-			const marker = args?.continueId ? "Delegate ↻ " : "Delegate ";
-			text.setText(theme.fg("toolTitle", theme.bold(marker)) + theme.fg("dim", clip(raw, 80)));
-			return text;
+			return renderAgentCall(args?.continueId ? "Delegate ↻" : "Delegate", raw, theme, context);
 		},
 
-		renderResult: renderSubAgentResult("Delegate"),
+		renderShell: AGENT_SHELL,
+		renderResult: renderAgentRunResult("Delegate"),
 	};
 }

@@ -5,10 +5,11 @@
  * reload brings a fresh copy of this module.
  */
 
+import { resolve as resolvePath } from "node:path";
 import { Type } from "@sinclair/typebox";
 import { SUB_AGENT_SESSION_DIR, newSessionId, startChild, unresumableReason, zeroUsage, type ChildRun, type PiSpawnConfig, type PiSpawnResult } from "./pi-spawn";
 import { resolveRoute, type AgentModels, type SubAgent } from "./agent-models";
-import type { RunSnapshot, RunStatus } from "./agent-channel";
+import type { ControlOutcome, ControlRequest, RunSnapshot, RunStatus } from "./agent-channel";
 import {
 	backgroundStub,
 	failureText,
@@ -16,6 +17,7 @@ import {
 	notificationText,
 	runReportText,
 	type AgentResultDetails,
+	type Overlap,
 	type RunReport,
 } from "./agent-notice";
 import { finishedResult, progressUpdate, sessionIdOf, toolError } from "./run-sub-agent";
@@ -38,6 +40,7 @@ const RELOADED = "Interrupted by a reload of the main session; it is being conti
 const STEER_FALLBACK_MS = 15_000;
 const STOP_WAIT_MS = 15_000;
 const STEER_PREFIX = "Message from the main agent while you work:";
+const USER_STEER_PREFIX = "Message from the user while you work:";
 
 /** the session-side effects; each call is wrapped, since a stale session throws. */
 export interface RunHost {
@@ -47,7 +50,7 @@ export interface RunHost {
 	record(entry: RunEntry): void;
 }
 
-export type RunEntry = Omit<RunReport, "messages" | "files"> & { startedAt: number };
+export type RunEntry = Omit<RunReport, "messages" | "files" | "overlaps"> & { startedAt: number };
 
 export interface LaunchSpec {
 	agent: SubAgent;
@@ -89,6 +92,9 @@ interface Run {
 	spawn: PiSpawnConfig;
 	delivered: boolean;
 	interrupting: boolean;
+	stopping: boolean;
+	stoppedByUser: boolean;
+	control?: ControlOutcome;
 	ended: Promise<void>;
 	markEnded: () => void;
 	detach?: () => void;
@@ -251,8 +257,7 @@ export class AgentRuns {
 		for (const run of targets) {
 			run.delivered = true;
 			this.pending = this.pending.filter((p) => p !== run);
-			if (run.child) run.child.stop();
-			else this.end(run, { ...run.result, exitCode: 1, stopReason: "aborted" });
+			this.requestStop(run);
 		}
 		await Promise.race([Promise.all(targets.map((run) => run.ended)), sleep(STOP_WAIT_MS)]);
 		const reports: RunReport[] = [];
@@ -263,6 +268,57 @@ export class AgentRuns {
 			return runReportText(report);
 		});
 		return { text: parts.join("\n\n"), details: { runs: reports } };
+	}
+
+	/** a request from the agents UI. The answer goes back on the broadcast, on the run it concerns. */
+	async control(request: ControlRequest): Promise<void> {
+		if (this.closed) return;
+		if (request.action === "stopAll") {
+			for (const run of this.runs) if (run.background && LIVE.has(run.status)) this.requestStop(run, true);
+			return;
+		}
+		const run = this.latest(request.id);
+		if (!run) return;
+		if (request.action === "stop") {
+			if (LIVE.has(run.status)) this.requestStop(run, true);
+			else this.answer(run, "stop", false, `${run.continueId} has already ${run.status === "done" ? "finished" : run.status}.`);
+			return;
+		}
+		if (request.action === "steer") {
+			const steered = LIVE.has(run.status) ? await this.steer(run, request.text, USER_STEER_PREFIX) : "finished";
+			if (steered === "finished") this.answer(run, "steer", false, `${run.continueId} has finished; continue it instead.`);
+			else this.answer(run, "steer", steered.isError !== true, steered.isError ? steered.content[0].text : "Sent; it reads this before its next step.");
+			return;
+		}
+		this.continueRun(run, request.text);
+	}
+
+	private continueRun(previous: Run, text: string): void {
+		const refusal = LIVE.has(previous.status)
+			? `${previous.continueId} is still running; steer it instead.`
+			: !previous.spawn.cwd
+				? `${previous.continueId} ran in an earlier session; ask the main agent to continue it by continueId.`
+				: unresumableReason(previous.continueId, previous.spawn.cwd, previous.agent, this.sessionDir);
+		if (refusal) return this.answer(previous, "continue", false, refusal);
+		const run = this.newRun(previous.agent, previous.label, previous.continueId, true, true, { ...previous.spawn, task: text, followUp: undefined });
+		run.control = { action: "continue", ok: true, text: "Continuing with your message.", at: Date.now() };
+		this.runs.push(run);
+		this.changed();
+		this.pump();
+	}
+
+	private answer(run: Run, action: ControlOutcome["action"], ok: boolean, text: string): void {
+		run.control = { action, ok, text, at: Date.now() };
+		this.changed();
+	}
+
+	private requestStop(run: Run, byUser = false): void {
+		if (run.stopping || !LIVE.has(run.status)) return;
+		run.stopping = true;
+		run.stoppedByUser = byUser;
+		if (run.child) run.child.stop();
+		else this.end(run, { ...run.result, exitCode: 1, stopReason: "aborted" });
+		this.changed();
 	}
 
 	async wait(ids: string[], timeoutSec: number, signal?: AbortSignal): Promise<{ text: string; details: AgentResultDetails }> {
@@ -316,6 +372,9 @@ export class AgentRuns {
 			run.queuedAt = data.startedAt;
 			run.startedAt = data.startedAt;
 			run.endedAt = data.startedAt + data.durationMs;
+			run.toolCount = data.toolCount ?? 0;
+			run.failure = data.errorMessage;
+			run.result = { ...run.result, model: data.model, thinkingLevel: data.thinkingLevel, usage: data.usage ?? run.result.usage, stopReason: data.stopReason };
 			run.delivered = true;
 			run.markEnded();
 			this.runs.push(run);
@@ -397,6 +456,8 @@ export class AgentRuns {
 			spawn,
 			delivered: false,
 			interrupting: false,
+			stopping: false,
+			stoppedByUser: false,
 			ended,
 			markEnded,
 		};
@@ -472,10 +533,12 @@ export class AgentRuns {
 		run.activity = undefined;
 		if (run.status === "interrupted") {
 			run.failure = "Interrupted: the main session closed before it finished. Its conversation is saved; continue it by continueId.";
+		} else if (run.status === "stopped" && run.stoppedByUser) {
+			run.failure = "The user stopped this agent from the agents panel before it finished.";
 		} else if (run.status !== "done") {
 			run.failure = failureText(result, getFinalOutput(result.messages) || "(no output)");
 		}
-		const { messages: _messages, files: _files, ...entry } = this.report(run);
+		const { messages: _messages, files: _files, overlaps: _overlaps, ...entry } = this.report(run);
 		this.call((host) => host.record({ ...entry, startedAt: run.startedAt ?? run.queuedAt }));
 		run.markEnded();
 		if (run.background && !run.delivered && !this.closed) {
@@ -511,6 +574,7 @@ export class AgentRuns {
 			durationMs: (run.endedAt ?? Date.now()) - (run.startedAt ?? run.queuedAt),
 			toolCount: run.toolCount,
 			files: run.files,
+			overlaps: this.overlapsOf(run),
 			model: r.model,
 			thinkingLevel: r.thinkingLevel,
 			usage: r.usage,
@@ -520,11 +584,26 @@ export class AgentRuns {
 		};
 	}
 
+	/** other runs that were alive while this one was and changed a file it changed. */
+	private overlapsOf(run: Run): Overlap[] {
+		if (run.files.length === 0 || run.startedAt === undefined) return [];
+		const now = Date.now();
+		const mine = new Set(run.files.map((file) => resolvePath(run.spawn.cwd, file)));
+		const overlaps: Overlap[] = [];
+		for (const other of this.runs) {
+			if (other === run || other.continueId === run.continueId || other.startedAt === undefined) continue;
+			if (other.startedAt >= (run.endedAt ?? now) || (other.endedAt ?? now) <= run.startedAt) continue;
+			const shared = other.files.filter((file) => mine.has(resolvePath(other.spawn.cwd, file)));
+			if (shared.length > 0) overlaps.push({ continueId: other.continueId, files: shared });
+		}
+		return overlaps;
+	}
+
 	private stub(run: Run, movedByUser = false): any {
 		const behind = run.status === "queued" ? this.running() : 0;
 		return {
 			content: [{ type: "text", text: backgroundStub(run.agent, run.continueId, behind, movedByUser) }],
-			details: { agent: run.agent, task: run.label, continueId: run.continueId, background: true },
+			details: { agent: run.agent, task: run.label, continueId: run.continueId, background: true, model: run.spawn.model },
 		};
 	}
 
@@ -554,8 +633,8 @@ export class AgentRuns {
 	}
 
 	/** "finished" when the run ended before it took the message, so the caller continues it instead. */
-	private async steer(run: Run, text: string): Promise<any> {
-		const message = `${STEER_PREFIX}\n\n${text}`;
+	private async steer(run: Run, text: string, prefix = STEER_PREFIX): Promise<any> {
+		const message = `${prefix}\n\n${text}`;
 		if (!run.child) {
 			run.spawn.task = `${run.spawn.task}\n\n${message}`;
 			return { content: [{ type: "text", text: `Added to the queued ${run.agent} (continueId: ${run.continueId}); it reads this when it starts.` }] };
@@ -598,6 +677,8 @@ export class AgentRuns {
 			messages: r.messages,
 			stopReason: r.stopReason,
 			errorMessage: run.failure ?? r.errorMessage,
+			stopping: run.stopping && LIVE.has(run.status),
+			control: run.control,
 		};
 	}
 

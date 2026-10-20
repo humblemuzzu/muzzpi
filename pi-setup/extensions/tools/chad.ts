@@ -23,13 +23,13 @@
  */
 
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { requireParam, resolveParam } from "./lib/params";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
-import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
+import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
+import { firstLine } from "./lib/sub-agent-render";
 
 /*
  * NO mutation tool of any kind: no edit, no write, no format_file, no undo_edit.
@@ -152,16 +152,14 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 		},
 
 		renderCall(args: any, theme: any, context: any) {
-			const text = context?.lastComponent ?? new Text("", 0, 0);
 			const raw =
 				args?.description ||
 				(typeof args?.prompt === "string" ? firstLine(args.prompt, "") : "") ||
 				"...";
-			const marker = args?.continueId ? "Chad ↻ " : "Chad ";
-			text.setText(theme.fg("toolTitle", theme.bold(marker)) + theme.fg("dim", clip(raw, 80)));
-			return text;
+			return renderAgentCall(args?.continueId ? "Chad ↻" : "Chad", raw, theme, context);
 		},
 
-		renderResult: renderSubAgentResult("Chad"),
+		renderShell: AGENT_SHELL,
+		renderResult: renderAgentRunResult("Chad"),
 	};
 }

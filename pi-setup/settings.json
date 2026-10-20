@@ -20,7 +20,8 @@
     "~/.pi/agent/extensions/mentions.js",
     "~/.pi/agent/extensions/anthropic-sub.js",
     "~/.pi/agent/extensions/cache-compaction.js",
-    "~/.pi/agent/extensions/goal"
+    "~/.pi/agent/extensions/goal",
+    "~/.pi/agent/extensions/agents-ui"
   ],
   "compaction": {
     "enabled": true,

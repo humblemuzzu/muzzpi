@@ -4,7 +4,8 @@
  * Matching, line endings, BOM handling and the write itself are pi's
  * (createEditToolDefinition / createWriteToolDefinition, injected file
  * operations). This file adds only what pi does not do: undo_edit records,
- * permissions.json, the file lock shared with bash / format_file / undo_edit,
+ * permissions.json, the file lock shared with bash / format_file / undo_edit
+ * (and, across processes, with other sub-agents),
  * Claude's field names, and errors that say what to do next.
  */
 
@@ -14,6 +15,7 @@ import * as path from "node:path";
 import { createEditToolDefinition, createWriteToolDefinition, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { renderChangeCall, renderChangeResult, type FileChangeSummary } from "./lib/change-render";
 import { discardChange, saveChange, simpleDiff } from "./lib/file-tracker";
+import { withProcessLock } from "./lib/file-lock";
 import { resolveToAbsolute } from "./lib/fs";
 import { withFileLock } from "./lib/mutex";
 import { evaluatePermission, loadPermissions } from "./lib/permissions";
@@ -85,6 +87,11 @@ function realTarget(file: string): string {
 			return file;
 		}
 	}
+}
+
+/** In-process order first, then the lock other pi processes (sub-agents) honour, held for the read-modify-write only. */
+function withWriteLock<T>(file: string, signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+	return withFileLock(file, () => withProcessLock(realTarget(file), fn, { signal }));
 }
 
 /** Runs on the path pi actually writes, and on where a symlink points. */
@@ -439,7 +446,7 @@ export function createEditTool(): ToolDefinition {
 			const cwd = ctx.cwd || process.cwd();
 			const target = resolveToAbsolute(input.path, cwd);
 
-			return withFileLock(target, async () => {
+			return withWriteLock(target, signal, async () => {
 				const current = await readIfExists(target).catch(() => undefined);
 				const requested: Edit[] = Array.isArray(input.edits) ? input.edits : [];
 				const escapes = current === undefined ? { edits: requested, notes: [] } : resolveEscapes(requested, toLF(current), target);
@@ -499,7 +506,7 @@ export function createWriteTool(): ToolDefinition {
 		async execute(toolCallId: string, input: any, signal: AbortSignal | undefined, onUpdate: any, ctx: Ctx) {
 			const cwd = ctx.cwd || process.cwd();
 
-			return withFileLock(resolveToAbsolute(input.path, cwd), async () => {
+			return withWriteLock(resolveToAbsolute(input.path, cwd), signal, async () => {
 				let change: FileChangeSummary | undefined;
 				let unchanged = false;
 				const operations = {

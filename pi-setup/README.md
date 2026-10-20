@@ -50,7 +50,7 @@ loader level turns one off.
 | `md-export.ts` | `/md` — exports the current session branch to readable markdown (clipboard or file) |
 | `notify.ts` | Desktop notification when the agent finishes (OSC 777) |
 | `command-palette/` | `Ctrl+Shift+P` command-palette overlay |
-| `subagent-inspector/` | `Ctrl+Shift+A` / `/subagents` — drill into a sub-agent's live transcript |
+| `agents-ui/` | The background agents on screen: a dock above the editor while any run (`↓` on an empty editor to manage, `s` steer, `c` continue, `x` stop, `X` twice stops all), a full-screen view of one agent's conversation where typing steers or continues it (`Enter`, or `/agents <id>`), and `/agents` / `Ctrl+Shift+A` for the whole list |
 | `local-model.ts` | `/local` — start/stop the llama.cpp router |
 | `deepseek-peak/` | `/deepseek` — a peak/off-peak pricing clock in the editor border |
 | `guardrails/` | Comment gate on `edit` / `write` (the behaviour rules themselves ship in the system prompt, not here) |
@@ -166,7 +166,7 @@ pi-setup/
 ├── extensions/                 # extensions + tools/ suite
 │   ├── editor/                 # Custom TUI editor + cache line
 │   ├── command-palette/        # Ctrl+Shift+P palette
-│   ├── subagent-inspector/     # Ctrl+Shift+A sub-agent transcript inspector
+│   ├── agents-ui/              # background-agent dock, list and full-screen view
 │   ├── theme-studio/           # /studio — live theme + Ghostty preview
 │   ├── deepseek-peak/          # /deepseek — peak/off-peak clock
 │   ├── guardrails/             # edit/write comment gate

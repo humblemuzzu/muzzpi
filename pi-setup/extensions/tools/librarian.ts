@@ -21,12 +21,11 @@
  */
 
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
-import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
+import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { requireParam, stringList } from "./lib/params";
 
 /** canonical name first; the rest are what models actually guess (see lib/params.ts). */
@@ -147,11 +146,10 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 		},
 
 		renderCall(args: any, theme: any, context: any) {
-			const text = context?.lastComponent ?? new Text("", 0, 0);
-			text.setText(theme.fg("toolTitle", theme.bold("librarian ")) + theme.fg("dim", args.query ? clip(args.query, 80) : "..."));
-			return text;
+			return renderAgentCall("librarian", args.query || "...", theme, context);
 		},
 
-		renderResult: renderSubAgentResult("librarian"),
+		renderShell: AGENT_SHELL,
+		renderResult: renderAgentRunResult("librarian"),
 	};
 }

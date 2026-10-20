@@ -72,12 +72,12 @@ describe("the agent-result message", () => {
 	};
 	const message = { content: "…", details: { runs: [run] } };
 
-	test("collapsed it is one cached header line per run, inside the width", () => {
+	test("collapsed it is a cached card per run, inside the width", () => {
 		const container = renderAgentResult(message, { expanded: false, outputPad: 1 }, theme);
 		const lines = container.render(40);
-		expect(lines[0]).toStartWith(" ✓ chad a label");
+		expect(lines[0]).toStartWith(" ✓ chad finished  a label");
 		expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
-		expect(lines.join("\n")).not.toContain("answer");
+		expect(lines.join("\n")).toContain("the answer");
 		rendersFromCache(container.children[0] as any);
 	});
 

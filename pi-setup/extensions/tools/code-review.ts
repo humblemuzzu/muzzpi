@@ -14,13 +14,12 @@
  */
 
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns, continueIdOf } from "./lib/agent-runs";
-import { clip, getFinalOutput, isBackgroundStub, renderAgentTree, renderBackgroundStub, type SingleResult } from "./lib/sub-agent-render";
-import { normalizeForDisplay } from "./lib/box-format";
+import { AGENT_SHELL, fileCount, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
+import { getFinalOutput } from "./lib/sub-agent-render";
 import { requireParam } from "./lib/params";
 
 /** canonical name first; the rest are what models actually guess (see lib/params.ts). */
@@ -270,40 +269,13 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 		},
 
 		renderCall(args: any, theme: any, context: any) {
-			const text = context?.lastComponent ?? new Text("", 0, 0);
-			let label = theme.fg("toolTitle", theme.bold("code_review ")) + theme.fg("dim", clip(args.diff_description || "...", 70));
-			if (args.files?.length) {
-				label += theme.fg("muted", ` (${args.files.length} file${args.files.length > 1 ? "s" : ""})`);
-			}
-			text.setText(label);
-			return text;
+			return renderAgentCall("code_review", args.diff_description || "...", theme, context, fileCount(args.files));
 		},
 
-		renderResult(result: any, { expanded }: { expanded: boolean }, theme: any, context: any) {
-			const container = context?.lastComponent ?? new Container();
-			container.clear();
-			const details = result.details as SingleResult | undefined;
-			if (isBackgroundStub(details)) {
-				renderBackgroundStub(details, container, theme);
-				return container;
-			}
-			if (!details) {
-				const text = result.content[0];
-				container.addChild(new Text(text?.type === "text" ? normalizeForDisplay(text.text) : "(no output)", 0, 0));
-				return container;
-			}
-
-			const output = getFinalOutput(details.messages);
-			const comments = parseReviewMarkdown(output);
-			if (comments.length > 0) {
-				const summary = formatReviewSummary(comments);
-				container.addChild(
-					new Text(theme.fg("accent", summary), 0, 0),
-				);
-			}
-
-			renderAgentTree(details, container, expanded, theme, { label: "code_review", header: "statusOnly" });
-			return container;
-		},
+		renderShell: AGENT_SHELL,
+		renderResult: renderAgentRunResult("code_review", (details) => {
+			const comments = parseReviewMarkdown(getFinalOutput(details.messages));
+			return comments.length > 0 ? formatReviewSummary(comments) : undefined;
+		}),
 	};
 }

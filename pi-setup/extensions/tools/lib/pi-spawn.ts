@@ -8,6 +8,7 @@ import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
 import { interpolatePromptVars, type InterpolateContext } from "./interpolate";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
+import { HOLDER_ENV } from "./file-lock";
 import { READ_ONLY_BASH_ENV } from "./read-only-bash";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./watchdog";
 import { loadAgentModels, modelViolation, type AgentModels } from "./agent-models";
@@ -383,6 +384,7 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		env: {
 			...process.env,
 			PI_READ_COMPACT: "1",
+			...(config.session ? { [HOLDER_ENV]: config.session.id } : {}),
 			// the same list as --tools: system-prompt.ts names exactly these to the child
 			...(requestedTools.length > 0 ? { [SUB_AGENT_TOOLS_ENV]: requestedTools.join(",") } : {}),
 			...(config.readOnlyBash ? { [READ_ONLY_BASH_ENV]: "1" } : {}),
