@@ -5,15 +5,12 @@
  * in this session. enter opens one: its thinking, its tool calls, its tool
  * results, scrollable. ←/→ switch between runs, esc backs out.
  *
- * READ-ONLY. it observes the transcripts the sub-agent tools already attach
- * to their results — no session files are written, no child is resumed, and
- * nothing is sent to a running process.
- *
- * NO CORE PATCHES. everything here is public extension API: `pi.on`,
- * `pi.registerShortcut`, `pi.registerCommand`, `ctx.ui.custom`.
+ * READ-ONLY. it shows the runs the tools extension broadcasts on `pi.events`;
+ * it writes nothing and sends nothing to a running child.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { AGENT_RUNS_CHANNEL, type RunSnapshot } from "../tools/lib/agent-channel";
 import { SubAgentInspector } from "./inspector";
 import { AgentRegistry } from "./registry";
 
@@ -22,14 +19,14 @@ const SHORTCUT = "ctrl+shift+a";
 export default function subAgentInspectorExtension(pi: ExtensionAPI): void {
 	const registry = new AgentRegistry();
 
-	pi.on("tool_execution_start", (event) => {
-		registry.handleStart(event);
+	let unsubscribe: (() => void) | undefined;
+	pi.on("session_start", () => {
+		unsubscribe?.();
+		unsubscribe = pi.events.on(AGENT_RUNS_CHANNEL, (runs) => registry.sync(runs as RunSnapshot[]));
 	});
-	pi.on("tool_execution_update", (event) => {
-		registry.handleUpdate(event);
-	});
-	pi.on("tool_execution_end", (event) => {
-		registry.handleEnd(event);
+	pi.on("session_shutdown", () => {
+		unsubscribe?.();
+		unsubscribe = undefined;
 	});
 
 	async function open(ctx: ExtensionContext): Promise<void> {

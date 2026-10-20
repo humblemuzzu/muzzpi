@@ -12,7 +12,7 @@
  * spec, so it read this file to find the argument shape. see the tool-contract
  * invariants in tool-contract.test.ts, which now fail if that regresses.
  *
- * spawns `pi --mode json` constrained to the 7
+ * spawns a child pi constrained to the 7
  * github tools (read_github, search_github, list_directory_github,
  * list_repositories, glob_github, commit_search, diff). the librarian
  * explores repos thoroughly before providing comprehensive answers.
@@ -24,48 +24,18 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
-import { runSubAgent, toolError } from "./lib/run-sub-agent";
+import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
+import { AgentRuns } from "./lib/agent-runs";
 import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
-import { requireParam } from "./lib/params";
+import { requireParam, stringList } from "./lib/params";
 
 /** canonical name first; the rest are what models actually guess (see lib/params.ts). */
 const LIBRARIAN_PARAM_NAMES = ["query", "task", "prompt", "question", "description"] as const;
 
-/**
- * accept what models actually send for `repository`.
- *
- * the schema asks for an array, but a model given a single repo frequently
- * sends a bare string, and some providers deliver arrays JSON-stringified
- * (the exact failure that made pi-tasks' array params unusable). tolerating
- * both here is cheaper than a validation error the model has to guess its way
- * out of.
- */
-export function normalizeRepositories(input: unknown): string[] {
-	if (input == null) return [];
-	let value = input;
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (trimmed.startsWith("[")) {
-			try {
-				value = JSON.parse(trimmed);
-			} catch {
-				return trimmed ? [trimmed] : [];
-			}
-		} else {
-			return trimmed ? [trimmed] : [];
-		}
-	}
-	if (!Array.isArray(value)) return [];
-	return value
-		.filter((r): r is string => typeof r === "string")
-		.map((r) => r.trim())
-		.filter((r) => r.length > 0);
-}
-
 export interface LibrarianConfig {
 	systemPrompt?: string;
 	models?: AgentModels;
+	runs?: AgentRuns;
 }
 
 /** github tools are extension tools, not builtins. */
@@ -92,6 +62,7 @@ export function librarianAllowlist(): string[] {
 
 export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
+	const runs = config.runs ?? new AgentRuns();
 	return {
 		name: "librarian",
 		label: "Librarian",
@@ -116,6 +87,7 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 			"- Provide context about what you're trying to achieve\n" +
 			"- The Librarian explores thoroughly before providing comprehensive answers\n" +
 			"- When getting an answer from the Librarian, show it to the user in full, do not summarize it.\n\n" +
+			runs.backgroundNote +
 			'Example: librarian({ repository: ["xai-org/grok-build"], query: "how are sub-agent results rendered in the TUI?" })',
 
 		parameters: Type.Object({
@@ -136,40 +108,42 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 					description: "Optional context about what you're trying to achieve or background information.",
 				}),
 			),
+			...runs.params("librarian"),
 			...modelParams(models, "librarian"),
 		}),
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const resolved = requireParam(params as Record<string, unknown>, LIBRARIAN_PARAM_NAMES, "librarian");
 			if ("error" in resolved) return resolved.error;
-			const route = resolveRoute(models, "librarian", params, ctx.modelRegistry);
-			if ("error" in route) return toolError(route.error);
 
 			const parts: string[] = [resolved.value];
 			// repository is structured input; the sub-agent only reads prose, so
 			// surface it explicitly rather than hoping the query mentions it.
-			const repos = normalizeRepositories(params.repository);
+			const repos = stringList(params.repository);
 			if (repos.length > 0) {
 				parts.push(`\nRepositories to explore:\n${repos.map((r) => `- ${r}`).join("\n")}`);
 			}
 			if (params.context) parts.push(`\nContext: ${params.context}`);
 
-			return runSubAgent({
-				agent: "librarian",
-				label: resolved.value,
-				working: "(exploring...)",
+			return runs.launch(
+				{
+					agent: "librarian",
+					label: resolved.value,
+					working: "(exploring...)",
+					models,
+					params: params as Record<string, unknown>,
+					spawn: {
+						task: parts.join("\n"),
+						builtinTools: BUILTIN_TOOLS,
+						extensionTools: EXTENSION_TOOLS,
+						systemPromptBody: config.systemPrompt,
+					},
+				},
+				toolCallId,
 				ctx,
 				signal,
 				onUpdate,
-				spawn: {
-					task: parts.join("\n"),
-					model: route.model,
-					thinkingLevel: route.thinking,
-					builtinTools: BUILTIN_TOOLS,
-					extensionTools: EXTENSION_TOOLS,
-					systemPromptBody: config.systemPrompt,
-				},
-			});
+			);
 		},
 
 		renderCall(args: any, theme: any, context: any) {

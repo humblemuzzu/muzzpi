@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createBashTool } from "./bash";
+import { SUB_AGENT_TOOLS_ENV } from "./lib/sub-agent-prompt";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bash-approval-"));
 const rulesFile = path.join(dir, "permissions.json");
@@ -21,7 +22,10 @@ fs.writeFileSync(
 process.env.PI_PERMISSIONS_FILE = rulesFile;
 process.env.PI_APPROVALS_LOG = logFile;
 process.env.PI_EXT_CONFIG_PATH = approvalsOn;
+const childTools = process.env[SUB_AGENT_TOOLS_ENV];
+delete process.env[SUB_AGENT_TOOLS_ENV];
 afterAll(() => {
+	if (childTools !== undefined) process.env[SUB_AGENT_TOOLS_ENV] = childTools;
 	delete process.env.PI_PERMISSIONS_FILE;
 	delete process.env.PI_APPROVALS_LOG;
 	delete process.env.PI_EXT_CONFIG_PATH;
@@ -91,6 +95,18 @@ describe("bash asks before a command that needs approval", () => {
 		expect(text(result)).toEndWith(`touch ${marker}`);
 		expect(fs.existsSync(marker)).toBe(false);
 		expect(lastLog()).toMatchObject({ decision: "no-ui", command: `touch ${marker}`, session: "approval-test", hosts: [] });
+	});
+
+	test("inside a sub-agent nobody is asked, though its RPC mode has a UI", async () => {
+		process.env[SUB_AGENT_TOOLS_ENV] = "bash";
+		try {
+			const result = await run(`touch ${marker}`, ctx(true));
+			expect(text(result)).toContain("this needs the user's approval");
+			expect(prompts).toHaveLength(0);
+			expect(fs.existsSync(marker)).toBe(false);
+		} finally {
+			delete process.env[SUB_AGENT_TOOLS_ENV];
+		}
 	});
 
 	test("approved, it runs", async () => {

@@ -14,6 +14,7 @@
  */
 
 import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
+import { matchesKey } from "@mariozechner/pi-tui";
 import { createReadTool, NORMAL_LIMITS, COMPACT_LIMITS } from "./read";
 import { createLsTool } from "./ls";
 import { createEditTool, createWriteTool } from "./edit-write";
@@ -35,6 +36,10 @@ import { createConfiguredWebSearchTool } from "./web-search";
 import { createSearchSessionsTool } from "./search-sessions";
 import { createReadSessionTool } from "./read-session";
 import { createAskTool } from "./ask";
+import { createAgentsTool, renderAgentResult } from "./agents";
+import { AGENT_RESULT_TYPE, AGENT_RUNS_CHANNEL } from "./lib/agent-channel";
+import { AGENT_RUN_ENTRY, AgentRuns } from "./lib/agent-runs";
+import { SUB_AGENT_TOOLS_ENV } from "./lib/sub-agent-prompt";
 import { readAgentPrompt } from "./lib/pi-spawn";
 import { AGENT_MODELS_FILE, auditAgentModels, loadAgentModels } from "./lib/agent-models";
 import {
@@ -64,6 +69,12 @@ export default function (pi: ExtensionAPI) {
 	const limits = process.env.PI_READ_COMPACT ? COMPACT_LIMITS : NORMAL_LIMITS;
 	// read once: the schema enums and the resolver must agree for the whole session.
 	const models = loadAgentModels();
+	const runs = new AgentRuns({
+		notify: (content, details, wake) =>
+			pi.sendMessage({ customType: AGENT_RESULT_TYPE, content, display: true, details }, wake ? { triggerTurn: true, deliverAs: "steer" } : {}),
+		broadcast: (snapshot) => pi.events.emit(AGENT_RUNS_CHANNEL, snapshot),
+		record: (entry) => pi.appendEntry(AGENT_RUN_ENTRY, entry),
+	});
 
 	pi.registerTool(createReadTool(limits));
 	pi.registerTool(createLsTool(limits));
@@ -90,29 +101,34 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createFinderTool({
 		systemPrompt: readAgentPrompt("agent.amp.finder.md"),
 		models,
+		runs,
 	}));
 	pi.registerTool(createOracleTool({
 		systemPrompt: readAgentPrompt("agent.amp.oracle.md"),
 		models,
+		runs,
 	}));
-	// delegate replaced task.ts: same spawn, plus resumable children via
-	// continueId. Task always ran --no-session, so every child was a dead end.
-	pi.registerTool(createDelegateTool({ models }));
+	pi.registerTool(createDelegateTool({ models, runs }));
 	// chad is delegate's read-only counterpart: no edit/write, and its bash
 	// runs under the read-only policy in lib/read-only-bash.ts.
 	pi.registerTool(createChadTool({
 		systemPrompt: readAgentPrompt("agent.amp.chad.md"),
 		models,
+		runs,
 	}));
 	pi.registerTool(createLibrarianTool({
 		systemPrompt: readAgentPrompt("agent.amp.librarian.md"),
 		models,
+		runs,
 	}));
 	pi.registerTool(createCodeReviewTool({
 		systemPrompt: readAgentPrompt("prompt.amp.code-review-system.md"),
 		reportFormat: readAgentPrompt("prompt.amp.code-review-report.md"),
 		models,
+		runs,
 	}));
+	pi.registerTool(createAgentsTool(runs));
+	pi.registerMessageRenderer(AGENT_RESULT_TYPE, renderAgentResult);
 	pi.registerTool(createReadWebPageTool({
 		systemPrompt: readAgentPrompt("prompt.amp.read-web-page.md"),
 		models,
@@ -128,14 +144,28 @@ export default function (pi: ExtensionAPI) {
 	// herdr's own pi extension listens for this; without herdr nobody does.
 	setBlockedReporter((active, label) => pi.events.emit("herdr:blocked", { active, label }));
 
-	pi.on("session_start", (_event, ctx) => {
-		if (!ctx.hasUI) return;
+	let stopDetachKey: (() => void) | undefined;
+	pi.on("session_start", (event, ctx) => {
+		runs.restore(ctx.sessionManager.getBranch());
+		const handoff = event.reason === "reload" ? AgentRuns.takeReloadHandoff() : undefined;
+		if (handoff) runs.adoptReload(handoff);
+		if (ctx.mode === "tui") {
+			// not a registered shortcut: Ctrl+B stays the editor's cursor-left unless a blocking agent runs
+			stopDetachKey = ctx.ui.onTerminalInput((data) => (matchesKey(data, "ctrl+b") && runs.detachForeground() ? { consume: true } : undefined));
+		}
+		if (!ctx.hasUI || process.env[SUB_AGENT_TOOLS_ENV]?.trim()) return;
 		try {
 			const problems = auditAgentModels(models, ctx.modelRegistry);
 			if (problems.length > 0) {
 				ctx.ui.notify(`agent-models (${AGENT_MODELS_FILE}):\n${problems.map((p) => `  • ${p}`).join("\n")}`, "warning");
 			}
 		} catch {}
+	});
+
+	pi.on("session_shutdown", async (event) => {
+		stopDetachKey?.();
+		stopDetachKey = undefined;
+		await runs.shutdown(event.reason === "reload");
 	});
 
 	// github tools — used by librarian sub-agent, also available to main agent

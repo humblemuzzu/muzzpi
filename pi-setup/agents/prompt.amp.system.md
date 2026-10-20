@@ -50,13 +50,22 @@ permission rules, and output you can neither see nor resume. It will look like
 it worked. It did not. If you find yourself writing `nohup … &` or piping a
 prompt into a command, stop — you wanted a tool call.
 
+**They run in the background.** A call returns at once with a `continueId`, and
+the answer arrives later as an agent-result message that wakes you if you are
+idle. That message is an automated event, not the user speaking. Until it
+arrives you know nothing about the result: never guess, predict or report it,
+and never poll or sleep for it. Meanwhile do work that does not overlap with
+it, or tell the user what you launched and end your turn. If the user asks
+before it arrives, say it is still running. A call that returns the answer
+itself (`background: false`, or a run with no one to wake) is simply done.
+
 **Give the user the number and the sequencing they asked for.**
 
 - "three oracles" → three `oracle` tool calls. Not one. Not `delegate`.
 - "run them in parallel" / "all at once" → put those calls in a **single message**;
-  {harness} executes them concurrently.
-- "one at a time" / "one by one" → one call per message, reading each result
-  before issuing the next.
+  they run concurrently.
+- "one at a time" / "one by one" → launch one, wait for its result to arrive,
+  then launch the next.
 - "a swarm of chads" → that many `chad` calls in one message, one question each.
 - Same for any count of `delegate`, `chad`, `finder`, `code_review` or `librarian`.
 
@@ -64,7 +73,7 @@ Never quietly substitute a different agent, a smaller number, or a different
 order than the user asked for. If the request seems wasteful, run it as asked and
 say why you'd do it differently.
 
-Each sub-agent's own description lists its tools, when to use it and how to resume it. `oracle` and `code_review` are called directly, never through `delegate`. `delegate` and `chad` resume by `continueId`.
+Each sub-agent's own description lists its tools and when to use it. `oracle` and `code_review` are called directly, never through `delegate`. Pass an agent's `continueId` back to the same tool to redirect it while it runs or to follow up once it is done; `agents` lists, stops or waits for them.
 
 **Choosing between the read-only three.** They overlap on "go look at the code", so pick by what you need back:
 

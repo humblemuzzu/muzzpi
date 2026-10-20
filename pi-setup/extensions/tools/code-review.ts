@@ -17,9 +17,9 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
-import { runSubAgent, toolError } from "./lib/run-sub-agent";
-import { clip, getFinalOutput, renderAgentTree, type SingleResult } from "./lib/sub-agent-render";
+import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
+import { AgentRuns, continueIdOf } from "./lib/agent-runs";
+import { clip, getFinalOutput, isBackgroundStub, renderAgentTree, renderBackgroundStub, type SingleResult } from "./lib/sub-agent-render";
 import { normalizeForDisplay } from "./lib/box-format";
 import { requireParam } from "./lib/params";
 
@@ -53,6 +53,7 @@ export interface CodeReviewConfig {
 	systemPrompt?: string;
 	reportFormat?: string;
 	models?: AgentModels;
+	runs?: AgentRuns;
 }
 
 // --- Markdown parsing ---
@@ -190,6 +191,7 @@ export function formatReviewSummary(comments: ReviewComment[]): string {
 
 export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
+	const runs = config.runs ?? new AgentRuns();
 	return {
 		name: "code_review",
 		label: "Code Review",
@@ -201,6 +203,7 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 			"the full diff, which is then reviewed. When using this tool, do not invoke `git diff` " +
 			"or any other tool to generate the diff but just pass a natural language description " +
 			"of how to compute the diff in the diff_description argument.\n\n" +
+			runs.backgroundNote +
 			'Example: code_review({ diff_description: "uncommitted changes on the current branch vs HEAD" })',
 
 		parameters: Type.Object({
@@ -223,18 +226,17 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 					description: "Additional instructions to guide the review agent.",
 				}),
 			),
+			...runs.params("code_review"),
 			...modelParams(models, "code_review"),
 		}),
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const resolved = requireParam(
 				params as Record<string, unknown>,
 				CODE_REVIEW_PARAM_NAMES,
 				"code_review",
 			);
 			if ("error" in resolved) return resolved.error;
-			const route = resolveRoute(models, "code_review", params, ctx.modelRegistry);
-			if ("error" in route) return toolError(route.error);
 
 			const parts: string[] = [`Review the following diff:\n${resolved.value}`];
 			if (params.files && params.files.length > 0) {
@@ -244,24 +246,27 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 				parts.push(`\nAdditional review instructions:\n${params.instructions}`);
 			}
 
-			return runSubAgent({
-				agent: "code_review",
-				label: resolved.value,
-				working: "(reviewing...)",
-				returnImages: true,
+			return runs.launch(
+				{
+					agent: "code_review",
+					label: resolved.value,
+					working: "(reviewing...)",
+					returnImages: true,
+					models,
+					params: params as Record<string, unknown>,
+					spawn: {
+						task: parts.join("\n"),
+						builtinTools: BUILTIN_TOOLS,
+						extensionTools: EXTENSION_TOOLS,
+						systemPromptBody: config.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+						followUp: continueIdOf(params as Record<string, unknown>) ? undefined : config.reportFormat || DEFAULT_REPORT_FORMAT,
+					},
+				},
+				toolCallId,
 				ctx,
 				signal,
 				onUpdate,
-				spawn: {
-					task: parts.join("\n"),
-					model: route.model,
-					thinkingLevel: route.thinking,
-					builtinTools: BUILTIN_TOOLS,
-					extensionTools: EXTENSION_TOOLS,
-					systemPromptBody: config.systemPrompt || DEFAULT_SYSTEM_PROMPT,
-					followUp: config.reportFormat || DEFAULT_REPORT_FORMAT,
-				},
-			});
+			);
 		},
 
 		renderCall(args: any, theme: any, context: any) {
@@ -278,6 +283,10 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 			const container = context?.lastComponent ?? new Container();
 			container.clear();
 			const details = result.details as SingleResult | undefined;
+			if (isBackgroundStub(details)) {
+				renderBackgroundStub(details, container, theme);
+				return container;
+			}
 			if (!details) {
 				const text = result.content[0];
 				container.addChild(new Text(text?.type === "text" ? normalizeForDisplay(text.text) : "(no output)", 0, 0));

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { AGENT_RESULT_TYPE } from "../../tools/lib/agent-channel";
 import { estimate } from "../pricing";
 import {
 	addAgentRun,
@@ -24,9 +25,10 @@ import type { FileSpec, LineEnv } from "./files";
 
 /**
  * pi's own sessions. Main-session spend comes from assistant `usage`, which
- * pi prices itself. Sub-agent spend comes from the parent's toolResult
- * `details.usage`: it matches the child's own file and also covers agents
- * that never persist one. A fork copies its parent's entries with their
+ * pi prices itself. Sub-agent spend comes from the parent's record of each run:
+ * a blocking call's toolResult `details.usage`, or the `details.runs` of a
+ * background run's agent-result message (or of the `agents wait` that took it).
+ * A fork copies its parent's entries with their
  * original timestamps, so entries older than the fork header are skipped
  * while the parent exists. pi records $0 for subscription and imported
  * turns; those are priced from the catalog like every other harness.
@@ -45,6 +47,15 @@ function agentFailed(msg: any, details: any): boolean {
 function runUsage(details: any) {
 	const u = details.usage ?? {};
 	return { ...u, cost: u.cost?.total ?? u.cost ?? details.cost };
+}
+
+function addRuns(rec: SessionRecord, day: string, runs: unknown): void {
+	if (!Array.isArray(runs)) return;
+	for (const run of runs) {
+		if (!isAgentDetails(run)) continue;
+		addAgentRun(rec, day, run.agent, run.model, runUsage(run), run.status !== "done", num(run.durationMs));
+		if (Array.isArray(run.messages)) walkChild(rec, day, run.messages, 1);
+	}
 }
 
 /** A child transcript inside `details.messages`: its tool calls count as agent tool use, its sub-agents as runs. */
@@ -113,6 +124,8 @@ function onToolResult(rec: SessionRecord, msg: any, ms: number): void {
 	if (isAgentDetails(d)) {
 		addAgentRun(rec, day, tool, d.model, runUsage(d), agentFailed(msg, d), dur);
 		if (Array.isArray(d.messages)) walkChild(rec, day, d.messages, 1);
+	} else if (Array.isArray(d?.runs)) {
+		addRuns(rec, day, d.runs);
 	} else if (msg.usage && typeof msg.usage === "object") {
 		addAgentRun(rec, day, tool, undefined, { ...msg.usage, cost: msg.usage.cost?.total ?? msg.usage.cost }, false, 0, 0);
 	}
@@ -166,6 +179,9 @@ export function piLine(rec: SessionRecord, line: string, env: Pick<LineEnv, "par
 			if (counted && goal?.goalId) rec.goals[goal.goalId] = [String(goal.status ?? "active"), num(goal.usage?.activeSeconds), ms];
 			return;
 		}
+		case "custom_message":
+			if (counted && entry.customType === AGENT_RESULT_TYPE) addRuns(rec, dayKey(ms), entry.details?.runs);
+			return;
 		case "message":
 			break;
 		default:

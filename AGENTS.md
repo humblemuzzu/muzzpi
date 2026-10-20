@@ -232,7 +232,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `theme-studio/` | `/studio`, `/theme`, Ctrl+Shift+K — live pi + Ghostty theme/font/cursor/opacity preview. Esc reverts, Enter keeps. Writes the Ghostty config at `PI_STUDIO_GHOSTTY_CONFIG` or the default path |
 | `editor/` | custom box-drawing editor, labels, clipboard image paste |
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border |
-| `subagent-inspector/` | Ctrl+Shift+A / `/subagents` — sub-agent transcripts |
+| `subagent-inspector/` | Ctrl+Shift+A / `/subagents` — sub-agent transcripts, from the tools extension's `muzzpi:agent-runs` broadcast |
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
@@ -318,26 +318,32 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
 
 ### Sub-agents
 
-- **One spawn path.** Every spawning tool builds its task and `--tools` list,
-  then calls `lib/run-sub-agent.ts` → `lib/pi-spawn.ts`; progress, error
-  mapping and the result footer live there once.
+- **One spawn path:** the six agent tools go through `lib/agent-runs.ts` (queue of 16,
+  background, notifications), `read_web_page`/`read_session` through `run-sub-agent.ts`; both
+  start the child with `pi-spawn.ts` `startChild`, in RPC mode (task over stdin, closed on
+  `agent_settled`). RPC gives a child `hasUI`: its dialogs are answered cancelled, and
+  `approval.ts` treats `PI_SUBAGENT_TOOLS` as no UI.
+- **Agent tools run in the background** only where a result can wake the caller (TUI or RPC
+  parent; never `-p`, a child or a codemode script). Results come back once, as one
+  `agent-result` message per batch (`triggerTurn` + `deliverAs: "steer"`) unless `agents
+  wait`/`stop` took them. Esc does not stop them. `session_shutdown` does, and adds unreported
+  results to the session unwoken; on `/reload` the new load continues them (`takeReloadHandoff`).
+- **All six persist `<agent>-<uuid>` sessions**; `unresumableReason` refuses another agent's id
+  (pre-`AGENT_NAMED_IDS_SINCE` ids are all `delegate-`, so chad may resume those). `continueId`
+  steers a running run and continues a finished one, after `session-repair.ts` gives every call
+  a killed child left open an error result (pi's own orphan placeholder says nothing).
 - **Models come from `pi-setup/agent-models.json` only** — see Sub-agent models.
-- **Persisted ids are `<agent>-<uuid>`**; `unresumableReason` refuses another agent's id. Sessions
-  started before `AGENT_NAMED_IDS_SINCE` are all `delegate-`, so chad may resume those.
 - **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only
   agent→agent edge is `delegate → finder`, depth ≤ 2. chad has no
   `chad`/`delegate` (a swarm that spawns swarms is a fork bomb) and no
   `oracle`/`finder`/`librarian` (it already has their tools).
 - **Don't use `--no-tools`** for sub-agents: it empties the registry and
   nothing can be re-activated.
-- **Children load only `CHILD_EXTENSIONS`** (`pi-spawn.ts`: tools,
-  system-prompt, guardrails, anthropic-sub) via `--no-extensions -e`, plus
-  `-e builtin:codemode` when the child's tools include `codemode` (chad,
-  delegate, code_review): `--no-extensions` also drops pi's built-ins. A
-  script reaches only the child's listed tools, through the same hooks. An
-  extension a child must have goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1`
-  restores the full set. `verify-patches.sh` fails if pi changes what
-  `--no-extensions` keeps.
+- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub)
+  via `--no-extensions -e`, plus `-e builtin:codemode` when their tools include `codemode` (a
+  script reaches only the child's tools; `--no-extensions` drops pi's built-ins too). An
+  extension a child needs goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1` restores the full
+  set; `verify-patches.sh` fails if pi changes what `--no-extensions` keeps.
 
 ### chad — read-only
 
@@ -398,22 +404,18 @@ back; drop the override only once pi stops sending Claude strict.
 |---|---|---|
 | L1 | **`timeout` required**, schema-bounded 1–600s | declared budget |
 | L2 | idle kill: no output **and** no CPU for 300s | a hung command |
-| L3 | `piSpawn` stall watchdog: no child output for 900s | sub-agent children |
+| L3 | `startChild` stall watchdog: no child output for 900s | sub-agent children |
 
 Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables),
 `PI_SPAWN_STALL_SEC`, `PI_BASH_CPU_LIVENESS`.
 
 - **CPU liveness can only keep a command alive, never kill it**; `proc-cpu.ts`
   returns `undefined` on failure, degrading to output-only.
-- The idle timer runs from t=0 (pipes block-buffer) and is stamped on raw chunk
-  arrival. The machine-sleep guard (`SLEEP_JUMP_MS` in `watchdog.ts`) is checked
-  first and wins.
-- Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild
-  holds stdout. The child is **not** spawned `detached` (Ctrl+C must reach it).
-- A stalled child must be **relaunched, never resumed**: it left a `tool_use`
-  with no `tool_result`, which is a provider 400 on replay.
-- 900s sits above pi's own HTTP idle (300s) + retry; re-check those before
-  shrinking it.
+- The idle timer runs from t=0 (pipes block-buffer), stamped on raw chunk arrival; the
+  machine-sleep guard (`SLEEP_JUMP_MS`, `watchdog.ts`) is checked first and wins.
+- Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild holds stdout.
+  The child is **not** spawned `detached` (Ctrl+C must reach it). 900s sits above pi's HTTP
+  idle (300s) + retry; re-check those before shrinking it.
 - **bash keeps pi's codemode contract**: `structuredContent` on every exit code
   (a script's `grep` miss is data, not a throw); timeout/idle/abort/signal stay
   errors. The `tool_result` scrub hook must return `structuredContent` too —
@@ -440,15 +442,11 @@ in `vision.test.ts`). Tiers: standard 1568px/1568 tokens, high-res (Claude
   sips ignores EXIF orientation, so `orient()` applies it.
 - **Chromium returns BLANK past 16384px** without erroring; `MAX_RENDERABLE_HEIGHT`
   clips and reports it. Full-page captures scroll through once first, or lazy content is missing.
-- macOS: every tab is its own `NSWindow`; `CGWindowListCopyWindowInfo` option
-  `0`, never `1`. A window is captured where it is first; only after a failure,
-  or for a Stage Manager thumbnail (it captures as a tiny preview), is its app
-  activated, **by pid**, and focus is handed back only if that app still has
-  it. `port-harness/screenshot-live.ts` is the only check against real macOS:
-  run it after touching `lib/capture.ts`. Screen Recording must be granted to
-  the terminal running pi.
-- `permissions.json` blocks the capture binary in bash but deliberately does
-  not match `sips`.
+- macOS: every tab is its own `NSWindow`; `CGWindowListCopyWindowInfo` option `0`, never `1`.
+  A window is captured where it is; only after a failure, or for a Stage Manager thumbnail, is
+  its app activated, **by pid**, and focus handed back only if it still has it. Run
+  `port-harness/screenshot-live.ts` after touching `lib/capture.ts` (needs Screen Recording).
+- `permissions.json` blocks the capture binary in bash but deliberately not `sips`.
 
 ## TUI width — the invariant
 
@@ -458,13 +456,11 @@ uncaughtException, which kills pi. `lib/box-format.ts` `normalizeForDisplay()`
 is the render chokepoint for box and sub-agent rendering (display only — model
 text is never modified).
 
-1. **Undercount → smear.** pi-tui measures grapheme clusters; terminals advance
-   per spacing codepoint. The width patch makes `graphemeWidth()` overcount,
-   never undercount. Re-apply on every install.
-2. **Control char in a single-line sink → smear.** A `\n` is width-0 to every
-   check and still moves the cursor. Editor labels (`flattenLabelText`), widget
-   rows (`flattenSegmentText`) and any truncated summary must flatten.
-   Multi-row `renderCall` output is fine.
+1. **Undercount → smear.** pi-tui measures grapheme clusters; terminals advance per spacing
+   codepoint. The width patch makes `graphemeWidth()` overcount, never undercount.
+2. **Control char in a single-line sink → smear.** A `\n` is width-0 to every check yet moves
+   the cursor: editor labels (`flattenLabelText`), widget rows (`flattenSegmentText`) and any
+   truncated summary must flatten. Multi-row `renderCall` output is fine.
 
 If it returns: `apply-pi-tui-width-patch.mjs --check` first, then
 `pi-setup/render-repro/`, then hunt for a control char in a single-line string.
@@ -476,27 +472,19 @@ If it returns: `apply-pi-tui-width-patch.mjs --check` first, then
 spawning tool a default `model` + `thinking`. Changing a default is a one-line
 edit there, deployed by `install.sh`, read at session start.
 
-- Every spawning tool takes optional `model` (enum of the names) and `thinking`
-  (pi's 7 levels; "med" etc. accepted). `lib/agent-models.ts` resolves them;
-  the parent learns the names from the `{agent_models}` prompt section.
-- **The enum is enforced during decoding on xAI**: a parent cannot emit a name
-  outside the list and will pick the nearest one. The prompt line forbidding
-  substitution is what stops that; keep it.
-- **pi runs an unknown `--model` anyway** (warning, then a made-up id), so the
-  resolver checks `modelRegistry.find` + `hasConfiguredAuth` before spawning. It
-  cannot see an expired token or a lapsed sub; those come back as the child's
-  error, with the footer naming the model. A failing **default** drops
-  `--model` (the child runs on pi's default, so a missing `DEEPSEEK_API_KEY`
-  degrades instead of breaking five agents); a failing **explicit** model is
-  refused.
-- **pi's `--model` resolver can fall back across providers** (to another
-  provider's look-alike id when the named one is unauthenticated or missing), so
-  `pi-spawn.ts` SIGKILLs a child whose first assistant message names any
-  provider/model other than the one requested, or, with none requested, one not
-  in `agent-models.json` (`modelViolation`). Keep every Claude id `anthropic/`.
-- **Ids must be provider-qualified**; the loader refuses a bare one. No default →
-  `--model` omitted → pi's default. A `continueId` resume skips the defaults:
-  pi restores the child's own model.
+- Every spawning tool takes optional `model` (enum of the names) and `thinking` (pi's 7 levels;
+  "med" etc. accepted), resolved by `lib/agent-models.ts`; the parent learns the names from
+  the `{agent_models}` prompt section.
+- **The enum is enforced during decoding on xAI**: a parent cannot emit a name outside the
+  list and picks the nearest one. The prompt line forbidding substitution stops that; keep it.
+- **pi runs an unknown `--model` anyway**, so the resolver checks `modelRegistry.find` +
+  `hasConfiguredAuth` first (an expired token still comes back as the child's error). A failing
+  **default** drops `--model` (pi's default runs, so a missing `DEEPSEEK_API_KEY` degrades);
+  a failing **explicit** model is refused.
+- **pi's `--model` resolver can fall back to another provider's look-alike**, so `pi-spawn.ts`
+  SIGKILLs a child whose first assistant message names another provider/model than requested,
+  or, with none requested, one not in `agent-models.json` (`modelViolation`). Keep every Claude
+  id `anthropic/`. Ids must be provider-qualified; a `continueId` resume keeps the child's model.
 
 ## Local models
 
@@ -504,13 +492,11 @@ edit there, deployed by `install.sh`, read at session start.
 `llama-server --version` first if local tool calling goes strange; compare the
 build number (`0.6.0 (build 11429)`).
 
-pi's own `/llama` uses provider `llama.cpp` (needs `/login llama.cpp`); ours is
-`/local` + provider `llama-local` in models.json (no login, always listed).
-`/local [start|stop|restart|unload|status|logs]`, no auto-start. For
-`llama-local` and `llama.cpp` only, `local-model.ts` **replaces** the system
-prompt with a short tool crib and skips the rules section. **Do not widen those
-two provider gates.** Sub-agents keep the short child prompt. Local models loop
-for minutes on self-directed work — always time them out.
+pi's `/llama` uses provider `llama.cpp` (`/login llama.cpp`); ours is `/local` + provider
+`llama-local` (no login, always listed), `/local [start|stop|restart|unload|status|logs]`, no
+auto-start. For those two providers only, `local-model.ts` **replaces** the system prompt with a
+short tool crib and skips the rules section. **Do not widen those two provider gates.** Local
+models loop for minutes on self-directed work — always time them out.
 
 Gotchas: it's `ctx.hasUI`, not `ctx.canPrompt` (undefined, i.e. falsy, in a
 real TUI); `toLocaleString()` follows the en-IN system locale — always pass
@@ -529,16 +515,11 @@ machinery mapped to pi tools or cut; every subagent they spawn is read-only.
 
 ## Agent mention directives
 
-`@oracle @finder @codereview @task @chad` → hidden `display: false` directive
-telling the model to call that tool (`codereview` → `code_review`, `task` →
-`delegate`); data mentions add their context the same way. The message is stored
-once after the user's (`before_agent_start`; queued just ahead of it while
-streaming), never re-injected from `context`.
-
-- **Don't remove the explicit `import "./tools/lib/mentions/agent-source.js"`**
-  in `mentions.ts` — the barrel `export *` doesn't guarantee evaluation of a
-  module with no named exports, and the sources register on load.
-- Don't add `/value` to agent mentions; the `@oracle` text is not stripped.
+`@oracle @finder @codereview @task @chad` → hidden `display: false` directive to call that tool
+(`codereview` → `code_review`, `task` → `delegate`); data mentions add context the same way,
+stored once after the user's message (`before_agent_start`), never re-injected from `context`.
+**Keep the explicit `import "./tools/lib/mentions/agent-source.js"`** in `mentions.ts` (the
+barrel `export *` may not evaluate it). Don't add `/value` to agent mentions.
 
 ## Update workflow
 
@@ -547,11 +528,11 @@ streaming), never re-injected from `context`.
    core patch. It and `install.sh` refuse a pi whose stock patched files (listed
    once, in `pi-core-patches/patches.sh`) differ from `base-version`'s.
 1. **`bash pi-setup/verify-patches.sh`** — always first.
-2. **Grep our own CLI call sites.** An import-level audit cannot see a change in
-   how pi reads the arguments `pi-spawn.ts` passes (`--model --thinking --tools
-   --mode --session-id`); pi 0.84's #7327 silently killed every sub-agent that
-   way. When a release touches model resolution, tool filtering or CLI
-   arguments, call one real sub-agent before declaring it clean.
+2. **Grep our own CLI call sites.** An import-level audit cannot see a change in how pi reads
+   the arguments `pi-spawn.ts` passes (`--model --thinking --tools --mode --session-id`) or the
+   RPC records it uses (`prompt`+`streamingBehavior`, `abort`, `agent_settled`, dialog requests);
+   pi 0.84's #7327 silently killed every sub-agent that way. When a release touches model
+   resolution, tool filtering, CLI arguments or RPC, call one real sub-agent before declaring it clean.
 3. **pi core update** → re-derive the 4 core patches against the new stock
    files (never blind-copy; see `pi-migrations.md`) + the width patch, then
    rebuild (`update-pi.sh` does). The `@mariozechner/*` compat aliases will

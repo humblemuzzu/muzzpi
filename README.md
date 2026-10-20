@@ -7,7 +7,7 @@ that research, review and build in parallel. Web, GitHub and screenshot tools.
 Edits you can undo. A TUI built for all-day sessions. And a pi that starts as
 fast as stock, with every patch inside.
 
-**34** tools · **6** sub-agents · **19** MCP servers · **14** skills ·
+**35** tools · **6** sub-agents · **19** MCP servers · **14** skills ·
 **0.27 s** to a ready prompt · on stock pi **1.3.0**
 
 ```bash
@@ -130,10 +130,15 @@ Pick by what you need back:
 | `finder` | file paths and line ranges | DeepSeek Flash |
 | `chad` | an answer with `path:line` evidence, verified vs inferred | DeepSeek Flash |
 | `oracle` | one verdict, its trade-offs and effort | Sonnet 5.5 |
-| `delegate` | finished work, resumable by `continueId` | Sonnet 5.5 |
+| `delegate` | finished work | Sonnet 5.5 |
 | `librarian` | how code works across GitHub repos you have not cloned | DeepSeek Flash |
 | `code_review` | a structured review of a diff described in plain words | Sonnet 5.5 |
 
+- **They run in the background.** A call returns at once and the answer
+  arrives as a message that wakes the main agent; agents that finish together
+  arrive as one. Pass a `continueId` back to redirect a running agent or to
+  follow up a finished one; `agents` lists, stops or waits for them, and
+  `Ctrl+B` sends a blocking call to the background.
 - **Say it, get it.** *"Three chads on deepseek flash, medium thinking, in
   parallel"* runs exactly that. Models live in one file,
   [`agent-models.json`](pi-setup/agent-models.json); a name not on it is refused,
@@ -248,7 +253,7 @@ mentions a token stays readable.
 |---|---|
 | Files | `read` · `edit` · `write` · `undo_edit` · `redo_edit` · `grep` · `find` · `ls` · `format_file` |
 | Shell | `bash` · `codemode` |
-| Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `code_review` |
+| Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `code_review` · `agents` |
 | Web | `web_search` · `read_web_page` |
 | GitHub | `read_github` · `search_github` · `list_directory_github` · `list_repositories` · `glob_github` · `commit_search` · `diff` |
 | Screen | `screenshot` |
@@ -371,7 +376,7 @@ muzzpi/
 ├── install.sh              ./install.sh pi | ghostty
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
-│   ├── extensions/         18 extensions; tools/ holds the 30 tools
+│   ├── extensions/         18 extensions; tools/ holds the 31 tools
 │   ├── agents/             system prompt, working rules, sub-agent prompts
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do

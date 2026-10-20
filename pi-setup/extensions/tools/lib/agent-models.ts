@@ -266,7 +266,7 @@ export function auditAgentModels(config: AgentModels, catalog: ModelCatalog): st
 export function modelParams(config: AgentModels, agent: SubAgent) {
 	const preset = config.agents[agent] ?? {};
 	const names = Object.keys(config.models);
-	const onResume = agent === "delegate" || agent === "chad" ? " A continueId resume keeps the child's own." : "";
+	const onResume = agent === "read_session" || agent === "read_web_page" ? "" : " A continueId resume keeps the child's own.";
 	const thinking = Type.Optional(
 		Type.Unsafe<ThinkingLevel>({
 			type: "string",

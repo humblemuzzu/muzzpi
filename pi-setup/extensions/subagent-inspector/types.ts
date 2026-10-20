@@ -23,9 +23,8 @@ export interface AgentUsage {
  * one sub-agent run, as observed from the parent session.
  *
  * `messages` is the child's FULL transcript — including thinking blocks,
- * which the collapsed tool tree deliberately drops. it is delivered to us
- * by the tool's own `details` payload, so no separate session file is
- * involved and nothing extra is written to disk.
+ * which the collapsed tool tree deliberately drops, as the tools
+ * extension's run broadcast carries it.
  */
 export interface AgentEntry {
 	toolCallId: string;

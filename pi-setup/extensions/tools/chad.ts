@@ -26,9 +26,9 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { requireParam, resolveParam } from "./lib/params";
-import { resolveAliases, SUB_AGENT_SESSION_DIR, unresumableReason } from "./lib/pi-spawn";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
-import { runSubAgent, toolError } from "./lib/run-sub-agent";
+import { resolveAliases } from "./lib/pi-spawn";
+import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
+import { AgentRuns } from "./lib/agent-runs";
 import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
 
 /*
@@ -68,10 +68,12 @@ const DESCRIPTION_PARAMS = ["description", "title", "summary"] as const;
 export interface ChadConfig {
 	systemPrompt?: string;
 	models?: AgentModels;
+	runs?: AgentRuns;
 }
 
 export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
+	const runs = config.runs ?? new AgentRuns();
 	return {
 		name: "chad",
 		label: "Chad",
@@ -98,8 +100,9 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 			"- It shares none of your context. Do not refer to earlier conversation.\n" +
 			"- It reports back as Answer / Evidence / Verified vs inferred / Gaps, with path:line " +
 			"citations you can check.\n" +
-			"- To push the same chad further, pass `continueId` from its result rather than " +
+			"- To redirect a running chad or push a finished one further, pass its `continueId` rather than " +
 			"starting a new one — it keeps its full history.\n\n" +
+			runs.backgroundNote +
 			'Example: chad({ prompt: "In /repo, how does the session file get written and what names it? Start from src/session/. Answer with the exact function and path:line.", description: "session file naming" })',
 
 		parameters: Type.Object({
@@ -118,44 +121,34 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 						"Short label for the task, shown to the user. Defaults to the first line of the prompt.",
 				}),
 			),
-			continueId: Type.Optional(
-				Type.String({
-					description:
-						"Resume a previous chad by the continueId returned in its result. The agent keeps its full conversation history.",
-				}),
-			),
+			...runs.params("chad"),
 			...modelParams(models, "chad"),
 		}),
 
-		async execute(_toolCallId, params: any, signal, onUpdate, ctx) {
+		async execute(toolCallId, params: any, signal, onUpdate, ctx) {
 			const prompt = requireParam(params, PROMPT_PARAMS, "chad");
 			if ("error" in prompt) return prompt.error as any;
-			const continueId = resolveParam(params, ["continueId", "continue_id", "sessionId"]);
-			const unresumable = continueId && unresumableReason(continueId, ctx.cwd, "chad");
-			if (unresumable) return toolError(unresumable);
-			const route = resolveRoute(models, "chad", params, ctx.modelRegistry, !!continueId);
-			if ("error" in route) return toolError(route.error);
-
-			return runSubAgent({
-				agent: "chad",
-				label: resolveParam(params, DESCRIPTION_PARAMS) ?? firstLine(prompt.value, "research task"),
-				working: "(researching...)",
-				returnImages: true,
+			return runs.launch(
+				{
+					agent: "chad",
+					label: resolveParam(params, DESCRIPTION_PARAMS) ?? firstLine(prompt.value, "research task"),
+					working: "(researching...)",
+					returnImages: true,
+					models,
+					params,
+					spawn: {
+						task: prompt.value,
+						readOnlyBash: true,
+						builtinTools: BUILTIN_TOOLS,
+						extensionTools: EXTENSION_TOOLS,
+						systemPromptBody: config.systemPrompt,
+					},
+				},
+				toolCallId,
 				ctx,
 				signal,
 				onUpdate,
-				spawn: {
-					task: prompt.value,
-					model: route.model,
-					thinkingLevel: route.thinking,
-					readOnlyBash: true,
-					builtinTools: BUILTIN_TOOLS,
-					extensionTools: EXTENSION_TOOLS,
-					systemPromptBody: config.systemPrompt,
-					// sub-agent directory so resumable chads never clutter /resume.
-					session: { id: continueId, persist: true, dir: SUB_AGENT_SESSION_DIR },
-				},
-			});
+			);
 		},
 
 		renderCall(args: any, theme: any, context: any) {

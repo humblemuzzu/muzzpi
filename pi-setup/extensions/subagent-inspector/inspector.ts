@@ -32,7 +32,7 @@ import {
 	visibleWidth,
 } from "@mariozechner/pi-tui";
 import { normalizeForDisplay } from "../tools/lib/box-format";
-import { formatUsageStats, modelLabel, toolArgSummary } from "../tools/lib/sub-agent-render";
+import { formatDuration, formatUsageStats, modelLabel, toolArgSummary } from "../tools/lib/sub-agent-render";
 import { buildTranscript, type TranscriptNode } from "./transcript";
 import type { AgentEntry } from "./types";
 
@@ -58,19 +58,8 @@ function bodyRows(): number {
 	return Math.max(MIN_BODY_ROWS, Math.min(MAX_BODY_ROWS, terminalRows() - CHROME_ROWS));
 }
 
-export function formatElapsed(ms: number): string {
-	if (!Number.isFinite(ms) || ms < 0) return "";
-	const totalSeconds = Math.floor(ms / 1000);
-	if (totalSeconds < 60) return `${totalSeconds}s`;
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = totalSeconds % 60;
-	if (minutes < 60) return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
-	const hours = Math.floor(minutes / 60);
-	return `${hours}h${(minutes % 60).toString().padStart(2, "0")}m`;
-}
-
 export function elapsedOf(entry: AgentEntry, now: number): string {
-	return formatElapsed((entry.endedAt ?? now) - entry.startedAt);
+	return formatDuration((entry.endedAt ?? now) - entry.startedAt);
 }
 
 /**

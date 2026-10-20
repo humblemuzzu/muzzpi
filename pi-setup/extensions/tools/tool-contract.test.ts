@@ -26,7 +26,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLibrarianTool, librarianAllowlist, normalizeRepositories } from "./librarian";
+import { createLibrarianTool, librarianAllowlist } from "./librarian";
+import { stringList } from "./lib/params";
 import { createOracleTool, oracleAllowlist } from "./oracle";
 import { createDelegateTool, delegateAllowlist } from "./delegate";
 import { createChadTool, chadAllowlist } from "./chad";
@@ -37,6 +38,8 @@ import { createReadWebPageTool } from "./read-web-page";
 import { parseAgentModels, SUB_AGENTS } from "./lib/agent-models";
 import { subAgentResult } from "./lib/sub-agent-render";
 import { zeroUsage } from "./lib/pi-spawn";
+import { AgentRuns } from "./lib/agent-runs";
+import { SUB_AGENT_TOOLS_ENV } from "./lib/sub-agent-prompt";
 
 type AnyTool = {
 	name: string;
@@ -121,29 +124,29 @@ describe("tool contract: librarian exposes repositories as structured input", ()
 	});
 });
 
-describe("normalizeRepositories tolerates what models actually send", () => {
+describe("stringList tolerates what models actually send", () => {
 	test("a proper array passes through, trimmed", () => {
-		expect(normalizeRepositories(["  owner/repo ", "b/c"])).toEqual(["owner/repo", "b/c"]);
+		expect(stringList(["  owner/repo ", "b/c"])).toEqual(["owner/repo", "b/c"]);
 	});
 
 	test("a bare string becomes one entry", () => {
-		expect(normalizeRepositories("owner/repo")).toEqual(["owner/repo"]);
+		expect(stringList("owner/repo")).toEqual(["owner/repo"]);
 	});
 
 	test("a JSON-stringified array is parsed", () => {
 		// the exact shape that made pi-tasks' array parameters unusable.
-		expect(normalizeRepositories('["a/b","c/d"]')).toEqual(["a/b", "c/d"]);
+		expect(stringList('["a/b","c/d"]')).toEqual(["a/b", "c/d"]);
 	});
 
 	test("a malformed JSON-looking string is kept whole rather than dropped", () => {
-		expect(normalizeRepositories('["a/b"')).toEqual(['["a/b"']);
+		expect(stringList('["a/b"')).toEqual(['["a/b"']);
 	});
 
 	test("empty, null and non-string members are dropped", () => {
-		expect(normalizeRepositories(null)).toEqual([]);
-		expect(normalizeRepositories(undefined)).toEqual([]);
-		expect(normalizeRepositories("   ")).toEqual([]);
-		expect(normalizeRepositories([1, null, "a/b", "  "])).toEqual(["a/b"]);
+		expect(stringList(null)).toEqual([]);
+		expect(stringList(undefined)).toEqual([]);
+		expect(stringList("   ")).toEqual([]);
+		expect(stringList([1, null, "a/b", "  "])).toEqual(["a/b"]);
 	});
 });
 
@@ -327,5 +330,42 @@ describe("tool contract: every sub-agent takes a model and a thinking level", ()
 			type: "text",
 			text: "answer\n\n---\nmodel: deepseek/deepseek-flash · max\ncontinueId: c1",
 		});
+	});
+});
+
+describe("tool contract: background is offered only where a result can wake the caller", () => {
+	const host = { notify() {}, broadcast() {}, record() {} };
+	const toolsWith = (runs: AgentRuns) => [
+		createLibrarianTool({ runs }), createOracleTool({ runs }), createDelegateTool({ runs }),
+		createChadTool({ runs }), createFinderTool({ runs }), createCodeReviewTool({ runs }),
+	] as any[];
+
+	test("in the main session every agent tool says so and takes `background`", () => {
+		const saved = process.env[SUB_AGENT_TOOLS_ENV];
+		delete process.env[SUB_AGENT_TOOLS_ENV];
+		try {
+			for (const tool of toolsWith(new AgentRuns(host))) {
+				expect(tool.description).toContain("it runs in the background");
+				expect(tool.parameters.properties.background.type).toBe("boolean");
+				expect(tool.parameters.properties.continueId.type).toBe("string");
+			}
+		} finally {
+			if (saved !== undefined) process.env[SUB_AGENT_TOOLS_ENV] = saved;
+		}
+	});
+
+	test("inside a sub-agent, where every call blocks, none of them mentions it", () => {
+		const saved = process.env[SUB_AGENT_TOOLS_ENV];
+		process.env[SUB_AGENT_TOOLS_ENV] = "read,finder";
+		try {
+			for (const tool of toolsWith(new AgentRuns(host))) {
+				expect(tool.description).not.toContain("background");
+				expect(tool.parameters.properties.background).toBeUndefined();
+				expect(tool.parameters.properties.continueId).toBeDefined();
+			}
+		} finally {
+			if (saved === undefined) delete process.env[SUB_AGENT_TOOLS_ENV];
+			else process.env[SUB_AGENT_TOOLS_ENV] = saved;
+		}
 	});
 });

@@ -58,3 +58,34 @@ export function requireParam(
 		},
 	};
 }
+
+/**
+ * accept what models actually send for an array of strings.
+ *
+ * the schema asks for an array, but a model given a single value frequently
+ * sends a bare string, and some providers deliver arrays JSON-stringified
+ * (the exact failure that made pi-tasks' array params unusable). tolerating
+ * both here is cheaper than a validation error the model has to guess its way
+ * out of.
+ */
+export function stringList(input: unknown): string[] {
+	if (input == null) return [];
+	let value = input;
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (trimmed.startsWith("[")) {
+			try {
+				value = JSON.parse(trimmed);
+			} catch {
+				return trimmed ? [trimmed] : [];
+			}
+		} else {
+			return trimmed ? [trimmed] : [];
+		}
+	}
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter((r): r is string => typeof r === "string")
+		.map((r) => r.trim())
+		.filter((r) => r.length > 0);
+}

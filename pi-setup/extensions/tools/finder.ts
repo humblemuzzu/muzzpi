@@ -5,7 +5,7 @@
  * with a dedicated tool. the model calls
  * finder(query: "...") instead of routing through the dispatcher.
  *
- * spawns `pi --mode json` constrained to read-only tools
+ * spawns a child pi constrained to read-only tools
  * (read, grep, find, ls). the finder agent
  * maximizes parallelism (8+ tool calls per turn) and completes
  * within ~3 turns.
@@ -17,8 +17,8 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
-import { runSubAgent, toolError } from "./lib/run-sub-agent";
+import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
+import { AgentRuns } from "./lib/agent-runs";
 import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
 import { requireParam } from "./lib/params";
 
@@ -42,10 +42,12 @@ export function finderAllowlist(): string[] {
 export interface FinderConfig {
 	systemPrompt?: string;
 	models?: AgentModels;
+	runs?: AgentRuns;
 }
 
 export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
+	const runs = config.runs ?? new AgentRuns();
 	return {
 		name: "finder",
 		label: "Finder",
@@ -69,6 +71,7 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
 			"3. Name concrete artifacts, patterns, or APIs to narrow scope.\n" +
 			"4. State explicit success criteria so the agent knows when to stop.\n" +
 			"5. Never issue vague or exploratory commands.\n\n" +
+			runs.backgroundNote +
 			'Example: finder({ query: "where is the session JSONL written to disk, and what names the file?" })',
 
 		parameters: Type.Object({
@@ -78,31 +81,32 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
 					"technical terms, file types, or expected code patterns. " +
 					`(Also accepted: ${FINDER_PARAM_NAMES.slice(1).join(", ")}.)`,
 			}),
+			...runs.params("finder"),
 			...modelParams(models, "finder"),
 		}),
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const resolved = requireParam(params as Record<string, unknown>, FINDER_PARAM_NAMES, "finder");
 			if ("error" in resolved) return resolved.error;
-			const route = resolveRoute(models, "finder", params, ctx.modelRegistry);
-			if ("error" in route) return toolError(route.error);
-
-			return runSubAgent({
-				agent: "finder",
-				label: resolved.value,
-				working: "(searching...)",
+			return runs.launch(
+				{
+					agent: "finder",
+					label: resolved.value,
+					working: "(searching...)",
+					models,
+					params: params as Record<string, unknown>,
+					spawn: {
+						task: resolved.value,
+						builtinTools: BUILTIN_TOOLS,
+						extensionTools: EXTENSION_TOOLS,
+						systemPromptBody: config.systemPrompt,
+					},
+				},
+				toolCallId,
 				ctx,
 				signal,
 				onUpdate,
-				spawn: {
-					task: resolved.value,
-					model: route.model,
-					thinkingLevel: route.thinking,
-					builtinTools: BUILTIN_TOOLS,
-					extensionTools: EXTENSION_TOOLS,
-					systemPromptBody: config.systemPrompt,
-				},
-			});
+			);
 		},
 
 		renderCall(args: any, theme: any, context: any) {

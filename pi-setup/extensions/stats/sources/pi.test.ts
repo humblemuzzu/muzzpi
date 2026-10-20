@@ -87,3 +87,39 @@ test("agent runs from tool results keep their failure", () => {
 	const rec = readLines(spec, "/s/d.jsonl", [header("s4", T0), toolResult(T0, "delegate", { isError: true, details: { exitCode: 1, usage: { cost: 1 } } })]);
 	expect(rec.agents[`${DAY}\tdelegate\tunknown`][A.failures]).toBe(1);
 });
+
+describe("background agent runs", () => {
+	const run = (agent: string, status: string, cost: number) => ({
+		agent,
+		label: "x",
+		continueId: `${agent}-1`,
+		status,
+		durationMs: 4000,
+		toolCount: 1,
+		files: [],
+		model: "deepseek/deepseek-flash",
+		usage: { input: 5, output: 7, cacheRead: 0, cacheWrite: 0, cost, contextTokens: 0, turns: 2 },
+		messages: [{ role: "toolResult", toolName: "grep" }],
+	});
+	const rec = readLines(spec, "/s/bg.jsonl", [
+		header("s5", T0),
+		toolResult(T0, "chad", { details: { agent: "chad", task: "x", continueId: "chad-1", background: true } }),
+		entry("custom_message", T0 + 1000, { customType: "agent-result", content: "…", display: true, details: { runs: [run("chad", "done", 0.25), run("oracle", "failed", 0.5)] } }),
+		toolResult(T0 + 2000, "agents", { details: { runs: [run("finder", "done", 0.1)] } }),
+		entry("custom_message", T0 + 3000, { customType: "something-else", details: { runs: [run("chad", "done", 9)] } }),
+	]);
+
+	test("the stub counts as a call, not a run", () => {
+		const key = Object.keys(rec.tools).find((k) => k.startsWith(`${DAY}\tmain\t`) && k.endsWith("\tchad"))!;
+		expect(rec.tools[key][T.calls]).toBe(1);
+		expect(Object.values(rec.agents).reduce((n, row) => n + row[A.runs], 0)).toBe(3);
+	});
+
+	test("each run in an agent-result message or an agents wait counts once, with its spend and failure", () => {
+		expect(rec.agents[`${DAY}\tchad\tdeepseek-flash`].slice(0, 2)).toEqual([1, 0.25]);
+		expect(rec.agents[`${DAY}\toracle\tdeepseek-flash`][A.failures]).toBe(1);
+		expect(rec.agents[`${DAY}\tfinder\tdeepseek-flash`][A.runs]).toBe(1);
+		expect(rec.agents[`${DAY}\tchad\tdeepseek-flash`][A.durationMs]).toBe(4000);
+		expect(rec.tools[`${DAY}\tagent\t\tgrep`][T.calls]).toBe(3);
+	});
+});

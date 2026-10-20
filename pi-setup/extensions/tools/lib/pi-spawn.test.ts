@@ -14,7 +14,8 @@ import { getEventListeners } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, piSpawn, readAgentPrompt, unresumableReason } from "./pi-spawn";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, newSessionId, piSpawn, readAgentPrompt, startChild, unresumableReason } from "./pi-spawn";
 
 let dir: string;
 let stub: string;
@@ -214,6 +215,8 @@ describe("tool allowlist still reaches the child both ways", () => {
  * constants can reach.
  */
 
+const SETTLED = '{"type":"agent_settled","aborted":false}';
+
 /** write an executable stub child and return its path. */
 function writeStub(name: string, body: string[]): string {
 	const file = join(dir, name);
@@ -265,47 +268,29 @@ describe("stall watchdog", () => {
 		expect(run.stopReason).toBe("stalled");
 	}, 40000);
 
-	test("an RPC child that finished its turns is released on the grace timer too", async () => {
-		// the RPC kill paths (kill_after_turn / kill_after_error) are the happy
-		// path: the child DID its work. before this they set no killedAt, so a
-		// stuck pipe made them wait out the whole stall window instead of 10s.
-		// stall is set to 60s here purely so that regression would be visible as a
-		// >60s run rather than hiding behind a short window.
-		const turn = '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"end_turn"}}';
-		const bin = writeStub("rpc-done.sh", ["sleep 60 &", `echo '${turn}'`, `echo '${turn}'`, "wait"]);
+	test("a child that settled is released on the grace timer even when a grandchild holds stdout", async () => {
+		// stall is 60s so a missing release would show as a >60s run
+		const bin = writeStub("rpc-done.sh", ["sleep 60 &", `echo '${SETTLED}'`, `echo '${SETTLED}'`, "wait"]);
 		const run = await withChild(bin, "60", { followUp: "second turn" });
-		// ~10s grace. before the dedicated release timer this landed at 20s (the
-		// watchdog tick for a 60s window); before killedAt it would be 60s+.
 		expect(run.ms).toBeLessThan(14_000);
 		expect(run.stopReason).not.toBe("stalled");
 	}, 60000);
 
 	test("the release backstop works even with the stall watchdog disabled", async () => {
-		// PI_SPAWN_STALL_SEC=0 removes the interval entirely, but an aborted or
-		// turn-complete child must still be released from a stuck pipe.
-		// the pipe-holding sleep starts BEFORE the turns print: the parent kills
-		// the shell on the second turn, and a sleep forked after that kill would
-		// hold nothing, letting close fire early.
-		const turn = '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"end_turn"}}';
-		const bin = writeStub("rpc-nostall.sh", ["sleep 60 &", `echo '${turn}'`, `echo '${turn}'`, "wait"]);
+		const bin = writeStub("rpc-nostall.sh", ["sleep 60 &", `echo '${SETTLED}'`, `echo '${SETTLED}'`, "wait"]);
 		const run = await withChild(bin, "0", { followUp: "second turn" });
 		expect(run.ms).toBeGreaterThanOrEqual(10_000);
 		expect(run.ms).toBeLessThan(14_000);
 	}, 40000);
 
-	test("the message says RELAUNCH, never resume", async () => {
-		// pi restores a session verbatim and only trims a trailing assistant
-		// message on stopReason "error"/"length", NOT "toolUse" — so a child killed
-		// mid-tool-call leaves a tool_use with no tool_result and replaying it is a
-		// provider 400. telling the model to resume would be telling it to do
-		// something that cannot work.
+	test("a stalled child that saved its conversation can be continued; an ephemeral one is relaunched", async () => {
 		const bin = writeStub("silent2.sh", ["sleep 60"]);
-		const run = await withChild(bin, "1");
-		expect(run.errorMessage).toMatch(/no output for/);
-		expect(run.errorMessage).toMatch(/cannot be resumed/);
-		expect(run.errorMessage).toMatch(/Launch a fresh one/);
-		expect(run.errorMessage).not.toMatch(/\bresume it\b/i);
-	}, 30000);
+		const saved = await withChild(bin, "1", { session: { id: "chad-stalled", dir: join(dir, "stall-sessions") } });
+		expect(saved.errorMessage).toMatch(/no output for/);
+		expect(saved.errorMessage).toMatch(/continue it by continueId/);
+		const ephemeral = await withChild(bin, "1");
+		expect(ephemeral.errorMessage).toMatch(/Launch a fresh one/);
+	}, 60000);
 
 	test("does NOT kill a child that keeps emitting events", async () => {
 		// the events piSpawn ignores (tool_execution_update, message_update) are
@@ -371,16 +356,14 @@ describe("stall watchdog", () => {
 });
 
 describe("persisted session ids", () => {
-	test("a new id is named after the spawning tool", async () => {
-		for (const agent of ["chad", "delegate"]) {
-			const run = await launch({ session: { persist: true, agent, dir: join(dir, "sessions") } });
-			expect(run.valueOf("--session-id")).toMatch(new RegExp(`^${agent}-[0-9a-f-]{36}$`));
-		}
+	test("a new id is named after the spawning tool", () => {
+		for (const agent of ["chad", "code_review"]) expect(newSessionId(agent)).toMatch(new RegExp(`^${agent}-[0-9a-f-]{36}$`));
 	});
 
-	test("a resume passes the given id through untouched", async () => {
-		const run = await launch({ session: { id: "delegate-legacy-1", agent: "chad", dir: join(dir, "sessions") } });
+	test("the id and its directory are passed through untouched", async () => {
+		const run = await launch({ session: { id: "delegate-legacy-1", dir: join(dir, "sessions") } });
 		expect(run.valueOf("--session-id")).toBe("delegate-legacy-1");
+		expect(run.valueOf("--session-dir")).toBe(join(dir, "sessions"));
 	});
 
 	test("no session config stays ephemeral", async () => {
@@ -458,4 +441,110 @@ describe("abort signal", () => {
 		await withChild(bin, "0", { signal: controller.signal });
 		expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
 	});
+});
+
+describe("the RPC conversation with the child", () => {
+	let logDir: string;
+	let fake: string;
+	const commands = (id: string) =>
+		readFileSync(join(logDir, `${id}.jsonl`), "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).slice(1);
+
+	beforeAll(() => {
+		logDir = join(dir, "fake-log");
+		fake = writeStub("fake-pi.sh", [`exec "${process.execPath}" "${join(import.meta.dir, "fake-pi.ts")}" "$@"`]);
+		process.env.FAKE_PI_LOG = logDir;
+	});
+
+	afterAll(() => {
+		delete process.env.FAKE_PI_LOG;
+	});
+
+	async function withFake<T>(fn: () => Promise<T>): Promise<T> {
+		const prev = process.env.PI_BIN;
+		process.env.PI_BIN = fake;
+		try {
+			return await fn();
+		} finally {
+			process.env.PI_BIN = prev;
+		}
+	}
+
+	const session = (id: string) => ({ id, dir: join(dir, "rpc-sessions") });
+	const model = "fake/fake-1";
+
+	test("the task goes over stdin, never argv, and the child is closed once it settles", async () => {
+		const result = await withFake(() => piSpawn({ cwd: dir, model, task: "look around", session: session("rpc-task") }));
+		expect(result.exitCode).toBe(0);
+		expect(commands("rpc-task")).toEqual([{ type: "prompt", id: "prompt-1", message: "Task: look around" }]);
+		const argv = JSON.parse(readFileSync(join(logDir, "rpc-task.jsonl"), "utf-8").split("\n")[0]).argv as string[];
+		expect(argv.slice(0, 2)).toEqual(["--mode", "rpc"]);
+		expect(argv.some((a) => a.includes("look around"))).toBe(false);
+		expect(result.messages.at(-1)?.role).toBe("assistant");
+	}, 30000);
+
+	test("a followUp is sent only after the task's run settles, and not after an error", async () => {
+		const ok = await withFake(() => piSpawn({ cwd: dir, model, task: "review", followUp: "write the report", session: session("rpc-follow") }));
+		expect(commands("rpc-follow").map((c) => c.message)).toEqual(["Task: review", "write the report"]);
+		expect((ok.messages.at(-1) as any).content[0].text).toBe("answer: write the report");
+
+		const failed = await withFake(() => piSpawn({ cwd: dir, model, task: "FAIL", followUp: "write the report", session: session("rpc-follow-fail") }));
+		expect(commands("rpc-follow-fail").map((c) => c.message)).toEqual(["Task: FAIL"]);
+		expect(failed.stopReason).toBe("error");
+	}, 30000);
+
+	test("a steer reaches the running child and is part of its answer", async () => {
+		const child = await withFake(async () => startChild({ cwd: dir, model, task: "SLEEP 1", session: session("rpc-steer") }));
+		await Bun.sleep(300);
+		expect(await child.steer("also check the tests")).toBeUndefined();
+		const result = await child.done;
+		expect((result.messages.at(-1) as any).content[0].text).toContain("steered: also check the tests");
+		expect(commands("rpc-steer")[1]).toMatchObject({ type: "prompt", streamingBehavior: "steer", message: "also check the tests" });
+		expect(await child.steer("too late")).toBe("it had already finished");
+	}, 30000);
+
+	test("stop aborts the run and reports the stop", async () => {
+		const child = await withFake(async () => startChild({ cwd: dir, model, task: "SLEEP 30", session: session("rpc-stop") }));
+		await Bun.sleep(300);
+		const started = Date.now();
+		child.stop();
+		const result = await child.done;
+		expect(Date.now() - started).toBeLessThan(2_000);
+		expect(result.stopReason).toBe("aborted");
+		expect(commands("rpc-stop").map((c) => c.type)).toEqual(["prompt", "abort"]);
+	}, 30000);
+
+	test("a dialog request is answered as cancelled, since nobody can answer it", async () => {
+		const request = JSON.stringify({ type: "extension_ui_request", id: "ui-1", method: "confirm", title: "Allow?" });
+		const bin = writeStub("asks.sh", [`echo '${request}'`, "read prompt", "read answer", 'echo "$answer" > "$PI_SPAWN_TEST_ARGV_OUT"', `echo '${SETTLED}'`, "read eof"]);
+		await withChild(bin, "0");
+		expect(JSON.parse(readFileSync(argvOut, "utf-8"))).toEqual({ type: "extension_ui_response", id: "ui-1", cancelled: true });
+	}, 30000);
+
+	test("a refused prompt ends the run with the refusal", async () => {
+		const refusal = JSON.stringify({ type: "response", id: "prompt-1", command: "prompt", success: false, error: "No API key for deepseek" });
+		const bin = writeStub("refuses.sh", ["read prompt", `echo '${refusal}'`, "read eof"]);
+		const run = await withChild(bin, "0");
+		expect(run.stopReason).toBe("error");
+		expect(run.errorMessage).toBe("No API key for deepseek");
+		expect(run.ms).toBeLessThan(5_000);
+	}, 30000);
+
+	test("a child killed mid-tool leaves a conversation that is repaired before anyone continues it", async () => {
+		const sessions = join(dir, "repair-sessions");
+		const manager = SessionManager.create(dir, sessions, { id: "chad-repair" });
+		manager.appendMessage({ role: "user", content: [{ type: "text", text: "go" }], timestamp: Date.now() } as any);
+		manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: {} }], stopReason: "toolUse", timestamp: Date.now() } as any);
+		const bin = writeStub("ignores-abort.sh", ["exec sleep 60"]);
+		const prev = process.env.PI_BIN;
+		process.env.PI_BIN = bin;
+		try {
+			const child = startChild({ cwd: dir, task: "noop", session: { id: "chad-repair", dir: sessions } });
+			child.stop();
+			await child.done;
+		} finally {
+			process.env.PI_BIN = prev;
+		}
+		const last = SessionManager.open(manager.getSessionFile()!).buildSessionContext().messages.at(-1) as any;
+		expect(last).toMatchObject({ role: "toolResult", toolCallId: "c1", isError: true });
+	}, 30000);
 });

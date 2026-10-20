@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { failureText, runSubAgent } from "./run-sub-agent";
+import { failureText } from "./agent-notice";
+import { runSubAgent } from "./run-sub-agent";
 
 const WARNING = "Warning: No project session found with id 'chad-1234'; creating a new session with that id.";
 
@@ -33,7 +34,7 @@ function run(signal?: AbortSignal) {
 		working: "(working...)",
 		ctx: { cwd: dir },
 		signal,
-		spawn: { task: "noop", session: { persist: true, dir: join(dir, "sessions") } },
+		spawn: { task: "noop", session: { id: "chad-1234", dir: join(dir, "sessions") } },
 	});
 }
 
@@ -48,14 +49,19 @@ describe("failureText", () => {
 		expect(failureText({ ...base, stderr: `${WARNING}\nboom: bad flag\n` }, "(no output)")).toBe("boom: bad flag");
 	});
 
-	test("an abort says the user stopped it", () => {
+	test("an abort says it was stopped", () => {
 		const text = failureText({ stopReason: "aborted", errorMessage: "Request was aborted", stderr: WARNING }, "x");
-		expect(text).toMatch(/Stopped by the user/);
+		expect(text).toMatch(/Stopped before the sub-agent finished/);
 	});
 
 	test("a stall keeps its own text", () => {
 		const text = failureText({ stopReason: "stalled", errorMessage: "sub-agent killed: no output for 15m.", stderr: WARNING }, "x");
 		expect(text).toBe("sub-agent killed: no output for 15m.");
+	});
+
+	test("a child that died before it settled says how, rather than showing its last words as the error", () => {
+		expect(failureText({ ...base, exit: "SIGKILL" }, "half an answer")).toBe("The sub-agent process ended (SIGKILL) before it finished.");
+		expect(failureText({ ...base, exit: "exit code 2", stderr: "boom: bad flag" }, "x")).toBe("boom: bad flag");
 	});
 
 	test("the child's own error message beats stderr", () => {
@@ -70,7 +76,7 @@ describe("runSubAgent", () => {
 		setTimeout(() => controller.abort(), 400);
 		const result = await run(controller.signal);
 		expect(result.isError).toBe(true);
-		expect(result.content[0].text).toMatch(/Stopped by the user/);
+		expect(result.content[0].text).toMatch(/Stopped before the sub-agent finished/);
 		expect(result.content[0].text).not.toContain("No project session");
 	}, 30000);
 

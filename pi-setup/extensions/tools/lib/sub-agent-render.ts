@@ -28,8 +28,25 @@ export interface SingleResult {
 	thinkingLevel?: string;
 	stopReason?: string;
 	errorMessage?: string;
-	/** set only for persisted sub-agents (delegate, chad): what a caller passes back to resume the child. */
+	/** what a caller passes back to continue the child; absent for read_web_page and read_session. */
 	continueId?: string;
+}
+
+/** the details of a call that left its agent running in the background. */
+export interface BackgroundStub {
+	agent: string;
+	task: string;
+	continueId: string;
+	background: true;
+}
+
+export function isBackgroundStub(details: unknown): details is BackgroundStub {
+	return (details as BackgroundStub | undefined)?.background === true;
+}
+
+/** the one line a background launch shows instead of the agent tree. */
+export function renderBackgroundStub(details: BackgroundStub, container: Container, theme: any): void {
+	container.addChild(new Line(`${theme.fg("accent", "↗")} ${theme.fg("muted", `in the background · ${details.continueId}`)}`));
 }
 
 /**
@@ -193,6 +210,10 @@ export function renderSubAgentResult(label: string) {
 		const container = context?.lastComponent ?? new Container();
 		container.clear();
 		const details = result.details as SingleResult | undefined;
+		if (isBackgroundStub(details)) {
+			renderBackgroundStub(details, container, theme);
+			return container;
+		}
 		if (!details) {
 			const text = result.content?.[0];
 			container.addChild(new Text(text?.type === "text" ? normalizeForDisplay(text.text) : "(no output)", 0, 0));
@@ -210,6 +231,15 @@ function formatTokens(count: number): string {
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	return `${(count / 1000000).toFixed(1)}M`;
+}
+
+export function formatDuration(ms: number): string {
+	if (!Number.isFinite(ms) || ms < 0) return "";
+	const totalSeconds = Math.floor(ms / 1000);
+	if (totalSeconds < 60) return `${totalSeconds}s`;
+	const minutes = Math.floor(totalSeconds / 60);
+	if (minutes < 60) return `${minutes}m${String(totalSeconds % 60).padStart(2, "0")}s`;
+	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 export function formatUsageStats(
@@ -302,7 +332,8 @@ function renderToolLine(
 	return `${icon} ${fg("accent", toolLabel(item.name))} ${fg("dim", normalizeForDisplay(toolArgSummary(item.name, item.args)))}`;
 }
 
-class Line {
+/** one line, cut to the width and at its first newline. */
+export class Line {
 	private width = -1;
 	private lines: string[] = [];
 	private readonly text: string;

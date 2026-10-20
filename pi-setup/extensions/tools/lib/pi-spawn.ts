@@ -10,7 +10,8 @@ import { interpolatePromptVars, type InterpolateContext } from "./interpolate";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
 import { READ_ONLY_BASH_ENV } from "./read-only-bash";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./watchdog";
-import { loadAgentModels, modelViolation } from "./agent-models";
+import { loadAgentModels, modelViolation, type AgentModels } from "./agent-models";
+import { repairInterrupted, subAgentSessionFile } from "./session-repair";
 
 // --- stall watchdog ---
 
@@ -18,8 +19,7 @@ import { loadAgentModels, modelViolation } from "./agent-models";
  * backstop on a headless child: watches RAW stdout/stderr bytes (parsed events
  * ignore the streaming that proves liveness). 900s sits above pi's HTTP idle
  * 300s + retry, so it cannot race a legal bash command. the child is not spawned
- * detached — Ctrl+C must reach it. kill != released: a grandchild can hold
- * stdout open after SIGKILL, so FORCE_RELEASE_MS returns anyway.
+ * detached — Ctrl+C must reach it.
  */
 const DEFAULT_STALL_SEC = 900;
 const STALL_TICK_MS = 30_000;
@@ -73,38 +73,23 @@ export interface UsageStats {
  * session on first use, reopening it afterwards).
  */
 export interface SpawnSessionMeta {
-	continueId?: string;
-	sessionDir?: string;
+	continueId: string;
+	sessionDir: string;
 }
 
 /**
- * how the child's conversation should be stored.
- *
- * omitted entirely (the default) means `--no-session`: sub-agents are
- * throwaway and must not litter the session list. only `delegate` and `chad`
- * opt in, because both are resumable by continueId.
+ * where the child's conversation is stored. omitted means `--no-session`
+ * (read_web_page, read_session); the six agent tools persist, so each can be
+ * continued by continueId.
  */
 export interface SpawnSessionConfig {
-	/** resume this session id; created if it does not exist yet. */
-	id?: string;
-	/** the spawning tool; names a new session id `<agent>-<uuid>`. */
-	agent?: string;
-	/** persist the conversation. false / omitted keeps the child ephemeral. */
-	persist?: boolean;
+	/** created if no session has it yet, reopened otherwise. */
+	id: string;
 	/**
-	 * where to store the conversation. defaults to pi's own session directory.
-	 *
-	 * sub-agents set this to SUB_AGENT_SESSION_DIR so their sessions stay OUT
-	 * of the `/resume` picker — a handful of delegate calls otherwise buries
-	 * your real sessions under machine-generated ones.
+	 * SUB_AGENT_SESSION_DIR keeps sub-agent sessions OUT of the `/resume`
+	 * picker — a handful of delegate calls otherwise buries your real sessions.
 	 */
-	dir?: string;
-	/**
-	 * branch leaf to continue. pi's CLI has no flag for targeting a specific
-	 * leaf, so this is REJECTED rather than silently ignored — quietly
-	 * continuing from the wrong branch point would corrupt the child's history.
-	 */
-	leafId?: string;
+	dir: string;
 }
 
 export interface PiSpawnResult {
@@ -118,6 +103,8 @@ export interface PiSpawnResult {
 	thinkingLevel?: string;
 	stopReason?: string;
 	errorMessage?: string;
+	/** how the process ended when it ended before settling: a signal name or "exit code N". */
+	exit?: string;
 	session?: SpawnSessionMeta;
 }
 
@@ -138,6 +125,8 @@ export interface PiSpawnConfig {
 	 * level always beats whatever the child would inherit from settings.
 	 */
 	thinkingLevel?: string;
+	/** the models a child may run on when none is requested; read from agent-models.json when omitted. */
+	agentModels?: AgentModels;
 	/**
 	 * run the child's bash tool under the read-only policy (lib/read-only-bash.ts).
 	 *
@@ -150,13 +139,16 @@ export interface PiSpawnConfig {
 	builtinTools?: string[];
 	extensionTools?: string[];
 	systemPromptBody?: string;
+	/** piSpawn only: stops the child. */
 	signal?: AbortSignal;
 	onUpdate?: (result: PiSpawnResult) => void;
+	/** the child's `tool_execution_start` / `tool_execution_end` events. */
+	onEvent?: (event: any) => void;
 	sessionId?: string;
 	repo?: string;
 	/** conversation persistence / continuation. see SpawnSessionConfig. */
 	session?: SpawnSessionConfig;
-	/** queued at startup, delivered when idle; process is killed after the second end_turn. */
+	/** sent as a second prompt once the task's run settles without an error. */
 	followUp?: string;
 }
 
@@ -174,6 +166,11 @@ function assertSafeSessionId(id: string): void {
 	}
 }
 
+/** `<agent>-<uuid>`: the agent name lets unresumableReason refuse another agent's id. */
+export function newSessionId(agent: string): string {
+	return `${agent}-${randomUUID()}`;
+}
+
 /**
  * translate a SpawnSessionConfig into pi CLI flags.
  *
@@ -186,27 +183,11 @@ function resolveSessionArgs(session: SpawnSessionConfig | undefined): {
 	args: string[];
 	meta?: SpawnSessionMeta;
 } {
-	if (session?.leafId) {
-		throw new Error(
-			"session.leafId is not supported: pi's CLI cannot target a specific branch leaf, " +
-				"and continuing from the wrong leaf would corrupt the child's history",
-		);
-	}
-
-	// default stays ephemeral: only an explicit opt-in persists a sub-agent.
-	if (!session?.persist && !session?.id) return { args: ["--no-session"] };
-
-	const id = session.id ?? `${session.agent ?? "agent"}-${randomUUID()}`;
-	assertSafeSessionId(id);
-
-	const args = ["--session-id", id];
-	if (session.dir) {
-		fs.mkdirSync(session.dir, { recursive: true });
-		// must come BEFORE resolution of the id, and must be passed on every
-		// resume too, or pi looks for the session in the default directory.
-		args.unshift("--session-dir", session.dir);
-	}
-	return { args, meta: { continueId: id, sessionDir: session.dir } };
+	if (!session) return { args: ["--no-session"] };
+	assertSafeSessionId(session.id);
+	fs.mkdirSync(session.dir, { recursive: true });
+	// --session-dir on every resume too, or pi looks for the id in its default directory
+	return { args: ["--session-dir", session.dir, "--session-id", session.id], meta: { continueId: session.id, sessionDir: session.dir } };
 }
 
 function readSessionHeader(file: string): { id?: unknown; cwd?: unknown; timestamp?: unknown } | undefined {
@@ -225,7 +206,7 @@ function readSessionHeader(file: string): { id?: unknown; cwd?: unknown; timesta
 	}
 }
 
-const SESSION_AGENTS: readonly string[] = ["delegate", "chad"];
+const SESSION_AGENTS: readonly string[] = ["delegate", "chad", "oracle", "finder", "librarian", "code_review"];
 
 /** sessions started before this carry `delegate-` whichever tool made them, so a chad may resume those. */
 const AGENT_NAMED_IDS_SINCE = Date.parse("2026-10-21T00:00:00Z");
@@ -341,42 +322,49 @@ export function childExtensionArgs(tools: readonly string[] = []): string[] {
 	return ["--no-extensions", ...paths.flatMap((p) => ["-e", p])];
 }
 
-export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
-	const useRpc = !!config.followUp;
+export interface ChildRun {
+	/** updated in place while the child runs. */
+	readonly result: PiSpawnResult;
+	readonly done: Promise<PiSpawnResult>;
+	/** delivers `text` into the running conversation; resolves with why it could not, or undefined once the child took it. */
+	steer(text: string): Promise<string | undefined>;
+	/** aborts the child's run, then closes it; escalates to signals if it does not settle. false when it was already ending. */
+	stop(): boolean;
+	kill(): void;
+}
+
+const STOP_GRACE_MS = 2_000;
+const CLOSE_GRACE_MS = 2_000;
+const KILL_GRACE_MS = 5_000;
+
+function stallMessage(persisted: boolean): string {
+	const minutes = Math.round(stallSec() / 60);
+	return persisted
+		? `sub-agent killed: no output for ${minutes}m. Its conversation is saved: continue it by continueId, or launch a fresh one.`
+		: `sub-agent killed: no output for ${minutes}m. Launch a fresh one for the remaining work.`;
+}
+
+/**
+ * starts a child pi in RPC mode: the task goes over stdin, and the child is closed
+ * once `agent_settled` says it has no work left (after `followUp`, when given).
+ */
+export function startChild(config: PiSpawnConfig): ChildRun {
 	const routing = resolveSessionArgs(config.session);
-	const requestedTools = resolveAliases([
-		...(config.builtinTools ?? []),
-		...(config.extensionTools ?? []),
-	]);
-	const args: string[] = useRpc
-		? ["--mode", "rpc", ...routing.args, ...childExtensionArgs(requestedTools)]
-		: ["--mode", "json", "-p", ...routing.args, ...childExtensionArgs(requestedTools)];
-
+	const requestedTools = resolveAliases([...(config.builtinTools ?? []), ...(config.extensionTools ?? [])]);
+	const args = ["--mode", "rpc", ...routing.args, ...childExtensionArgs(requestedTools)];
 	if (config.model) args.push("--model", config.model);
+	// explicit level beats the child's inherited default (pi applies --thinking last)
+	if (config.thinkingLevel) args.push("--thinking", config.thinkingLevel);
+	// never --no-tools: it empties the registry so nothing can be re-activated
+	if (requestedTools.length > 0) args.push("--tools", requestedTools.join(","));
 
-	// explicit level beats the child's inherited default (pi applies --thinking
-	// after every other source; see main.js buildSessionOptions).
-	if (config.thinkingLevel) {
-		args.push("--thinking", config.thinkingLevel);
+	let tmpPromptDir: string | undefined;
+	if (config.systemPromptBody?.trim()) {
+		const interpolated = interpolatePromptVars(config.systemPromptBody, config.cwd, { sessionId: config.sessionId, repo: config.repo });
+		const tmp = writePromptToTempFile("subagent", interpolated);
+		tmpPromptDir = tmp.dir;
+		args.push("--append-system-prompt", tmp.filePath);
 	}
-	// one native --tools allowlist. never emit --no-tools: it empties the
-	// registry so nothing can be re-activated afterwards.
-	if (requestedTools.length > 0) {
-		args.push("--tools", requestedTools.join(","));
-	}
-
-	let tmpPromptDir: string | null = null;
-	let tmpPromptPath: string | null = null;
-	/*
-	 * declared OUT here, not in the try below, because `finally` cannot see a
-	 * binding scoped to the try block -- and `finally` is the one place that runs
-	 * after both of the promise's resolve paths (`close` and `error`), so it is
-	 * where the interval has to be cleared for the timer to be unleakable.
-	 */
-	let watchdog: ReturnType<typeof setInterval> | undefined;
-	/** see FORCE_RELEASE_MS. hoisted for the same reason as `watchdog`. */
-	let releaseTimer: ReturnType<typeof setTimeout> | undefined;
-	let abortListener: (() => void) | undefined;
 
 	const result: PiSpawnResult = {
 		exitCode: 0,
@@ -385,291 +373,277 @@ export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
 		usage: zeroUsage(),
 		model: config.model,
 		thinkingLevel: config.thinkingLevel,
-		// present only when the child was persisted; callers use
-		// session.continueId to resume this exact child later.
 		...(routing.meta ? { session: routing.meta } : {}),
 	};
 
-	try {
-		if (config.systemPromptBody?.trim()) {
-			const interpolated = interpolatePromptVars(
-				config.systemPromptBody, config.cwd, { sessionId: config.sessionId, repo: config.repo },
-			);
-			const tmp = writePromptToTempFile("subagent", interpolated);
-			tmpPromptDir = tmp.dir;
-			tmpPromptPath = tmp.filePath;
-			args.push("--append-system-prompt", tmpPromptPath);
-		}
-
-		// in print mode, task is a CLI arg. in RPC mode, sent via stdin prompt command.
-		if (!useRpc) {
-			args.push(`Task: ${config.task}`);
-		}
-
-		const spawnEnv: Record<string, string | undefined> = {
+	const proc = spawn(process.env.PI_BIN || "pi", args, {
+		cwd: config.cwd,
+		shell: false,
+		stdio: ["pipe", "pipe", "pipe"],
+		env: {
 			...process.env,
 			PI_READ_COMPACT: "1",
-			// tell the child which tools it ACTUALLY has, from the same array that
-			// becomes `--tools` above. system-prompt.ts reads this and gives the
-			// child a prompt naming exactly these tools instead of the parent's
-			// full ~40-tool prompt, which is mostly false inside a child.
-			// see lib/sub-agent-prompt.ts for the measured failure it prevents.
-			...(requestedTools.length > 0
-				? { [SUB_AGENT_TOOLS_ENV]: requestedTools.join(",") }
-				: {}),
-			// the child's own bash tool reads this at construction and both
-			// advertises and enforces the read-only policy.
+			// the same list as --tools: system-prompt.ts names exactly these to the child
+			...(requestedTools.length > 0 ? { [SUB_AGENT_TOOLS_ENV]: requestedTools.join(",") } : {}),
 			...(config.readOnlyBash ? { [READ_ONLY_BASH_ENV]: "1" } : {}),
-		};
+		},
+	});
+	proc.stdin.on("error", () => {});
 
-		let wasAborted = false;
-		/*
-		 * hoisted out of the promise executor so the `finally` below can clear the
-		 * interval. the promise has exactly two resolve paths -- `proc.on("close")`
-		 * and `proc.on("error")` -- and `finally` runs after either, so one
-		 * clearInterval covers both and the timer cannot outlive the spawn.
-		 */
-		let stalled = false;
-		let wrongModel: string | undefined;
-		const agentModels = loadAgentModels();
-		const debugEnabled = !!process.env.PI_SPAWN_DEBUG;
-		const debug = (label: string, data?: Record<string, unknown>) => {
-			if (!debugEnabled) return;
-			const suffix = data ? ` ${JSON.stringify(data)}` : "";
-			process.stderr.write(`[pi-spawn] ${label}${suffix}\n`);
-		};
+	const agentModels = config.agentModels ?? loadAgentModels();
+	const prompts = [`Task: ${config.task}`, ...(config.followUp ? [config.followUp] : [])];
+	const steers = new Map<string, (error: string | undefined) => void>();
+	// a steer sent before the run starts would arrive while pi is not streaming and start a run of its own
+	const heldSteers: Array<Record<string, unknown>> = [];
+	let started = false;
+	const timers = new Set<ReturnType<typeof setTimeout>>();
+	let commandCount = 0;
+	let active = false;
+	let finishing = false;
+	let settledCleanly = false;
+	let stopRequested = false;
+	let stalled = false;
+	let wrongModel: string | undefined;
+	let exited = false;
+	let released = false;
+	let releaseScheduled = false;
+	let watchdog: ReturnType<typeof setInterval> | undefined;
+	let resolveDone!: (code: number) => void;
+	const closed = new Promise<number>((resolve) => { resolveDone = resolve; });
+	let exit: string | undefined;
 
-		// allow overriding the pi binary (testing / non-PATH installs). bdsqqq's
-		// pi-spawn does the same.
-		const piBin = process.env.PI_BIN || "pi";
+	const later = (ms: number, fn: () => void) => {
+		const timer = setTimeout(() => {
+			timers.delete(timer);
+			fn();
+		}, ms);
+		timers.add(timer);
+	};
+	const send = (command: Record<string, unknown>) => {
+		if (proc.stdin.writable) proc.stdin.write(`${JSON.stringify(command)}\n`);
+	};
+	const release = (code: number) => {
+		if (released) return;
+		released = true;
+		resolveDone(code);
+	};
+	// kill is not release: a grandchild can hold stdout open after the child is gone
+	const scheduleRelease = () => {
+		if (releaseScheduled) return;
+		releaseScheduled = true;
+		later(FORCE_RELEASE_MS, () => release(1));
+	};
+	const terminate = (signal: NodeJS.Signals) => {
+		scheduleRelease();
+		if (exited) return;
+		proc.kill(signal);
+		if (signal === "SIGTERM") later(KILL_GRACE_MS, () => { if (!exited) proc.kill("SIGKILL"); });
+	};
+	const failed = () => result.stopReason === "error" || result.stopReason === "aborted";
+	const finish = () => {
+		finishing = true;
+		settledCleanly = !stopRequested;
+		for (const reply of steers.values()) reply("it had already finished");
+		steers.clear();
+		proc.stdin.end();
+		scheduleRelease();
+		later(CLOSE_GRACE_MS, () => terminate("SIGTERM"));
+	};
+	const advance = () => {
+		if (active || finishing || steers.size > 0) return;
+		const next = !stopRequested && !failed() ? prompts.shift() : undefined;
+		if (next === undefined) return finish();
+		active = true;
+		send({ type: "prompt", id: `prompt-${++commandCount}`, message: next });
+	};
 
-		const exitCode = await new Promise<number>((resolve) => {
-			const proc = spawn(piBin, args, {
-				cwd: config.cwd, shell: false,
-				stdio: [useRpc ? "pipe" : "ignore", "pipe", "pipe"],
-				env: spawnEnv,
-			});
-
-			// RPC state: track end_turns to know when to kill
-			let endTurnCount = 0;
-
-			const stallMs = stallSec() * 1000;
-			let lastActivity = Date.now();
-			let lastStallTickAt = Date.now();
-			/*
-			 * set the moment we kill for ANY reason (stall or user abort). the
-			 * watchdog then doubles as the release backstop, so no second timer is
-			 * needed and `finally`'s single clearInterval still covers everything.
-			 */
-			let killedAt: number | undefined;
-			let released = false;
-			/*
-			 * dedicated timer, not a phase of the watchdog interval — that period
-			 * scales with the stall window, so FORCE_RELEASE_MS would not mean what it says.
-			 */
-			const scheduleRelease = () => {
-				if (releaseTimer !== undefined) return;
-				releaseTimer = setTimeout(() => {
-					if (released) return;
-					released = true;
-					debug("force_release", { afterMs: FORCE_RELEASE_MS });
-					resolve(1);
-				}, FORCE_RELEASE_MS);
-			};
-			if (stallMs > 0) {
-				watchdog = setInterval(() => {
-					const now = Date.now();
-					// already killed by this or any other path: the release timer owns
-					// what happens next, and re-killing would only queue redundant
-					// signals at a process on its way out.
-					if (killedAt !== undefined) return;
-					const verdict = watchdogVerdict(now, lastStallTickAt, lastActivity, stallMs, SLEEP_JUMP_MS);
-					lastStallTickAt = now;
-					if (verdict === "slept") { lastActivity = now; return; }
-					if (verdict === "wait") return;
-					stalled = true;
-					killedAt = now;
-					debug("kill_stalled", { stallMs });
-					scheduleRelease();
-					proc.kill("SIGTERM");
-					setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
-				}, watchdogTickMs(stallMs, STALL_TICK_MS));
-			}
-
-			// send initial prompt via RPC stdin, then immediately queue follow_up.
-			// follow_up is queued (not delivered) until the agent is idle, so the
-			// agent loop's getFollowUpMessages() will find it after exploration.
-			// sending it eagerly avoids a race where the loop exits before a
-			// late follow_up arrives through the cross-process stdin/stdout round-trip.
-			if (useRpc && proc.stdin) {
-				const promptCmd = JSON.stringify({ type: "prompt", message: `Task: ${config.task}` });
-				debug("send_prompt");
-				proc.stdin.write(promptCmd + "\n");
-
-				if (config.followUp) {
-					const followUpCmd = JSON.stringify({ type: "follow_up", message: config.followUp });
-					debug("send_follow_up");
-					proc.stdin.write(followUpCmd + "\n");
-				}
-			}
-
-			let buffer = "";
-
-			const processLine = (line: string) => {
-				if (!line.trim()) return;
-				let event: any;
-				try { event = JSON.parse(line); } catch { return; }
-
-				// skip RPC protocol responses (acks for prompt/follow_up/abort commands)
-				if (event.type === "response") return;
-
-				if ((event.type === "message_start" || event.type === "message_end") && event.message?.role === "assistant" && !wrongModel) {
-					const { provider, model } = event.message;
-					const actual = provider && model ? `${provider}/${model}` : undefined;
-					const refusal = actual ? modelViolation(actual, config.model, agentModels) : undefined;
-					if (refusal) {
-						wrongModel = refusal;
-						debug("kill_wrong_model", { actual, requested: config.model });
-						killedAt ??= Date.now();
-						scheduleRelease();
-						proc.kill("SIGKILL");
+	const processLine = (line: string) => {
+		let event: any;
+		try { event = JSON.parse(line); } catch { return; }
+		switch (event.type) {
+			case "response": {
+				if (String(event.id).startsWith("prompt-") && !event.success) {
+					result.stopReason = "error";
+					result.errorMessage = String(event.error ?? "the child refused the task");
+					active = false;
+					for (const held of heldSteers.splice(0)) {
+						steers.get(String(held.id))?.("it refused its task");
+						steers.delete(String(held.id));
 					}
+					return advance();
 				}
-
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					result.messages.push(msg);
-
-					if (msg.role === "assistant") {
-						result.usage.turns++;
-						const usage = (msg as any).usage;
-						if (usage) {
-							result.usage.input += usage.input || 0;
-							result.usage.output += usage.output || 0;
-							result.usage.cacheRead += usage.cacheRead || 0;
-							result.usage.cacheWrite += usage.cacheWrite || 0;
-							result.usage.cost += usage.cost?.total || 0;
-							result.usage.contextTokens = usage.totalTokens || 0;
-						}
-						const { provider, model, thinkingLevel } = msg as any;
-						if (model) result.model = provider ? `${provider}/${model}` : model;
-						if (thinkingLevel) result.thinkingLevel = thinkingLevel;
-						if ((msg as any).stopReason) result.stopReason = (msg as any).stopReason;
-						if ((msg as any).errorMessage) result.errorMessage = (msg as any).errorMessage;
-
-						const stopReason = (msg as any).stopReason as string | undefined;
-						const isTurnEnd = stopReason === "end_turn" || stopReason === "stop";
-						const expectedTurns = config.followUp ? 2 : 1;
-						debug("turn_end", { stopReason, isTurnEnd, endTurnCount, expectedTurns });
-
-						// RPC kill logic: terminate after expected number of end_turns.
-						// follow_up was already queued eagerly at startup, so we just
-						// count turns and kill when done.
-						if (useRpc && isTurnEnd) {
-							endTurnCount++;
-							if (endTurnCount >= expectedTurns) {
-								debug("kill_after_turn", { endTurnCount });
-								// same release grace as every other kill: a child that
-								// finished normally must not hang on a stuck pipe.
-								killedAt ??= Date.now();
-								scheduleRelease();
-								proc.kill("SIGTERM");
-								setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
-							}
-						}
-
-						// RPC: if agent errors, terminate immediately
-						if (useRpc && (stopReason === "error" || stopReason === "aborted")) {
-							debug("kill_after_error", { stopReason });
-							killedAt ??= Date.now();
-							scheduleRelease();
-							proc.kill("SIGTERM");
-							setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
-						}
-					}
-
-					if (config.onUpdate) config.onUpdate({ ...result });
-				}
-			};
-
-			proc.stdout.on("data", (data: Buffer) => {
-				if (released) return;
-				lastActivity = Date.now();
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-				for (const line of lines) processLine(line);
-			});
-
-			proc.stderr.on("data", (data: Buffer) => {
-				if (released) return;
-				lastActivity = Date.now();
-				result.stderr += data.toString();
-			});
-
-			proc.on("close", (code) => {
-				// `released` means the promise already resolved and the caller holds
-				// `result`. parsing a trailing line now would mutate an object that has
-				// been handed off — the same class as the stale-ctx timer crash this
-				// repo has already been bitten by once.
-				if (!released && buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
-			});
-
-			proc.on("error", () => resolve(1));
-
-			if (config.signal) {
-				const killProc = () => {
-					wasAborted = true;
-					// release backstop applies to a user abort too: Esc must free the
-					// parent even when a grandchild is holding the child's stdout.
-					killedAt ??= Date.now();
-					scheduleRelease();
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (config.signal.aborted) killProc();
-				else {
-					abortListener = killProc;
-					config.signal.addEventListener("abort", killProc, { once: true });
-				}
+				const reply = steers.get(event.id);
+				if (!reply) return;
+				steers.delete(event.id);
+				if (event.success && event.data?.disposition === "started") active = true;
+				reply(event.success ? undefined : String(event.error ?? "the child refused it"));
+				advance();
+				return;
 			}
-		});
+			case "extension_ui_request":
+				// nobody can answer a dialog inside a sub-agent
+				if (["select", "confirm", "input", "editor"].includes(event.method)) send({ type: "extension_ui_response", id: event.id, cancelled: true });
+				return;
+			case "agent_start":
+				active = true;
+				started = true;
+				for (const command of heldSteers.splice(0)) send(command);
+				return;
+			case "agent_settled":
+				active = false;
+				advance();
+				return;
+			case "tool_execution_start":
+			case "tool_execution_end":
+				config.onEvent?.(event);
+				return;
+			case "message_start":
+			case "message_end":
+				break;
+			default:
+				return;
+		}
+		const msg = event.message;
+		if (msg?.role === "assistant" && !wrongModel && msg.provider && msg.model) {
+			const refusal = modelViolation(`${msg.provider}/${msg.model}`, config.model, agentModels);
+			if (refusal) {
+				wrongModel = refusal;
+				terminate("SIGKILL");
+			}
+		}
+		if (event.type !== "message_end" || !msg || msg.role === "system") return;
+		result.messages.push(msg);
+		if (msg.role === "assistant") {
+			result.usage.turns++;
+			const usage = msg.usage;
+			if (usage) {
+				result.usage.input += usage.input || 0;
+				result.usage.output += usage.output || 0;
+				result.usage.cacheRead += usage.cacheRead || 0;
+				result.usage.cacheWrite += usage.cacheWrite || 0;
+				result.usage.cost += usage.cost?.total || 0;
+				result.usage.contextTokens = usage.totalTokens || 0;
+			}
+			if (msg.model) result.model = msg.provider ? `${msg.provider}/${msg.model}` : msg.model;
+			if (msg.thinkingLevel) result.thinkingLevel = msg.thinkingLevel;
+			if (msg.stopReason) result.stopReason = msg.stopReason;
+			if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+		}
+		config.onUpdate?.({ ...result });
+	};
 
-		result.exitCode = exitCode;
-		if (wasAborted) {
+	const stallMs = stallSec() * 1000;
+	let lastActivity = Date.now();
+	let lastTickAt = Date.now();
+	if (stallMs > 0) {
+		watchdog = setInterval(() => {
+			const now = Date.now();
+			if (releaseScheduled) return;
+			const verdict = watchdogVerdict(now, lastTickAt, lastActivity, stallMs, SLEEP_JUMP_MS);
+			lastTickAt = now;
+			if (verdict === "slept") lastActivity = now;
+			if (verdict !== "kill") return;
+			stalled = true;
+			terminate("SIGTERM");
+		}, watchdogTickMs(stallMs, STALL_TICK_MS));
+	}
+
+	let buffer = "";
+	proc.stdout.on("data", (data: Buffer) => {
+		if (released) return;
+		lastActivity = Date.now();
+		buffer += data.toString();
+		const lines = buffer.split("\n");
+		buffer = lines.pop() || "";
+		for (const line of lines) if (line.trim()) processLine(line);
+	});
+	proc.stderr.on("data", (data: Buffer) => {
+		if (released) return;
+		lastActivity = Date.now();
+		result.stderr += data.toString();
+	});
+	proc.on("exit", (code, signal) => {
+		exited = true;
+		exit = signal ?? `exit code ${code}`;
+	});
+	proc.on("close", (code, signal) => {
+		if (!released && buffer.trim()) processLine(buffer);
+		release(code ?? (signal ? 1 : 0));
+	});
+	proc.on("error", () => {
+		exited = true;
+		release(1);
+	});
+
+	advance();
+
+	const done = closed.then((code) => {
+		if (watchdog) clearInterval(watchdog);
+		for (const timer of timers) clearTimeout(timer);
+		if (tmpPromptDir) try { fs.rmSync(tmpPromptDir, { recursive: true, force: true }); } catch {}
+		for (const reply of steers.values()) reply("it stopped first");
+		steers.clear();
+		result.exitCode = settledCleanly ? 0 : code;
+		if (!settledCleanly) result.exit = exit ?? "killed";
+		if (stopRequested) {
 			result.exitCode = 1;
 			result.stopReason = "aborted";
 		}
-		/*
-		 * after `wasAborted`, so Esc is never relabelled as a stall. relaunch,
-		 * never resume: a child killed mid-tool-call leaves a tool_use without
-		 * tool_result, so resuming is a provider 400.
-		 */
 		if (stalled) {
 			result.exitCode = 1;
 			result.stopReason = "stalled";
-			result.errorMessage =
-				`sub-agent killed: no output for ${Math.round(stallSec() / 60)}m. ` +
-				"Launch a fresh one for the remaining work — this child cannot be resumed.";
-		}
-		// RPC processes are killed intentionally — don't treat SIGTERM exit as error
-		if (useRpc && result.exitCode !== 0 && (result.stopReason === "end_turn" || result.stopReason === "stop")) {
-			result.exitCode = 0;
+			result.errorMessage = stallMessage(!!routing.meta);
 		}
 		if (wrongModel) {
 			result.exitCode = 1;
 			result.stopReason = "error";
 			result.errorMessage = wrongModel;
 		}
+		const meta = routing.meta;
+		if (meta && exited && !settledCleanly) {
+			try {
+				const file = subAgentSessionFile(meta.sessionDir, meta.continueId);
+				if (file) repairInterrupted(file);
+			} catch {}
+		}
 		return result;
+	});
+
+	return {
+		result,
+		done,
+		steer(text) {
+			if (finishing || released) return Promise.resolve("it had already finished");
+			const id = `steer-${++commandCount}`;
+			return new Promise((resolve) => {
+				steers.set(id, resolve);
+				const command = { type: "prompt", id, message: text, streamingBehavior: "steer" };
+				if (started) send(command);
+				else heldSteers.push(command);
+			});
+		},
+		stop() {
+			if (stopRequested || finishing || released) return false;
+			stopRequested = true;
+			send({ type: "abort" });
+			later(STOP_GRACE_MS, () => { if (!finishing) terminate("SIGTERM"); });
+			return true;
+		},
+		kill() {
+			terminate("SIGKILL");
+		},
+	};
+}
+
+/** a blocking run: `signal` stops the child. */
+export async function piSpawn(config: PiSpawnConfig): Promise<PiSpawnResult> {
+	const child = startChild(config);
+	const onAbort = () => child.stop();
+	if (config.signal?.aborted) onAbort();
+	else config.signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		return await child.done;
 	} finally {
-		if (watchdog) clearInterval(watchdog);
-		if (releaseTimer) clearTimeout(releaseTimer);
-		if (abortListener) config.signal?.removeEventListener("abort", abortListener);
-		if (tmpPromptPath) try { fs.unlinkSync(tmpPromptPath); } catch { /* ignore */ }
-		if (tmpPromptDir) try { fs.rmdirSync(tmpPromptDir); } catch { /* ignore */ }
+		config.signal?.removeEventListener("abort", onAbort);
 	}
 }

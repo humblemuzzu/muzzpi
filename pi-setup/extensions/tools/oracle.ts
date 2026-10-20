@@ -18,8 +18,8 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
-import { runSubAgent, toolError } from "./lib/run-sub-agent";
+import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
+import { AgentRuns } from "./lib/agent-runs";
 import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
 import { requireParam } from "./lib/params";
 
@@ -53,10 +53,12 @@ export function oracleAllowlist(): string[] {
 export interface OracleConfig {
 	systemPrompt?: string;
 	models?: AgentModels;
+	runs?: AgentRuns;
 }
 
 export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
+	const runs = config.runs ?? new AgentRuns();
 	return {
 		name: "oracle",
 		label: "Oracle",
@@ -84,6 +86,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 			"Usage guidelines:\n" +
 			"- Be specific about what you want reviewed, planned, or debugged\n" +
 			"- Provide relevant context. If you know which files are involved, list them.\n\n" +
+			runs.backgroundNote +
 			'Example: oracle({ task: "is this retry loop correct under concurrent writes?", files: ["src/queue.ts"] })',
 
 		parameters: Type.Object({
@@ -102,14 +105,13 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 					description: "Optional file paths the oracle should examine.",
 				}),
 			),
+			...runs.params("oracle"),
 			...modelParams(models, "oracle"),
 		}),
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const resolved = requireParam(params as Record<string, unknown>, ORACLE_PARAM_NAMES, "oracle");
 			if ("error" in resolved) return resolved.error;
-			const route = resolveRoute(models, "oracle", params, ctx.modelRegistry);
-			if ("error" in route) return toolError(route.error);
 
 			const parts: string[] = [resolved.value];
 			if (params.context) parts.push(`\nContext: ${params.context}`);
@@ -127,23 +129,26 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 				}
 			}
 
-			return runSubAgent({
-				agent: "oracle",
-				label: resolved.value,
-				working: "(thinking...)",
-				returnImages: true,
+			return runs.launch(
+				{
+					agent: "oracle",
+					label: resolved.value,
+					working: "(thinking...)",
+					returnImages: true,
+					models,
+					params: params as Record<string, unknown>,
+					spawn: {
+						task: parts.join("\n"),
+						builtinTools: BUILTIN_TOOLS,
+						extensionTools: EXTENSION_TOOLS,
+						systemPromptBody: config.systemPrompt,
+					},
+				},
+				toolCallId,
 				ctx,
 				signal,
 				onUpdate,
-				spawn: {
-					task: parts.join("\n"),
-					model: route.model,
-					thinkingLevel: route.thinking,
-					builtinTools: BUILTIN_TOOLS,
-					extensionTools: EXTENSION_TOOLS,
-					systemPromptBody: config.systemPrompt,
-				},
-			});
+			);
 		},
 
 		renderCall(args: any, theme: any, context: any) {

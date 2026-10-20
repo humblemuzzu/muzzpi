@@ -22,9 +22,9 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { requireParam, resolveParam } from "./lib/params";
-import { resolveAliases, SUB_AGENT_SESSION_DIR, unresumableReason } from "./lib/pi-spawn";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
-import { runSubAgent, toolError } from "./lib/run-sub-agent";
+import { resolveAliases } from "./lib/pi-spawn";
+import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
+import { AgentRuns } from "./lib/agent-runs";
 import { clip, firstLine, renderSubAgentResult } from "./lib/sub-agent-render";
 
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
@@ -50,10 +50,12 @@ const DESCRIPTION_PARAMS = ["description", "title", "summary"] as const;
 
 export interface DelegateConfig {
 	models?: AgentModels;
+	runs?: AgentRuns;
 }
 
 export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
+	const runs = config.runs ?? new AgentRuns();
 	return {
 		name: "delegate",
 		label: "Delegate",
@@ -74,8 +76,9 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 			"- Run several delegates concurrently for independent work by issuing multiple tool calls in one message.\n" +
 			"- The sub-agent shares no context with you: put everything it needs in `prompt`.\n" +
 			"- Tell it how to verify its own work.\n" +
-			"- To ask a follow-up of the SAME sub-agent, pass `continueId` from its previous result " +
+			"- To redirect a running delegate or ask a finished one a follow-up, pass its `continueId` " +
 			"instead of starting a new delegate — it keeps its full history.\n\n" +
+			runs.backgroundNote +
 			'Example: delegate({ prompt: "In /repo, convert src/auth/*.ts to strict mode. Run `bun test` and report failures.", description: "auth strict mode" })',
 
 		parameters: Type.Object({
@@ -91,42 +94,28 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 						"Short label for the task, shown to the user. Defaults to the first line of the prompt.",
 				}),
 			),
-			continueId: Type.Optional(
-				Type.String({
-					description:
-						"Resume a previous delegate child by the continueId returned in its result. The child keeps its full conversation history.",
-				}),
-			),
+			...runs.params("delegate"),
 			...modelParams(models, "delegate"),
 		}),
 
-		async execute(_toolCallId, params: any, signal, onUpdate, ctx) {
+		async execute(toolCallId, params: any, signal, onUpdate, ctx) {
 			const prompt = requireParam(params, PROMPT_PARAMS, "delegate");
 			if ("error" in prompt) return prompt.error as any;
-			const continueId = resolveParam(params, ["continueId", "continue_id", "sessionId"]);
-			const unresumable = continueId && unresumableReason(continueId, ctx.cwd, "delegate");
-			if (unresumable) return toolError(unresumable);
-			const route = resolveRoute(models, "delegate", params, ctx.modelRegistry, !!continueId);
-			if ("error" in route) return toolError(route.error);
-
-			return runSubAgent({
-				agent: "delegate",
-				label: resolveParam(params, DESCRIPTION_PARAMS) ?? firstLine(prompt.value, "delegated task"),
-				working: "(working...)",
-				returnImages: true,
+			return runs.launch(
+				{
+					agent: "delegate",
+					label: resolveParam(params, DESCRIPTION_PARAMS) ?? firstLine(prompt.value, "delegated task"),
+					working: "(working...)",
+					returnImages: true,
+					models,
+					params,
+					spawn: { task: prompt.value, builtinTools: BUILTIN_TOOLS, extensionTools: EXTENSION_TOOLS },
+				},
+				toolCallId,
 				ctx,
 				signal,
 				onUpdate,
-				spawn: {
-					task: prompt.value,
-					model: route.model,
-					thinkingLevel: route.thinking,
-					builtinTools: BUILTIN_TOOLS,
-					extensionTools: EXTENSION_TOOLS,
-					// sub-agent directory so resumable children never clutter /resume.
-					session: { id: continueId, persist: true, dir: SUB_AGENT_SESSION_DIR },
-				},
-			});
+			);
 		},
 
 		renderCall(args: any, theme: any, context: any) {

@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { canShowChoiceDialog, openChoiceDialog } from "./choice-dialog";
 import { getExtensionConfig } from "./config";
 import { makeScrubber } from "./psst";
+import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
 
 export interface ApprovalRequest {
 	tool: string;
@@ -140,7 +141,8 @@ export async function requestApproval(
 		await record(context, request, "auto");
 		return { approved: true };
 	}
-	if (!context.hasUI || !context.ui) {
+	// a sub-agent runs in RPC mode, whose dialogs reach no person
+	if (!context.hasUI || !context.ui || process.env[SUB_AGENT_TOOLS_ENV]?.trim()) {
 		await record(context, request, "no-ui");
 		return {
 			approved: false,

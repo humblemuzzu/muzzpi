@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { Container } from "@mariozechner/pi-tui";
+import { initTheme } from "@mariozechner/pi-coding-agent";
+import { Container, visibleWidth } from "@mariozechner/pi-tui";
+import { renderAgentResult } from "./agents";
 import { renderCallLine } from "./lib/box-format";
 import { renderChangeResult } from "./lib/change-render";
 import { renderAgentTree, type SingleResult } from "./lib/sub-agent-render";
@@ -53,5 +55,35 @@ describe("transcript rows render once per width", () => {
 		const toolLine = container.children.find((child) => child.render(120).some((line) => line.includes("Grep")));
 		expect(toolLine).toBeDefined();
 		rendersFromCache(toolLine!);
+	});
+});
+
+describe("the agent-result message", () => {
+	const run = {
+		agent: "chad",
+		label: "a label\nwith a newline",
+		continueId: "chad-1",
+		status: "done" as const,
+		durationMs: 4_000,
+		toolCount: 1,
+		files: [],
+		usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+		messages: [{ role: "assistant", content: [{ type: "text", text: "the **answer**" }] }] as any[],
+	};
+	const message = { content: "…", details: { runs: [run] } };
+
+	test("collapsed it is one cached header line per run, inside the width", () => {
+		const container = renderAgentResult(message, { expanded: false, outputPad: 1 }, theme);
+		const lines = container.render(40);
+		expect(lines[0]).toStartWith(" ✓ chad a label");
+		expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
+		expect(lines.join("\n")).not.toContain("answer");
+		rendersFromCache(container.children[0] as any);
+	});
+
+	test("expanded it shows the answer", () => {
+		initTheme("dark");
+		const container = renderAgentResult(message, { expanded: true, outputPad: 1 }, theme);
+		expect(container.render(80).join("\n")).toContain("answer");
 	});
 });
