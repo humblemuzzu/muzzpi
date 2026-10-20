@@ -19,6 +19,7 @@
     "~/.pi/agent/extensions/notify.js",
     "~/.pi/agent/extensions/mentions.js",
     "~/.pi/agent/extensions/anthropic-sub.js",
+    "~/.pi/agent/extensions/cache-compaction.js",
     "~/.pi/agent/extensions/goal"
   ],
   "compaction": {

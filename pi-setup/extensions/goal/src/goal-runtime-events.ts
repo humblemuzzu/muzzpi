@@ -16,6 +16,8 @@ export function registerGoalRuntimeEvents(
   pi.on("turn_start", (event, ctx) => controller.onTurnStart(event, ctx));
   pi.on("tool_execution_end", (event, ctx) => controller.onToolExecutionEnd(event, ctx));
   pi.on("turn_end", (event, ctx) => controller.onTurnEnd(event, ctx));
+  pi.on("turn_end", (event, ctx) => controller.onBoundary(event, ctx));
+  pi.on("agent_before_settle", (event, ctx) => controller.onBoundary(event, ctx));
   pi.on("agent_end", (event, ctx) => controller.onAgentEnd(event, ctx));
   pi.on("session_before_compact", (event, ctx) =>
     controller.onSessionBeforeCompact(event, ctx),

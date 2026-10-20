@@ -1,3 +1,5 @@
+import { appendFileSync } from "node:fs";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
 
 export const ANTHROPIC_TRIGGER_PHRASES: ReadonlyArray<readonly [phrase: string, replacement: string]> = [
@@ -10,13 +12,31 @@ const REJECTION_MARKERS = ["out of extra usage", "only authorized for use with c
 
 export const CANARY_COMMAND = "bun pi-setup/port-harness/anthropic-oauth-canary.ts";
 
+/** a request on the Claude plan: Anthropic signed in with OAuth, not an API key */
+export function isPlanRequest(ctx: Pick<ExtensionContext, "model" | "modelRegistry">): boolean {
+	const model = ctx.model;
+	return model?.provider === "anthropic" && ctx.modelRegistry.isUsingOAuth(model);
+}
+
+export const PAYLOAD_LOG_ENV = "PI_ANTHROPIC_PAYLOAD_LOG";
+
+/** appends one record in the format `cache-diag.py` reads; never throws */
+export function writePayloadLog(path: string, payload: unknown): void {
+	try {
+		appendFileSync(path, `${new Date().toISOString()}\n${JSON.stringify({ stage: "after", payload })}\n---\n`, {
+			encoding: "utf-8",
+			mode: 0o600,
+		});
+	} catch {}
+}
+
 export function scrubPromptText(text: string): string {
 	let out = text;
 	for (const [phrase, replacement] of ANTHROPIC_TRIGGER_PHRASES) out = out.replaceAll(phrase, replacement);
 	return out;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

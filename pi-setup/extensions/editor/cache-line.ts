@@ -31,7 +31,8 @@ function touchCache(stats: CacheStats, usage: Usage, timestamp: string): void {
 	if (usage.cacheWrite > 0) stats.lastWriteTtlMs = (usage.cacheWrite1h ?? 0) > 0 ? ONE_HOUR_MS : FIVE_MINUTES_MS;
 }
 
-export function collectCacheStats(entries: readonly SessionEntry[]): CacheStats {
+/** `lastResponseAt`: start of the latest request that got a response, which may not be in `entries` yet. */
+export function collectCacheStats(entries: readonly SessionEntry[], lastResponseAt?: number): CacheStats {
 	const stats: CacheStats = { cacheRead: 0, cacheWrite: 0, toolCalls: 0 };
 	for (const entry of entries) {
 		if (entry.type === "usage" && entry.kind === "cache_warm") {
@@ -51,6 +52,7 @@ export function collectCacheStats(entries: readonly SessionEntry[]): CacheStats 
 		if (prompt > 0) stats.lastHitRate = usage.cacheRead / prompt;
 		touchCache(stats, usage, entry.timestamp);
 	}
+	if (lastResponseAt !== undefined && lastResponseAt > (stats.lastCacheAt ?? 0)) stats.lastCacheAt = lastResponseAt;
 	return stats;
 }
 

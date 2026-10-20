@@ -2,9 +2,10 @@
  * mentions extension — @mention resolution for sessions, commits, handoffs,
  * and agent directives (@oracle, @finder, @codereview, @task).
  *
- * data mentions (@session/id, @commit/sha, @handoff/id) inject hidden
- * context. agent mentions (@oracle, @finder, etc.) inject a directive
- * telling the model to call the specified subagent tool.
+ * data mentions (@session/id, @commit/sha, @handoff/id) add a hidden
+ * context message. agent mentions (@oracle, @finder, etc.) add a directive
+ * telling the model to call the specified subagent tool. the message is
+ * stored in the session once, next to the user's message, and never edited.
  *
  * ported from bdsqqq/dots mentions extension, adapted for flat-file setup.
  */
@@ -26,14 +27,14 @@ import "./tools/lib/mentions/agent-source.js";
 const CUSTOM_TYPE = "mentions:resolved";
 
 export default function mentionsExtension(pi: ExtensionAPI): void {
-	let activeMentionContext = "";
+	let pendingMentionContext = "";
 
-	const clearActive = () => {
-		activeMentionContext = "";
+	const clearPending = () => {
+		pendingMentionContext = "";
 	};
 
-	// resolve mentions on user input
 	pi.on("input", async (event, ctx) => {
+		clearPending();
 		if (event.source === "extension") return { action: "continue" as const };
 
 		const mentions = await resolveMentions(event.text, { cwd: ctx.cwd });
@@ -41,41 +42,34 @@ export default function mentionsExtension(pi: ExtensionAPI): void {
 			(mention): mention is Extract<ResolvedMention, { status: "resolved" }> =>
 				mention.status === "resolved",
 		);
+		const content = renderResolvedMentionsText(resolved);
+		if (!content) return { action: "continue" as const };
 
-		activeMentionContext = renderResolvedMentionsText(resolved);
+		if (event.streamingBehavior) {
+			// Input handlers run before pi queues the user's own message, so this lands just before it.
+			pi.sendMessage(
+				{ customType: CUSTOM_TYPE, content, display: false },
+				{ deliverAs: event.streamingBehavior },
+			);
+		} else {
+			pendingMentionContext = content;
+		}
 		return { action: "continue" as const };
 	});
 
-	// inject resolved mentions as hidden context per turn
-	pi.on("context", async (event) => {
-		const messages = event.messages.filter(
-			(message: any) => message.customType !== CUSTOM_TYPE,
-		);
-
-		if (!activeMentionContext) return { messages };
-
-		return {
-			messages: [
-				...messages,
-				{
-					role: "custom",
-					customType: CUSTOM_TYPE,
-					content: activeMentionContext,
-					display: false,
-					timestamp: Date.now(),
-				},
-			],
-		};
+	pi.on("before_agent_start", async (event) => {
+		if (event.messageType !== "user" || !pendingMentionContext) return;
+		const content = pendingMentionContext;
+		clearPending();
+		return { message: { customType: CUSTOM_TYPE, content, display: false } };
 	});
 
-	// clear state when agent finishes a turn
 	pi.on("agent_end", async () => {
-		clearActive();
+		clearPending();
 	});
 
-	// register autocomplete + reset state on each session boot
 	pi.on("session_start", async (_event, ctx) => {
-		clearActive();
+		clearPending();
 		clearSessionMentionCache();
 		clearCommitIndexCache();
 

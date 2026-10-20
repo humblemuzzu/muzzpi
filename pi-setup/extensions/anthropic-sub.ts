@@ -4,24 +4,18 @@ import {
 	type CacheTtl,
 	describeAnthropicRejection,
 	extendCacheTtl,
+	isPlanRequest,
 	isUsingOverage,
+	PAYLOAD_LOG_ENV,
 	planMeter,
 	resolveCacheTtl,
 	scrubAnthropicPayload,
+	writePayloadLog,
 } from "./tools/lib/anthropic-sub";
 import { SUB_AGENT_TOOLS_ENV } from "./tools/lib/sub-agent-prompt";
 
-const PAYLOAD_LOG_ENV = "PI_ANTHROPIC_PAYLOAD_LOG";
 const METER_LOG_ENV = "PI_ANTHROPIC_METER_LOG";
-
-function writePayloadLog(path: string, payload: unknown): void {
-	try {
-		appendFileSync(path, `${new Date().toISOString()}\n${JSON.stringify({ stage: "after", payload })}\n---\n`, {
-			encoding: "utf-8",
-			mode: 0o600,
-		});
-	} catch {}
-}
+const HOUR_SECONDS = 3600;
 
 function writeMeterLog(path: string, record: Record<string, unknown>): void {
 	try {
@@ -37,11 +31,6 @@ interface UsageTokens {
 	cacheWrite1h?: number;
 }
 
-function isPlanRequest(ctx: ExtensionContext): boolean {
-	const model = ctx.model;
-	return model?.provider === "anthropic" && ctx.modelRegistry.isUsingOAuth(model);
-}
-
 export default function anthropicSub(pi: ExtensionAPI) {
 	let warned = false;
 	let succeeded = false;
@@ -49,10 +38,29 @@ export default function anthropicSub(pi: ExtensionAPI) {
 	let usingOverage = false;
 	const cacheTtl = (): CacheTtl => (usingOverage ? "5m" : configuredTtl);
 	let pendingMeter: Record<string, string> | undefined;
+	let lifetimeWarnedFor: string | undefined;
 
-	pi.on("session_start", () => {
+	// pi's warmer reads the TTL from the session's model object, which /reload keeps.
+	const warnShortWarmingLifetime = (ctx: ExtensionContext): void => {
+		const model = ctx.model;
+		if (!model || !ctx.hasUI || !isPlanRequest(ctx) || cacheTtl() !== "1h") return;
+		const seconds = model.promptCache?.short;
+		if (seconds === undefined || seconds >= HOUR_SECONDS || lifetimeWarnedFor === model.id) return;
+		lifetimeWarnedFor = model.id;
+		ctx.ui.notify(
+			`pi's cache keep-alive thinks ${model.id} caches for ${seconds}s, but its requests cache for 1h, so it pings far too often. Restart pi (/reload keeps the old model data), or add the model to models.json with promptCache.short 3600.`,
+			"warning",
+		);
+	};
+
+	pi.on("session_start", (_event, ctx) => {
 		warned = false;
 		succeeded = false;
+		warnShortWarmingLifetime(ctx);
+	});
+
+	pi.on("model_select", (_event, ctx) => {
+		warnShortWarmingLifetime(ctx);
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {

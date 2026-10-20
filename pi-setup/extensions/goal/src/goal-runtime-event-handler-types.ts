@@ -1,7 +1,9 @@
 import type {
+  AgentBeforeSettleEvent,
   AgentEndEvent,
   AgentStartEvent,
   BeforeAgentStartEvent,
+  BoundaryResult,
   ContextEvent,
   ExtensionAPI,
   ExtensionContext,
@@ -31,6 +33,7 @@ export type ToolExecutionEndEvent = Extract<ExtensionEvent, { type: "tool_execut
 export interface GoalRuntimeEventHandlers {
   onInput: ExtensionHandler<InputEvent, InputEventResult>;
   onContext: ExtensionHandler<ContextEvent, ContextEventResult | undefined>;
+  onBoundary: ExtensionHandler<TurnEndEvent | AgentBeforeSettleEvent, BoundaryResult | undefined>;
   onSessionStart: ExtensionHandler<SessionStartEvent>;
   onSessionTree: ExtensionHandler<SessionTreeEvent>;
   onBeforeAgentStart: ExtensionHandler<BeforeAgentStartEvent, undefined>;
@@ -107,7 +110,7 @@ export interface StaleQueuedWorkEffectContext {
 export interface GoalRuntimeInputContextHandlerContext extends StaleQueuedWorkEffectContext {
   runtimeState: Pick<
     GoalRuntimeState,
-    "agentRunFromContinuation" | "currentTurnIndex" | "staleQueuedWorkGuard"
+    "agentRunFromContinuation" | "currentTurnIndex" | "staleQueuedGoalIds" | "staleQueuedWorkGuard"
   >;
   stateController: Pick<
     GoalStateController,

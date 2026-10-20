@@ -50,6 +50,18 @@ describe("collectCacheStats", () => {
 		expect(stats.lastWriteTtlMs).toBe(3_600_000);
 	});
 
+	test("a response not yet saved as an entry renews the time", () => {
+		const entries = [turn("2026-10-20T10:00:00Z", usage(0, 5000, 5000))];
+		const stats = collectCacheStats(entries, at("2026-10-20T10:54:00Z"));
+		expect(stats.lastCacheAt).toBe(at("2026-10-20T10:54:00Z"));
+		expect(stats.lastWriteTtlMs).toBe(3_600_000);
+	});
+
+	test("an older response never moves the time back", () => {
+		const entries = [turn("2026-10-20T10:30:00Z", usage(0, 5000, 5000))];
+		expect(collectCacheStats(entries, at("2026-10-20T10:00:00Z")).lastCacheAt).toBe(at("2026-10-20T10:30:00Z"));
+	});
+
 	test("no write leaves the tier unknown", () => {
 		expect(collectCacheStats([turn("2026-10-20T10:00:00Z", usage(0, 0))]).lastWriteTtlMs).toBeUndefined();
 		expect(collectCacheStats([]).lastWriteTtlMs).toBeUndefined();

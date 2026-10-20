@@ -27,6 +27,20 @@ file would have silently reverted an upstream feature or fix.
     extension return `{ action: "stop" }`.
   - `getCompactionTokenSetting` still keys `compaction.modelOverrides` by
     `provider/id`.
+  - `anthropic-messages.js`: a non-undefined `onPayload` result still replaces
+    `params` whole (`cache-compaction` sends its replay that way), and
+    `ModelRegistry.streamSimple` still runs no extension hook.
+  - `extensions/runner.js` `restoreSystemMessages`: a `context` handler that
+    returns a changed list still folds the system messages, while in-place edits
+    of `event.messages` do not (goal's one-request stale rewrite relies on it).
+  - `agent-session.js` `_prepareRun`: a `before_agent_start` message still lands
+    right after the user's message and is stored (mentions); input handlers still
+    run before a queued steer/follow-up is enqueued.
+  - Boundary hooks: `turn_end`/`agent_before_settle` `entries` still replace the
+    accumulated drafts, and a `context_edit` still replaces only `content`.
+  - `session_before_compact`: a returned `compaction` is still appended as is
+    (`fromHook: true`), and the next compaction still skips a `fromHook` entry's
+    file lists (`withPreviousExtensionFiles` re-adds them).
   - Then: `PI_ANTHROPIC_PAYLOAD_LOG=/tmp/p.log pi -p --no-session "hi"` shows
     `ttl: "1h"` on all four breakpoints, and `cache-report.py --since <date>`
     shows a 1h share near 100% for main-session writes.

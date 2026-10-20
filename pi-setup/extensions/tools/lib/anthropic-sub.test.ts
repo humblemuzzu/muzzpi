@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -314,8 +314,8 @@ function loadExtension(env: Record<string, string> = {}) {
 		}
 	}
 	const notes: string[] = [];
-	const ctx = (provider: string, oauth = true, hasUI = true) => ({
-		model: { provider, id: "claude-opus-5-5" },
+	const ctx = (provider: string, oauth = true, hasUI = true, promptCache?: { short?: number }) => ({
+		model: { provider, id: "claude-opus-5-5", promptCache },
 		modelRegistry: { isUsingOAuth: () => oauth },
 		hasUI,
 		ui: { notify: (message: string) => notes.push(message) },
@@ -327,11 +327,17 @@ function loadExtension(env: Record<string, string> = {}) {
 describe("anthropic-sub extension", () => {
 	const original = process.env.PI_ANTHROPIC_PAYLOAD_LOG;
 	const originalMeter = process.env.PI_ANTHROPIC_METER_LOG;
+	const originalChild = process.env.PI_SUBAGENT_TOOLS;
+	beforeEach(() => {
+		delete process.env.PI_SUBAGENT_TOOLS;
+	});
 	afterEach(() => {
 		if (original === undefined) delete process.env.PI_ANTHROPIC_PAYLOAD_LOG;
 		else process.env.PI_ANTHROPIC_PAYLOAD_LOG = original;
 		if (originalMeter === undefined) delete process.env.PI_ANTHROPIC_METER_LOG;
 		else process.env.PI_ANTHROPIC_METER_LOG = originalMeter;
+		if (originalChild === undefined) delete process.env.PI_SUBAGENT_TOOLS;
+		else process.env.PI_SUBAGENT_TOOLS = originalChild;
 	});
 
 	const reply = (usage: Record<string, number>) => ({ message: { role: "assistant", stopReason: "stop", usage } });
@@ -372,8 +378,39 @@ describe("anthropic-sub extension", () => {
 			"before_provider_request",
 			"cache_warming_decision",
 			"message_end",
+			"model_select",
 			"session_start",
 		]);
+	});
+
+	test("warns once per model when pi's warmer would refresh a 1h cache on a shorter lifetime", () => {
+		const { call, ctx, notes } = loadExtension();
+		const stale = ctx("anthropic", true, true, { short: 300 });
+		call("session_start", { reason: "reload" }, stale);
+		expect(notes).toHaveLength(1);
+		call("model_select", {}, stale);
+		expect(notes).toHaveLength(1);
+		const picked = loadExtension();
+		picked.call("model_select", {}, picked.ctx("anthropic", true, true, { short: 300 }));
+		expect(picked.notes).toHaveLength(1);
+		expect(notes[0]).toContain("300s");
+		expect(notes[0]).toContain("Restart pi");
+		expect(notes[0]).not.toMatch(/[\n\r]/);
+	});
+
+	test("no lifetime warning when it matches, has none, or the request is not a 1h plan request", () => {
+		const main = loadExtension();
+		main.call("session_start", {}, main.ctx("anthropic", true, true, { short: 3600 }));
+		main.call("session_start", {}, main.ctx("anthropic", true, true, {}));
+		main.call("session_start", {}, main.ctx("anthropic", false, true, { short: 300 }));
+		main.call("session_start", {}, main.ctx("anthropic", true, false, { short: 300 }));
+		main.call("model_select", {}, main.ctx("deepseek", true, true, { short: 300 }));
+		expect(main.notes).toHaveLength(0);
+		for (const env of [{ PI_SUBAGENT_TOOLS: "read" }, { PI_PROMPT_CACHE_TTL: "5m" }]) {
+			const other = loadExtension(env);
+			other.call("session_start", {}, other.ctx("anthropic", true, true, { short: 300 }));
+			expect(other.notes).toHaveLength(0);
+		}
 	});
 
 	test("scrubs only anthropic OAuth requests", () => {

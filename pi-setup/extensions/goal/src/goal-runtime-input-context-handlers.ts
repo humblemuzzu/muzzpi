@@ -1,13 +1,16 @@
 import type {
+  AgentBeforeSettleEvent,
   BeforeAgentStartEvent,
+  BoundaryResult,
   ContextEvent,
   ExtensionHandler,
   InputEvent,
   InputEventResult,
+  TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
 import { continuationGoalIdFromPrompt } from "./prompts.ts";
-import { applyQueuedGoalProviderContextRewrites, extensionQueuedGoalWorkMessageId } from "./queued-goal-work.ts";
+import { rewriteStaleQueuedGoalWork, staleQueuedGoalWorkEdits } from "./queued-goal-work.ts";
 import {
   isActiveGoalQueuedDetails,
   isCommandResumeQueuedGoalMessage,
@@ -66,21 +69,32 @@ export function createInputContextEventHandlers(
     }) satisfies ExtensionHandler<InputEvent, InputEventResult>,
 
     onContext: (async (event, ctx) => {
-      const { messages, changed } = applyQueuedGoalProviderContextRewrites(event.messages, {
-        goal: stateController.getGoal(),
-        resolveStaleQueuedGoalWorkMessageId: queuedGoalWorkMessageIdForRuntime,
-        resolveActiveContinuationQueuedGoalWorkMessageId: extensionQueuedGoalWorkMessageId,
-      });
-
       const contextAbortPlan = runtimeState.staleQueuedWorkGuard.planContextAbort(
         runtimeState.currentTurnIndex,
       );
       if (contextAbortPlan !== null) {
         applyStaleQueuedWorkEffects(contextAbortPlan.effects, ctx, deps);
+        return undefined;
       }
 
-      return changed ? { messages } : undefined;
+      // In place, not a returned list: a returned list makes pi rebuild the system messages.
+      rewriteStaleQueuedGoalWork(
+        event.messages,
+        runtimeState.staleQueuedGoalIds,
+        queuedGoalWorkMessageIdForRuntime,
+      );
+      return undefined;
     }) satisfies ExtensionHandler<ContextEvent, ContextEventResult | undefined>,
+
+    onBoundary: ((event) => {
+      const edits = staleQueuedGoalWorkEdits(
+        event.context.contextEntries,
+        runtimeState.staleQueuedGoalIds,
+        queuedGoalWorkMessageIdForRuntime,
+      );
+      runtimeState.staleQueuedGoalIds.clear();
+      return edits.length > 0 ? { entries: [...event.entries, ...edits] } : undefined;
+    }) satisfies ExtensionHandler<TurnEndEvent | AgentBeforeSettleEvent, BoundaryResult | undefined>,
 
     onBeforeAgentStart: (async (event, ctx) => {
       if (!("prompt" in event)) return undefined;
@@ -136,6 +150,7 @@ export function createInputContextEventHandlers(
       }
 
       runtimeState.staleQueuedWorkGuard.noteStaleWorkStarted(queuedGoalId);
+      runtimeState.staleQueuedGoalIds.add(queuedGoalId);
     }) satisfies ExtensionHandler<MessageStartEvent>,
   };
 }

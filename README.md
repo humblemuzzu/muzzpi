@@ -371,7 +371,7 @@ muzzpi/
 ├── install.sh              ./install.sh pi | ghostty
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
-│   ├── extensions/         17 extensions; tools/ holds the 30 tools
+│   ├── extensions/         18 extensions; tools/ holds the 30 tools
 │   ├── agents/             system prompt, working rules, sub-agent prompts
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do

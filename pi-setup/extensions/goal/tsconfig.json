@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "paths": {
+      "@earendil-works/pi-ai": ["../tools/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai"],
+      "typebox": ["../tools/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox"]
+    }
+  }
+}

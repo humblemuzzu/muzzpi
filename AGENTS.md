@@ -61,10 +61,16 @@ sub-agents keep pi's 5m; a response served from extra usage drops it to 5m. Knob
 `PI_PROMPT_CACHE_TTL` / `PI_SUBAGENT_PROMPT_CACHE_TTL` (`5m`|`1h`), `PI_FORCE_PROMPT_CACHING_5M=1`.
 **Never set `PI_CACHE_RETENTION=long`**: it is process-wide and sends DeepSeek, River
 and OpenRouter `prompt_cache_retention: "24h"`. pi's warmer reads its TTL only from
-`models.json` `promptCache.short` (3600 for the Claude models) and refreshes at 90%;
+`models.json` `promptCache.short` (3600 for the Claude models) and refreshes at 90%; only a
+restart applies a changed value (`/reload` keeps the session's model object), and
+`anthropic-sub` warns when it is under 1h;
 `anthropic-sub` vetoes warming wherever a request wrote 5m. Claude compacts above 850k
-(`compaction.modelOverrides`). `cache-report.py` shows what was rebuilt after expiry;
-`PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter next to each request's tokens.
+(`compaction.modelOverrides`). `cache-compaction` replays the last main-session request
+with a summary instruction appended, so compaction reads the cache; any doubt (no capture,
+other session or model, overflow, 90% of the TTL gone, a summarized message not in it)
+runs pi's own. It loads after `anthropic-sub`, so it replays that payload byte for byte.
+`cache-report.py` shows what was rebuilt after expiry; `PI_ANTHROPIC_METER_LOG=<file>`
+logs the plan meter next to each request's tokens.
 
 ### System prompt assembly
 
@@ -143,13 +149,9 @@ commands as successes**), `claude-agent-sdk-pi`, `@sting8k/pi-vcc`,
 `pi-computer-use`, `pi-gpt-config`, `pi-ask`, `pi-grok-cli`, `pi-claude-bridge`,
 `lsp-pi`, `pi-powerline-footer`, `pi-anycopy`, `pi-autoresearch` (its
 `promptGuidelines` flip mid-session, re-writing the prompt cache),
-`pi-token-burden` (+143 ms on every start for one command),
-`@marckrenn/pi-sub-bar` (+324 ms, every provider off, two patches to stop it
-crashing pi), `pi-tool-display` (rewrote stored messages, then spliced the
-whole context on every LLM call to undo it), `@benvargas/pi-claude-code-use`
-(`mcp__` aliasing Anthropic no longer needs; see `anthropic-sub.ts`),
-`pi-mcp-adapter` (+33 ms per start, 85 MB, a 3.8k-char `mcp` tool on every
-request, and it wrote `-builtin:mcp` into `settings.json` itself; pi's built-in
+`pi-token-burden`, `@marckrenn/pi-sub-bar`, `pi-tool-display` (it re-wrote
+the whole context on every LLM call), `@benvargas/pi-claude-code-use`,
+`pi-mcp-adapter` (it writes `-builtin:mcp` into `settings.json`; pi's built-in
 client replaces it), `pi-codex-goal` (vendored as `extensions/goal`; the npm
 copy would register the goal tools twice).
 `verify-patches.sh` `REMOVED_PKGS` must match this list; it fails on any trace.
@@ -220,6 +222,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 |---|---|
 | `system-prompt.ts` | parent template / sub-agent generated prompt |
 | `anthropic-sub.ts` | Claude-plan billing: scrubs the trigger phrases, the 1h/5m cache TTL and warming veto, warns on a refusal, `PI_ANTHROPIC_PAYLOAD_LOG` feeds `cache-diag.py`. Parent and children |
+| `cache-compaction.ts` | compaction read from the prompt cache (see Prompt cache). Parent only; `PI_CACHE_COMPACTION_MAX_AGE_SEC` overrides its age limit |
 | `mentions.ts` | @mentions + agent directives |
 | `session-name.ts` | auto session naming (haiku, deliberately; a direct model call, not a sub-agent) |
 | `stats/` | `/stats`, Ctrl+Shift+S — analytics over pi, Claude Code, Codex and OpenCode sessions + git. Per-harness ledgers in `<agent dir>/cache/stats` keep sessions whose source is gone (Claude prunes after 30 days): never delete them casually. Bump `ledger.ts` `VERSION` when a parser's output changes. OpenCode is read via the `sqlite3` CLI, read-only. Nothing may reach the model: no tools, no `sendMessage`. The widget reads pi's ledger only, never a cold parse |
@@ -233,7 +236,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
-| `goal/` | `/goal`, `/create-goal` and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it |
+| `goal/` | `/goal`, `/create-goal` and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it. A continuation delivered after its goal stopped is rewritten once and stored as a `context_edit`; ones that ran are never rewritten |
 | `tools/` | custom tools |
 
 ### guardrails — the comment gate, and where the rules live
@@ -268,9 +271,12 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
   the ctx is stale and every `pi.*` call throws — inside a timer that is an
   uncaughtException, and pi exits. A timer calling `invalidate()`/
   `requestRender()` counts.
-- **Clipboard paste** loads pi's `dist/utils/clipboard-image.js` on the first
-  paste, not at startup (~36 ms under our bundle). If the file is missing, leave
-  `onPasteImage` unset so pi's default path-insert takes over.
+- **A `context` handler never returns a changed list**: pi then folds the system
+  messages into one (`restoreSystemMessages`) and the cache is re-written. Edit
+  `event.messages` in place for one request; store a lasting change as a
+  `context_edit` from `turn_end` (goal) or a `before_agent_start` message (mentions).
+- **Clipboard paste** loads pi's `dist/utils/clipboard-image.js` on the first paste,
+  not at startup; if it is missing, leave `onPasteImage` unset (pi's path-insert).
 
 ## Custom tools
 
@@ -281,9 +287,7 @@ every quantifier there**: an uncapped `[\w.-]*token[\w.-]*` took 284 s on 1 MB.
 
 `glob.ts` registers as `find`; there is no `glob` tool. The 7 GitHub tools are
 separate (`read_github` … `diff`); **there is no tool named `github`**.
-`web_search` can be disabled in ext-config; it defaults on. `agent_message`
-and its mailbox (`~/.pi/agent/agent-messages/`) are gone: every child process
-made a mailbox that was never cleaned up, and sub-agents could not receive.
+`web_search` can be disabled in ext-config; it defaults on.
 
 ### searchd — the index behind find and grep
 
@@ -378,8 +382,7 @@ back; drop the override only once pi stops sending Claude strict.
   own extension turns into the pane's `blocked` state and its "needs you" sound.
   Its `prepareArguments` must keep parsing stringified arrays: that is what made
   pi-ask's `ask_user` unusable.
-- apply_patch is gone (envelope 9.6%, batch 6.8% failures). If GPT models
-  return, gate it by model id.
+- apply_patch is gone; if GPT models return, gate it by model id.
 - Undo/redo refuse when a later still-applied change touches the path, or the
   file drifted outside the tool (`force: true` overrides and reports the loss).
   Ordering comes from position in `activeIds`, **never `Date.now()`**. Redo
@@ -489,17 +492,15 @@ edit there, deployed by `install.sh`, read at session start.
   `pi-spawn.ts` SIGKILLs a child whose first assistant message names any
   provider/model other than the one requested, or, with none requested, one not
   in `agent-models.json` (`modelViolation`). Keep every Claude id `anthropic/`.
-- **Ids must be provider-qualified** (a bare id is ambiguous across providers
-  since pi 0.84); the loader refuses one. No default → `--model` omitted → pi's
-  default. A `continueId` resume skips the defaults: pi restores the child's
-  own model.
+- **Ids must be provider-qualified**; the loader refuses a bare one. No default →
+  `--model` omitted → pi's default. A `continueId` resume skips the defaults:
+  pi restores the child's own model.
 
 ## Local models
 
-**llama.cpp must be >= b10270** (b8680 mangles `lfm2` tool calls: `\n` arrives
-as a literal backslash-n, and `[f(a), f(b)]` parses as one call). Check
-`llama-server --version` first if local tool calling goes strange: releases are
-now semver (`0.6.0 (build 11429)`), so compare the build number.
+**llama.cpp must be >= b10270** (older builds mangle `lfm2` tool calls). Check
+`llama-server --version` first if local tool calling goes strange; compare the
+build number (`0.6.0 (build 11429)`).
 
 pi's own `/llama` uses provider `llama.cpp` (needs `/login llama.cpp`); ours is
 `/local` + provider `llama-local` in models.json (no login, always listed).
@@ -521,15 +522,16 @@ every request — keep it to what decides loading. **The `skill` tool serves
 exactly pi's resolved skills** (`systemPromptOptions.skills`) with no discovery
 of its own, so a package's `skills: []` hides its skills from both.
 
-Ports with author prefixes — **`c-` cursor, `mat-` matt pocock, `dm-`
-dmmulroy** — had Claude-Code/Cursor machinery mapped to pi tools or cut; every
-subagent they spawn is read-only.
+Ports with author prefixes (**`c-`**, **`mat-`**, **`dm-`**) had Claude-Code/Cursor
+machinery mapped to pi tools or cut; every subagent they spawn is read-only.
 
 ## Agent mention directives
 
 `@oracle @finder @codereview @task @chad` → hidden `display: false` directive
-injected in the `context` hook telling the model to call that tool
-(`codereview` → `code_review`, `task` → `delegate`).
+telling the model to call that tool (`codereview` → `code_review`, `task` →
+`delegate`); data mentions add their context the same way. The message is stored
+once after the user's (`before_agent_start`; queued just ahead of it while
+streaming), never re-injected from `context`.
 
 - **Don't remove the explicit `import "./tools/lib/mentions/agent-source.js"`**
   in `mentions.ts` — the barrel `export *` doesn't guarantee evaluation of a

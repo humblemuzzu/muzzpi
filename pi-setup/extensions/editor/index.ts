@@ -693,6 +693,8 @@ export default function (pi: ExtensionAPI) {
 	let branchUnsub: (() => void) | null = null;
 	let statusRow: WidgetRowRegistry | null = null;
 	let cacheLine: CacheLineWidget | null = null;
+	let requestStartedAt: number | undefined;
+	let lastResponseAt: number | undefined;
 	const activity = createActivityState();
 
 	/**
@@ -710,7 +712,7 @@ export default function (pi: ExtensionAPI) {
 
 	const syncCacheLine = (ctx: ExtensionContext): void => {
 		if (!ctx.hasUI) return;
-		const stats = collectCacheStats(ctx.sessionManager.getEntries());
+		const stats = collectCacheStats(ctx.sessionManager.getEntries(), lastResponseAt);
 		const ttlMs = cacheTtlMs(ctx, stats);
 		// A declared lifetime is enough on its own; without one, the row waits until
 		// the provider has actually reported cache activity. Only Anthropic declares
@@ -984,7 +986,22 @@ export default function (pi: ExtensionAPI) {
 		syncCacheLine(ctx);
 	});
 
+	// A cache warm during a long tool touches the cache without a message, and its usage
+	// entry is saved only after the reply; the response is the earliest sign of it.
+	pi.on("before_provider_request", () => {
+		requestStartedAt = Date.now();
+		return undefined;
+	});
+
+	pi.on("after_provider_response", (event, ctx) => {
+		if (event.status < 200 || event.status >= 300 || requestStartedAt === undefined) return;
+		lastResponseAt = requestStartedAt;
+		syncCacheLine(ctx);
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
+		requestStartedAt = undefined;
+		lastResponseAt = undefined;
 		if (_event.reason === "startup" || _event.reason === "reload") return;
 		// editor component persists across session switches, just update stats
 		branchUnsub?.();

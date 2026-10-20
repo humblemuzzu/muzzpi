@@ -1490,15 +1490,56 @@ two `cache_warm` entries each read 41,135 tokens and wrote 0, and their payloads
 carried `ttl: "1h"` on all four breakpoints. A child process (`PI_SUBAGENT_TOOLS`
 set) logged pi's "warm" decision and wrote no `cache_warm` entry.
 
+### Compaction from the cache (`extensions/cache-compaction.ts`)
+
+It keeps the last main-session payload with the `context` messages it was built
+from, and in `session_before_compact` sends that payload again through
+`modelRegistry.streamSimple` with `onPayload` returning it: the instruction appended
+as a `role: "system"` message after pi's trailing effort message, `max_tokens`
+replaced, `tool_choice`, thinking and effort untouched. As a user turn, the
+instruction lost to the conversation's last "Reply only: bundled." in 2 of 3 runs
+(the summary was "bundled."); as a system message 6 of 6 runs gave the checkpoint.
+A reply without `## Goal` falls back to pi's summary.
+Upstream's version (`cff1cf5`, reverted in `8dab702`) rebuilt a shorter prefix and
+sent `toolChoice: "none"`, which Anthropic's table says invalidates the messages cache.
+
+Haiku 5.5, a 63k-token session (two ledger halves, one `read`), keepRecentTokens 10k:
+
+| run | input | cache read | cache write | output | cost |
+|---|---|---|---|---|---|
+| `/compact` (RPC), replay | 452 | 63,413 | 0 | 788 | $0.00107 |
+| threshold mid-run, replay | 452 | 63,225 | 0 | 801 | $0.00108 |
+| `/compact`, pi's stock summary, same base | 30,539 | 0 | 0 | 608 | $0.00336 |
+
+The replayed payload was byte-identical to the one `anthropic-sub` logged except
+the appended message and `max_tokens` (`cache-diag.py`: "max_tokens changed,
+messages 14 -> 15"). Loaded before `anthropic-sub` it replayed the 5m form of the
+same request and still read 63,414 tokens: a 5m request reads a 1h entry. The
+replay summarizes the whole conversation, the kept tail included; pi's summary
+covers only the messages it drops. Fallbacks measured live: an age limit of 0 s,
+a model switch before `/compact`, and a resumed session (no capture yet) each ran
+pi's summary.
+
+### Two extensions that broke the cache inside a turn
+
+- `mentions.ts` re-appended its hidden message from `context` on every request
+  while a mention was active, and returned a filtered list otherwise, so pi
+  rebuilt the system messages each time. Now the message is stored once after the
+  user's message: a turn with `@commit/<sha>` and a bash call, then a plain turn,
+  read 20,546 then 20,681 tokens, each the whole previous prompt.
+- `goal/` rewrote older continuations to "superseded" and stale ones to a text naming
+  the current goal status, on every request. With the old code a three-continuation
+  goal run read 7,179 tokens on four requests in a row while the prompt grew past
+  8,000; with the stale rewrite stored once as a `context_edit` and no dedupe, every
+  request read the whole previous prompt (6,652 to 8,388).
+
 ### Still open
 
 - How the plan meter weighs a 1h write against a 5m one. The
   `anthropic-ratelimit-unified-*-utilization` headers carry two decimals;
   `PI_ANTHROPIC_METER_LOG=<file>` pairs them with each request's tokens.
-- Cache-friendly compaction, and idle compaction, which only pays with it.
-  Upstream pi added the primitives in `cff1cf5` and reverted them in `8dab702`;
-  that version sent `toolChoice: "none"`, and Anthropic's invalidation table says a
-  changed `tool_choice` invalidates the messages cache.
+- Idle compaction, which only pays now that compaction reads the cache.
+- The replay on Opus at 850k: measured on Haiku only.
 
 ---
 

@@ -14,6 +14,7 @@ export interface GoalRuntimeState {
   agentRunFromContinuation: boolean;
   agentRunToolNames: string[];
   staleQueuedWorkGuard: StaleQueuedWorkGuard;
+  staleQueuedGoalIds: Set<string>;
 }
 
 export function createGoalRuntimeState(): GoalRuntimeState {
@@ -26,5 +27,6 @@ export function createGoalRuntimeState(): GoalRuntimeState {
     agentRunFromContinuation: false,
     agentRunToolNames: [],
     staleQueuedWorkGuard: createStaleQueuedWorkGuard(),
+    staleQueuedGoalIds: new Set(),
   };
 }
