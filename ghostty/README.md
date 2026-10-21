@@ -88,7 +88,7 @@ in `gt` automatically.
 
 ## Fonts
 
-JetBrains Mono (default), Geist Mono, Fira Code, Cascadia Code, Monaspace Neon,
+Fira Code (default), JetBrains Mono, Geist Mono, Cascadia Code, Monaspace Neon,
 Argon and Radon, Victor Mono, Maple Mono, Commit Mono and Iosevka. All 14pt
 except Victor Mono at 15pt.
 
@@ -96,7 +96,7 @@ except Victor Mono at 15pt.
 
 Cursor: bar, block or underline, each blinking or steady.
 
-The config ships with `background-opacity = 0.92` and `background-blur = 20`.
+The config ships solid: `background-opacity = 1.0` and `background-blur = 0`.
 `gg` → Opacity offers presets from solid (`1.0`) to very transparent (`0.75`), or
 any custom value.
 
@@ -107,6 +107,10 @@ any custom value.
 | `config` | `~/Library/Application Support/com.mitchellh.ghostty/config` |
 | `themes/*` | `~/.config/ghostty/themes/` |
 | `scripts/*` | `~/.local/bin/` |
+
+The config's last line, `config-file = ?herdr-keys`, does nothing unless you
+also install the optional [herdr add-on](../herdr/README.md); it never changes
+Ghostty's own keys on its own.
 
 ## Troubleshooting
 

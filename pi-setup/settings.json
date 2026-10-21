@@ -21,7 +21,8 @@
     "~/.pi/agent/extensions/anthropic-sub.js",
     "~/.pi/agent/extensions/cache-compaction.js",
     "~/.pi/agent/extensions/goal",
-    "~/.pi/agent/extensions/agents-ui"
+    "~/.pi/agent/extensions/agents-ui",
+    "~/.pi/agent/extensions/ideas"
   ],
   "compaction": {
     "enabled": true,

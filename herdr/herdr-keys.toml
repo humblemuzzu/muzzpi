@@ -1,0 +1,33 @@
+# muzzpi · herdr bindings. ./install.sh herdr merges these into your own herdr
+# config (marked `# muzzpi`) and leaves the rest of it alone.
+# herdr/ghostty-keys sends them as raw bytes from ⌘ shortcuts ("\x02" is ctrl+b),
+# so a binding changed here must change there too.
+
+[ui]
+prompt_new_tab_name = false
+
+[keys]
+next_agent = "prefix+a"
+previous_agent = "prefix+shift+a"
+switch_workspace = "prefix+alt+1..9"
+
+[[keys.command]]
+key = "prefix+f"
+type = "popup"
+command = "~/.local/bin/herdr-open"
+width = "70%"
+height = "70%"
+
+[[keys.command]]
+key = "prefix+u"
+type = "popup"
+command = "~/.local/bin/herdr-close"
+width = "70%"
+height = 6
+
+[[keys.command]]
+key = "prefix+i"
+type = "popup"
+command = "~/.local/bin/herdr-idea"
+width = "70%"
+height = 8

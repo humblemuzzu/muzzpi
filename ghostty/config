@@ -6,9 +6,9 @@
 # ══════════════════════════════════════════════════════════════════
 # 🎨 THEME — uncomment ONE line to switch
 # ══════════════════════════════════════════════════════════════════
-theme = ember-soft
+theme = cursor-soft
 # theme = ember-dark
-# theme = cursor-soft
+# theme = ember-soft
 # theme = melange-dark
 # theme = afterglow
 # theme = miasma
@@ -150,3 +150,7 @@ confirm-close-surface = always
 # if you're in alternate screen (pi/claude code) and can't scroll:
 #   use the tool's built-in scroll (shift+up/down, mouse wheel)
 #   or ⌘+Shift+J to dump buffer for review
+
+# herdr's ⌘ shortcuts live in their own file, which only `./install.sh herdr`
+# puts next to this config; without it this line does nothing.
+config-file = ?herdr-keys

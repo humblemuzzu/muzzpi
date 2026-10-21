@@ -4,8 +4,17 @@ Read by pi and other coding agents at session start. Facts and rules only.
 
 This repo is muzzpi: a portable pi harness in `pi-setup/`, deployed to
 `~/.pi/agent/` by `./install.sh pi` (→ `pi-setup/install.sh`), plus Ghostty
-config in `ghostty/` (`./install.sh ghostty`). README.md is the public pitch;
+config in `ghostty/` (`./install.sh ghostty`), and the optional herdr add-on in
+`herdr/` (`./install.sh herdr`, see its README). README.md is the public pitch;
 keep its numbers true when the facts change.
+
+**herdr is opt-in: never wire it into `install.sh pi` or `ghostty`.**
+`ghostty/config` holds only `config-file = ?herdr-keys` (a no-op without the
+file). `herdr/ghostty-keys` makes ⌘ keys type herdr's prefix as bytes
+(`text:\x02c` = ctrl+b c), so a binding changes in it and `herdr-keys.toml`
+together. The installer merges into the user's herdr config (`# muzzpi` lines,
+a marked block) and refuses clashes; **herdr drops its whole config on any parse
+error**, so it runs `herdr config check` before every swap.
 
 ## Rules for editing this file
 
@@ -227,6 +236,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
+| `ideas/` | `/idea <text>` parks an idea per project, `pi:` in front (or any idea in the repo holding `pi-setup/extensions/ideas`) files it under the harness; `/idea` lists. `<agent dir>/ideas/*.jsonl` is append-only user data, never rewritten; the `.md` views are regenerated. `cli.js` is herdr's ⌘I popup. Parent only |
 | `goal/` | `/goal`, `/create-goal` and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it. A continuation delivered after its goal stopped is rewritten once and stored as a `context_edit`; ones that ran are never rewritten |
 | `tools/` | custom tools |
 

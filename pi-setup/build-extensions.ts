@@ -38,6 +38,7 @@ for (const name of readdirSync(SRC).sort()) {
 	if (statSync(path).isDirectory()) {
 		if (!existsSync(join(path, "index.ts"))) continue;
 		await bundle(join(path, "index.ts"), join(OUT, name, "index.js"));
+		if (existsSync(join(path, "cli.ts"))) await bundle(join(path, "cli.ts"), join(OUT, name, "cli.js"));
 		for (const file of readdirSync(path)) {
 			if (SKIP.has(file) || file.endsWith(".ts") || statSync(join(path, file)).isDirectory()) continue;
 			copyFileSync(join(path, file), join(OUT, name, file));

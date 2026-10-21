@@ -234,6 +234,7 @@ mentions a token stays readable.
 | `/agents` | `Ctrl+Shift+A` | background agents: list, full-screen view of each, steer / stop / continue |
 | `/palette` | `Ctrl+Shift+P` | command palette |
 | `/ysk` | `Ctrl+Shift+Y` | a side agent that flags what you missed; off until `/ysk on` |
+| `/idea` | | park an idea for this project (`pi:` in front files it under the harness); `/idea` alone lists them ([more](herdr/README.md#idea-park-a-thought-keep-working)) |
 | `/goal` | | a long-running goal, audited before it is marked done |
 | `/md` | | session to markdown |
 | `/deepseek` | | DeepSeek peak and off-peak clock |
@@ -369,14 +370,20 @@ To use another default model, change `defaultProvider` and `defaultModel` in
 themes, 11 fonts, live switchers. `./install.sh ghostty`; see
 [`ghostty/`](ghostty/README.md). Each half installs on its own.
 
+**herdr (optional).** If you run [herdr](https://herdr.dev) inside Ghostty,
+`./install.sh herdr` makes Ghostty's ⌘ keys drive it (⌘T tabs, ⌘O open a
+project, ⌘] next agent, ⌘W close, ⌘I park an idea). Nothing else installs
+it, and Ghostty without it is untouched; every key and how to turn it off are
+in [`herdr/`](herdr/README.md).
+
 ## Layout
 
 ```
 muzzpi/
-├── install.sh              ./install.sh pi | ghostty
+├── install.sh              ./install.sh pi | ghostty | herdr
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
-│   ├── extensions/         18 extensions; tools/ holds the 31 tools
+│   ├── extensions/         19 extensions; tools/ holds the 31 tools
 │   ├── agents/             system prompt, working rules, sub-agent prompts
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do
@@ -386,7 +393,8 @@ muzzpi/
 │   ├── config-skills/      14 skills
 │   ├── port-harness/       benchmarks and the Claude-plan canary
 │   └── pi-migrations.md    one record per pi release
-└── ghostty/                themes, fonts, switchers
+├── ghostty/                themes, fonts, switchers
+└── herdr/                  optional: ⌘ keys for herdr, ⌘O picker, ⌘W close, ⌘I ideas
 ```
 
 Read next: [`AGENTS.md`](AGENTS.md) for how it fits together and what not to

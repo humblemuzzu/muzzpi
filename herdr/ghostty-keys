@@ -1,0 +1,74 @@
+# muzzpi · herdr ⌘ shortcuts for Ghostty, installed by ./install.sh herdr
+# next to your Ghostty config and loaded by its `config-file = ?herdr-keys`.
+#
+# Each sends herdr's prefix (ctrl+b, \x02) and then its action key, so
+# changing herdr's prefix or a binding means changing these lines too
+# (the herdr side is herdr/herdr-keys.toml). In a Ghostty tab without herdr
+# they type ^B and a letter; ⌘⌥T still opens a plain Ghostty tab.
+keybind = super+alt+t=new_tab
+
+keybind = super+t=text:\x02c
+# ⌘W closes the pane you are in; it asks first when an agent runs there
+# or it is the workspace's last pane (herdr/bin/herdr-close)
+keybind = super+w=text:\x02u
+keybind = super+shift+[=text:\x02p
+keybind = super+shift+]=text:\x02n
+keybind = super+digit_1=text:\x021
+keybind = super+digit_2=text:\x022
+keybind = super+digit_3=text:\x023
+keybind = super+digit_4=text:\x024
+keybind = super+digit_5=text:\x025
+keybind = super+digit_6=text:\x026
+keybind = super+digit_7=text:\x027
+keybind = super+digit_8=text:\x028
+keybind = super+digit_9=text:\x029
+keybind = super+1=text:\x021
+keybind = super+2=text:\x022
+keybind = super+3=text:\x023
+keybind = super+4=text:\x024
+keybind = super+5=text:\x025
+keybind = super+6=text:\x026
+keybind = super+7=text:\x027
+keybind = super+8=text:\x028
+keybind = super+9=text:\x029
+
+keybind = super+d=text:\x02v
+keybind = super+shift+d=text:\x02-
+keybind = super+alt+arrow_left=text:\x02h
+keybind = super+alt+arrow_down=text:\x02j
+keybind = super+alt+arrow_up=text:\x02k
+keybind = super+alt+arrow_right=text:\x02l
+keybind = super+shift+enter=text:\x02z
+
+# projects (workspaces): ⌘O opens or jumps to one, ⌘⌃1-9 by position
+keybind = super+o=text:\x02f
+keybind = super+ctrl+digit_1=text:\x02\x1b1
+keybind = super+ctrl+digit_2=text:\x02\x1b2
+keybind = super+ctrl+digit_3=text:\x02\x1b3
+keybind = super+ctrl+digit_4=text:\x02\x1b4
+keybind = super+ctrl+digit_5=text:\x02\x1b5
+keybind = super+ctrl+digit_6=text:\x02\x1b6
+keybind = super+ctrl+digit_7=text:\x02\x1b7
+keybind = super+ctrl+digit_8=text:\x02\x1b8
+keybind = super+ctrl+digit_9=text:\x02\x1b9
+keybind = super+ctrl+1=text:\x02\x1b1
+keybind = super+ctrl+2=text:\x02\x1b2
+keybind = super+ctrl+3=text:\x02\x1b3
+keybind = super+ctrl+4=text:\x02\x1b4
+keybind = super+ctrl+5=text:\x02\x1b5
+keybind = super+ctrl+6=text:\x02\x1b6
+keybind = super+ctrl+7=text:\x02\x1b7
+keybind = super+ctrl+8=text:\x02\x1b8
+keybind = super+ctrl+9=text:\x02\x1b9
+
+# agents: ⌘] / ⌘[ next and previous, ⌘J the one that just pinged you,
+# ⌘P search every agent and terminal
+keybind = super+]=text:\x02a
+keybind = super+[=text:\x02A
+keybind = super+j=text:\x02o
+keybind = super+p=text:\x02g
+
+# ⌘I park an idea (/idea) · ⌘B sidebar · ⌘/ every herdr key
+keybind = super+i=text:\x02i
+keybind = super+b=text:\x02b
+keybind = super+slash=text:\x02?

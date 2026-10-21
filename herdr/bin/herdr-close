@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# herdr-close: ⌘W. Closes the focused pane at once when it is a plain shell;
+# asks first when an agent runs in it or it is the workspace's last pane.
+set -uo pipefail
+
+# herdr runs popups with its server's environment, which can be the bare
+# launchd PATH when the server was not started from a login shell
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+HERDR="${HERDR_BIN_PATH:-herdr}"
+pane="${HERDR_ACTIVE_PANE_ID:-}"
+workspace="${HERDR_ACTIVE_WORKSPACE_ID:-}"
+[ -n "$pane" ] && [ -n "$workspace" ] || exit 0
+
+info="$("$HERDR" pane get "$pane" 2>/dev/null)" || exit 0
+agent="$(printf '%s' "$info" | jq -r '.result.pane.agent // empty')"
+status="$(printf '%s' "$info" | jq -r '.result.pane.agent_status // empty')"
+panes="$("$HERDR" pane list --workspace "$workspace" 2>/dev/null | jq '.result.panes | length')"
+label="$("$HERDR" workspace get "$workspace" 2>/dev/null | jq -r '.result.workspace.label // empty')"
+
+question=""
+if [ -n "$agent" ]; then
+    case "$status" in unknown | "") question="Close $agent?" ;; *) question="Close $agent ($status)?" ;; esac
+    question="$question It stops."
+fi
+if [ "${panes:-0}" -le 1 ]; then
+    question="${question:+$question }This is the last terminal in ${label:-this workspace}, so the workspace closes too."
+fi
+
+if [ -n "$question" ]; then
+    printf '\n  %s\n  enter closes · any other key keeps it\n' "$question"
+    IFS= read -rsn1 key
+    case "$key" in "" | y | Y) ;; *) exit 0 ;; esac
+fi
+"$HERDR" pane close "$pane" >/dev/null

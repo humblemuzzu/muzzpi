@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# herdr-open: pick a project folder. Jumps to its workspace when one is open,
+# otherwise opens a new workspace there and starts pi in it.
+#   MUZZPI_PROJECT_ROOTS  colon-separated folders whose subfolders are the projects
+set -uo pipefail
+
+# herdr runs popups with its server's environment, which can be the bare
+# launchd PATH when the server was not started from a login shell
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+HERDR="${HERDR_BIN_PATH:-herdr}"
+ROOTS="${MUZZPI_PROJECT_ROOTS:-$HOME/Documents/Code stuff:$HOME/StudioProjects:$HOME/Projects:$HOME/code}"
+SESSIONS="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions"
+
+fail() {
+    printf '\n  %s\n\n  press any key to close\n' "$*"
+    read -rsn1
+    exit 1
+}
+
+for bin in fzf jq "$HERDR"; do
+    command -v "$bin" >/dev/null 2>&1 || fail "herdr-open needs $(basename "$bin"); fzf and jq come from: brew install fzf jq"
+done
+
+NOW="$(date +%s)"
+
+age() {
+    local s=$(( NOW - $1 ))
+    if [ "$s" -lt 3600 ]; then AGE="$(( s / 60 ))m"
+    elif [ "$s" -lt 86400 ]; then AGE="$(( s / 3600 ))h"
+    elif [ "$s" -lt 1209600 ]; then AGE="$(( s / 86400 ))d"
+    else AGE="$(( s / 604800 ))w"
+    fi
+}
+
+panes="$("$HERDR" pane list 2>/dev/null)" || fail "herdr pane list failed: is the herdr server running?"
+workspaces="$("$HERDR" workspace list 2>/dev/null)" || fail "herdr workspace list failed"
+
+# "<cwd>\t<workspace id>\t<agent status>" for every open pane
+open_panes="$(jq -rn --argjson p "$panes" --argjson w "$workspaces" '
+    ($w.result.workspaces | map({ (.workspace_id): .agent_status }) | add // {}) as $status
+    | $p.result.panes[] | [.cwd, .workspace_id, ($status[.workspace_id] // "unknown")] | @tsv')"
+
+find_workspace() {
+    local dir="$1" cwd ws status
+    WS="-"
+    STATUS=""
+    while IFS=$'\t' read -r cwd ws status; do
+        [ -n "$cwd" ] || continue
+        case "$cwd/" in "$dir"/*) WS="$ws"; STATUS="$status"; return ;; esac
+    done <<< "$open_panes"
+}
+
+rows=""
+IFS=':' read -r -a roots <<< "$ROOTS"
+for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    root="$(cd "$root" && pwd -P)"
+    for dir in "$root"/*/; do
+        [ -d "$dir" ] || continue
+        dir="${dir%/}"
+        name="${dir##*/}"
+        encoded="${dir#/}"
+        encoded="--${encoded//[\/:]/-}--"
+        used=0
+        [ -d "$SESSIONS/$encoded" ] && used="$(stat -f %m "$SESSIONS/$encoded")"
+        find_workspace "$dir"
+        if [ "$WS" != "-" ]; then
+            case "$STATUS" in unknown | "") STATUS="open" ;; *) STATUS="open · $STATUS" ;; esac
+            rank=$(( 20000000000 + used ))
+            printf -v label '● %-34s %s' "$name" "$STATUS"
+        elif [ "$used" -gt 0 ]; then
+            rank=$(( 10000000000 + used ))
+            age "$used"
+            printf -v label '  %-34s %s' "$name" "$AGE"
+        else
+            rank=0
+            label="  $name"
+        fi
+        rows+="$rank"$'\t'"$dir"$'\t'"$WS"$'\t'"$label"$'\n'
+    done
+done
+[ -n "$rows" ] || fail "no project folders found in: $ROOTS"
+
+picked="$(printf '%s' "$rows" | sort -t $'\t' -k1,1nr -k4,4 \
+    | fzf --delimiter=$'\t' --with-nth=4 --layout=reverse --tiebreak=index --no-multi \
+        --prompt='project › ' --expect=ctrl-s \
+        --header='enter: open with pi · ctrl-s: shell only · esc: cancel')" || exit 0
+
+key="$(printf '%s\n' "$picked" | sed -n 1p)"
+line="$(printf '%s\n' "$picked" | sed -n 2p)"
+[ -n "$line" ] || exit 0
+dir="$(printf '%s' "$line" | cut -f2)"
+ws="$(printf '%s' "$line" | cut -f3)"
+
+if [ "$ws" != "-" ]; then
+    "$HERDR" workspace focus "$ws" >/dev/null || fail "could not focus workspace $ws"
+    exit 0
+fi
+
+created="$("$HERDR" workspace create --cwd "$dir" --label "$(basename "$dir")" --focus)" \
+    || fail "could not open a workspace in $dir"
+[ "$key" = "ctrl-s" ] && exit 0
+pane="$(printf '%s' "$created" | jq -r '.result.root_pane.pane_id // empty')"
+[ -n "$pane" ] || fail "workspace opened, but herdr returned no pane to start pi in"
+"$HERDR" pane run "$pane" pi >/dev/null || fail "workspace opened, but starting pi failed"
