@@ -419,7 +419,7 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		costs.push({ test: "read_web_page", parent: c.parent, subAgent: c.subAgent, total: c.parent + c.subAgent, durationMs: Date.now() - t0 });
 	}, 60_000);
 
-	it("web_search: searches via Parallel AI and returns results", async () => {
+	it("web_search: searches through the provider chain and returns results", async () => {
 		const t0 = Date.now();
 		const { events, exitCode } = await runPi(
 			'Use the web_search tool with objective "What is Nix package manager?" and search_queries ["nix", "package manager"]. Just call the tool, nothing else.',

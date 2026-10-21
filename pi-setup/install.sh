@@ -236,7 +236,8 @@ fi
 # None of these block the install; each one turns off one feature. The tools
 # come from Homebrew, so they are named once, with one line that installs them.
 [ -n "${DEEPSEEK_API_KEY:-}" ] || warn "DEEPSEEK_API_KEY not set: chad, finder, librarian, read_session and read_web_page fall back to your main model (edit agent-models.json to change)"
-[ -n "${PARALLEL_API_KEY:-}" ] || warn "PARALLEL_API_KEY not set: web_search will refuse until it is"
+[ -n "${CONTEXT_DEV_API_KEY:-}${DEEPSEEK_API_KEY:-}${PARALLEL_API_KEY:-}" ] || warn "no web search key set (CONTEXT_DEV_API_KEY, DEEPSEEK_API_KEY or PARALLEL_API_KEY): web_search will refuse until one is"
+[ -s "$HOME/.grok/auth.json" ] || warn "no Grok CLI login (~/.grok/auth.json): x_search stays off until you run grok login"
 missing=""
 formulas=""
 add_missing() { formulas="${formulas:+$formulas }$1"; missing="${missing:+$missing, }$1 ($2)"; }

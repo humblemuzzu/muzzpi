@@ -36,7 +36,7 @@ const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash"];
  */
 const EXTENSION_TOOLS = [
 	"read", "grep", "find", "ls", "bash",
-	"web_search", "read_web_page", "screenshot",
+	"web_search", "x_search", "read_web_page", "screenshot",
 ];
 
 /**
@@ -65,7 +65,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 			"Consult the oracle - an AI advisor powered by a reasoning model " +
 			"that can plan, review, and provide expert guidance.\n\n" +
 			"The oracle has access to tools: read, grep, find, ls, bash, web_search, " +
-			"read_web_page, and screenshot.\n\n" +
+			"x_search, read_web_page, and screenshot.\n\n" +
 			"The oracle returns a VERDICT: one recommendation, its trade-offs, and an " +
 			"effort estimate. It is deliberately instructed to keep its own exploration " +
 			"shallow and to lean on judgement, so give it the context it needs.\n\n" +

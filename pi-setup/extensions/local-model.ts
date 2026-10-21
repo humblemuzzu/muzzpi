@@ -39,7 +39,7 @@ Tools (schemas also in the API):
 - undo_edit / redo_edit — revert or redo last edit
 - format_file — prettier/biome
 - skill — load a named skill
-- web_search / read_web_page — web
+- web_search / read_web_page — web; x_search — posts on X
 - screenshot — screen/window/url capture
 - github tools — read_github, search_github, list_directory_github, list_repositories, glob_github, commit_search, diff
 - finder / oracle / delegate / chad / librarian / code_review — sub-agents (slow on local; avoid unless asked)

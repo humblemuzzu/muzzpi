@@ -14,8 +14,8 @@ import { createOracleTool, oracleAllowlist } from "./oracle";
 describe("oracle tool allowlist", () => {
 	const allowlist = oracleAllowlist();
 
-	test("includes the web toolset: web_search, read_web_page, screenshot", () => {
-		for (const tool of ["web_search", "read_web_page", "screenshot"]) {
+	test("includes the web toolset: web_search, x_search, read_web_page, screenshot", () => {
+		for (const tool of ["web_search", "x_search", "read_web_page", "screenshot"]) {
 			expect(allowlist).toContain(tool);
 		}
 	});

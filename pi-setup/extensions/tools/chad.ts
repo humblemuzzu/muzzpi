@@ -45,7 +45,7 @@ import { firstLine } from "./lib/sub-agent-render";
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash"];
 const EXTENSION_TOOLS = [
 	"read", "grep", "find", "ls", "bash", "skill", "codemode",
-	"web_search", "read_web_page", "screenshot",
+	"web_search", "x_search", "read_web_page", "screenshot",
 	"read_github", "search_github", "list_directory_github",
 	"list_repositories", "glob_github", "commit_search", "diff",
 ];
@@ -80,7 +80,7 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 		description:
 			"Deep read-only research agent. Several can be launched at once for genuinely " +
 			"parallel research.\n\n" +
-			"Tools: read, grep, find, ls, bash (read-only), skill, web_search, read_web_page, " +
+			"Tools: read, grep, find, ls, bash (read-only), skill, web_search, x_search, read_web_page, " +
 			"screenshot, and the seven GitHub tools.\n\n" +
 			"IT CANNOT CHANGE ANYTHING. There is no edit or write, and bash is restricted to " +
 			"read-only commands. Use it to find out; use delegate to do.\n\n" +

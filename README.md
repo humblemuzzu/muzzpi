@@ -7,7 +7,7 @@ that research, review and build in parallel. Web, GitHub and screenshot tools.
 Edits you can undo. A TUI built for all-day sessions. And a pi that starts as
 fast as stock, with every patch inside.
 
-**35** tools · **6** sub-agents · **19** MCP servers · **14** skills ·
+**36** tools · **6** sub-agents · **19** MCP servers · **14** skills ·
 **0.27 s** to a ready prompt · on stock pi **1.3.0**
 
 ```bash
@@ -172,8 +172,11 @@ Pick by what you need back:
 
 ## 04 · Web, GitHub, screen, history
 
-- **`web_search`**, and **`read_web_page`**: fetch a page, or ask a question about
-  it and get the answer from a child agent.
+- **`web_search`** tries Context.dev, then DeepSeek, then Parallel, and says which
+  one answered and why the others did not. **`read_web_page`** fetches a page, or
+  asks a question about it and gets the answer from a child agent.
+- **`x_search`**: X posts, accounts and threads through Grok's own X tools on your
+  Grok subscription, every post checked against what X returned.
 - **7 GitHub tools** read, search, glob, list and diff any repo `gh` can see,
   without cloning.
 - **`screenshot`** captures a window, a screen region or a whole web page, sized
@@ -255,7 +258,7 @@ mentions a token stays readable.
 | Files | `read` · `edit` · `write` · `undo_edit` · `redo_edit` · `grep` · `find` · `ls` · `format_file` |
 | Shell | `bash` · `codemode` |
 | Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `code_review` · `agents` |
-| Web | `web_search` · `read_web_page` |
+| Web | `web_search` · `x_search` · `read_web_page` |
 | GitHub | `read_github` · `search_github` · `list_directory_github` · `list_repositories` · `glob_github` · `commit_search` · `diff` |
 | Screen | `screenshot` |
 | Memory | `search_sessions` · `read_session` · `skill` |
@@ -358,7 +361,8 @@ missing:
 | `/login anthropic` in pi | Claude, the default model |
 | `DEEPSEEK_API_KEY` | cheap sub-agents (chad, finder, librarian, read_session, read_web_page); without it they run on your main model |
 | `RIVER_API_KEY` | DeepSeek V4.1 Flash via River, cheaper in DeepSeek's peak hours |
-| `PARALLEL_API_KEY` | `web_search` |
+| `CONTEXT_DEV_API_KEY`, `DEEPSEEK_API_KEY`, `PARALLEL_API_KEY` | `web_search`, which uses whichever are set, in that order |
+| `grok login` (Grok CLI, SuperGrok or X Premium+) | `x_search` |
 | `gh auth login` | the GitHub tools |
 | `ripgrep`, `trash` | `grep` and `find`, safe deletes |
 | Rust (`cargo`) | searchd, the index behind `grep` and `find` (macOS only); without it they run `rg`. `--with-deps` installs it |
@@ -383,7 +387,7 @@ muzzpi/
 ├── install.sh              ./install.sh pi | ghostty | herdr
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
-│   ├── extensions/         19 extensions; tools/ holds the 31 tools
+│   ├── extensions/         19 extensions; tools/ holds the 32 tools
 │   ├── agents/             system prompt, working rules, sub-agent prompts
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do

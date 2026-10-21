@@ -33,6 +33,7 @@ import { createLibrarianTool } from "./librarian";
 import { createCodeReviewTool } from "./code-review";
 import { createReadWebPageTool } from "./read-web-page";
 import { createConfiguredWebSearchTool } from "./web-search";
+import { createConfiguredXSearchTool } from "./x-search";
 import { createSearchSessionsTool } from "./search-sessions";
 import { createReadSessionTool } from "./read-session";
 import { createAskTool } from "./ask";
@@ -137,6 +138,8 @@ export default function (pi: ExtensionAPI) {
 	// we register nothing rather than advertising a tool that cannot run.
 	const webSearchTool = createConfiguredWebSearchTool();
 	if (webSearchTool) pi.registerTool(webSearchTool);
+	const xSearchTool = createConfiguredXSearchTool();
+	if (xSearchTool) pi.registerTool(xSearchTool);
 
 	pi.registerTool(createSearchSessionsTool());
 	pi.registerTool(createReadSessionTool({ models }));

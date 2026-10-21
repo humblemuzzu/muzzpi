@@ -1,427 +1,399 @@
-/** web_search — Parallel AI Search API via curl. Needs PARALLEL_API_KEY. */
+/**
+ * web_search — one tool over several search providers. Each provider is tried
+ * in the configured order until one returns results; the answer names the
+ * provider that served it and why any before it were passed over.
+ */
 
-import { spawn } from "node:child_process";
-import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import * as path from "node:path";
+import { getAgentDir, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import {
-	boxRendererWindowed,
-	osc8Link,
-	type BoxSection,
-	type Excerpt,
-} from "./lib/box-format";
+import { boxRendererWindowed, osc8Link, type BoxSection, type Excerpt } from "./lib/box-format";
 import { getEnabledExtensionConfig, type ExtensionConfigSchema } from "./lib/config";
+import { stringList } from "./lib/params";
+import { argumentPreparer } from "./lib/tool-args";
 import { withPromptPatch } from "./lib/prompt-patch";
 import type { ToolCostDetails } from "./lib/tool-cost";
+import { searchWithFallback, type Attempt } from "./lib/web/chain";
+import { ProviderHealth } from "./lib/web/health";
+import { ProviderError, type FailureKind } from "./lib/web/http";
+import { CONTEXT_ENDPOINT, createContextProvider } from "./lib/web/providers/context";
+import { createDeepSeekProvider, DEEPSEEK_ENDPOINT } from "./lib/web/providers/deepseek";
+import { createParallelProvider, PARALLEL_ENDPOINT } from "./lib/web/providers/parallel";
+import {
+	cleanUrl,
+	FRESHNESS,
+	PROVIDER_IDS,
+	SEARCH_MODES,
+	type Freshness,
+	type Hit,
+	type ProviderId,
+	type SearchMode,
+	type SearchProvider,
+	type SearchRequest,
+} from "./lib/web/types";
 
-/*
- * v1beta names: fast / one-shot / agentic. v1's turbo/basic/advanced are
- * rejected here, and v1 forbids max_results and excerpts. one-shot is the
- * default (what the tool did when no mode was sent).
- */
-const SEARCH_MODES = ["fast", "one-shot", "agentic"] as const;
-type SearchMode = (typeof SEARCH_MODES)[number];
-
-type WebSearchExtConfig = {
-  defaultMaxResults: number;
-  endpoint: string;
-  curlTimeoutSecs: number;
-  defaultMode: SearchMode;
+export type WebSearchExtConfig = {
+	defaultMaxResults: number;
+	defaultMode: SearchMode;
+	order: ProviderId[];
+	/** a mode listed here uses its own order instead of `order`. */
+	orderByMode: Partial<Record<SearchMode, ProviderId[]>>;
+	timeoutSecs: Record<ProviderId, number>;
+	endpoints: Record<ProviderId, string>;
+	contextUsdPerCredit: number;
 };
 
-const CONFIG_DEFAULTS: WebSearchExtConfig = {
-  defaultMaxResults: 10,
-  endpoint: "https://api.parallel.ai/v1beta/search",
-  curlTimeoutSecs: 30,
-  defaultMode: "one-shot",
+export const CONFIG_DEFAULTS: WebSearchExtConfig = {
+	defaultMaxResults: 10,
+	defaultMode: "one-shot",
+	order: ["context", "deepseek", "parallel"],
+	orderByMode: { fast: ["deepseek", "context", "parallel"] },
+	timeoutSecs: { context: 30, deepseek: 15, parallel: 30 },
+	endpoints: { context: CONTEXT_ENDPOINT, deepseek: DEEPSEEK_ENDPOINT, parallel: PARALLEL_ENDPOINT },
+	contextUsdPerCredit: 0,
 };
 
-function isWebSearchConfig(
-  value: Record<string, unknown>,
-): value is WebSearchExtConfig {
-  return (
-    typeof value.defaultMaxResults === "number" &&
-    Number.isInteger(value.defaultMaxResults) &&
-    value.defaultMaxResults >= 1 &&
-    typeof value.endpoint === "string" &&
-    value.endpoint.trim().length > 0 &&
-    typeof value.curlTimeoutSecs === "number" &&
-    Number.isInteger(value.curlTimeoutSecs) &&
-    value.curlTimeoutSecs >= 1 &&
-    // reject an unknown mode at config load rather than on every search:
-    // v1beta answers a hard error for names it does not know (e.g. "turbo").
-    typeof value.defaultMode === "string" &&
-    (SEARCH_MODES as readonly string[]).includes(value.defaultMode)
-  );
+const MAX_RESULTS_CAP = 50;
+const MAX_LANGUAGES = 5;
+
+export const prepareWebArguments = argumentPreparer(
+	"web_search",
+	{
+		objective: { aliases: ["query", "q", "question", "prompt", "task", "search", "topic", "goal", "request"] },
+		search_queries: { list: true, aliases: ["queries", "keywords", "terms", "search_query", "query_list", "searches"] },
+		max_results: { number: true, aliases: ["limit", "count", "num_results", "results", "n", "size", "top_k"] },
+		mode: {
+			aliases: ["depth", "search_mode", "effort"],
+			values: {
+				fast: ["quick", "turbo", "lite", "basic", "shallow", "instant"],
+				"one-shot": ["oneshot", "default", "normal", "standard", "balanced", "auto"],
+				agentic: ["deep", "advanced", "thorough", "research", "comprehensive", "pro"],
+			},
+			valuesHelp: "fast (~1s, title and summary), one-shot (the default, matching passages), agentic (longer passages and page text)",
+		},
+		include_domains: { list: true, aliases: ["domains", "sites", "site", "include", "include_sites", "only_domains", "allowed_domains"] },
+		exclude_domains: { list: true, aliases: ["exclude", "exclude_sites", "blocked_domains", "block", "excluded_domains"] },
+		freshness: {
+			aliases: ["recency", "time_range", "timeframe", "since", "published_within", "period", "date_range"],
+			values: {
+				day: ["24h", "1d", "today", "daily", "last_24_hours", "last_day", "d"],
+				week: ["7d", "last_week", "weekly", "w"],
+				month: ["30d", "last_month", "monthly", "m"],
+				year: ["365d", "12m", "last_year", "yearly", "y"],
+			},
+			valuesHelp: "day, week, month or year",
+		},
+		languages: { list: true, aliases: ["language", "lang", "langs", "locale"] },
+		country: { aliases: ["region", "location", "geo", "gl", "country_code"] },
+	},
+	'Example: web_search({ objective: "How SvelteKit remote functions work", search_queries: ["sveltekit remote functions"], mode: "fast" })',
+);
+
+const isPositiveInt = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1;
+const isProviderId = (v: unknown): v is ProviderId => (PROVIDER_IDS as readonly unknown[]).includes(v);
+const isOrder = (v: unknown) =>
+	Array.isArray(v) && v.length > 0 && v.every(isProviderId) && new Set(v).size === v.length;
+const isProviderMap = (v: unknown, check: (x: unknown) => boolean) =>
+	typeof v === "object" && v !== null && PROVIDER_IDS.every((id) => check((v as Record<string, unknown>)[id]));
+
+function isWebSearchConfig(value: Record<string, unknown>): value is WebSearchExtConfig {
+	const byMode = value.orderByMode;
+	return (
+		isPositiveInt(value.defaultMaxResults) &&
+		(SEARCH_MODES as readonly unknown[]).includes(value.defaultMode) &&
+		isOrder(value.order) &&
+		typeof byMode === "object" && byMode !== null &&
+		Object.entries(byMode).every(([mode, order]) => (SEARCH_MODES as readonly string[]).includes(mode) && isOrder(order)) &&
+		isProviderMap(value.timeoutSecs, isPositiveInt) &&
+		isProviderMap(value.endpoints, (e) => typeof e === "string" && /^https?:\/\//.test(e)) &&
+		typeof value.contextUsdPerCredit === "number" && value.contextUsdPerCredit >= 0
+	);
 }
 
-const WEB_SEARCH_CONFIG_SCHEMA: ExtensionConfigSchema<WebSearchExtConfig> = {
-  validate: isWebSearchConfig,
+const WEB_SEARCH_CONFIG_SCHEMA: ExtensionConfigSchema<WebSearchExtConfig> = { validate: isWebSearchConfig };
+
+const KIND_LABEL: Record<FailureKind, string> = {
+	missing_key: "not configured",
+	auth: "key rejected",
+	credits: "out of credits",
+	rate_limit: "rate limited",
+	bad_request: "rejected the request",
+	timeout: "timed out",
+	unavailable: "server error",
+	network: "unreachable",
+	invalid_response: "unreadable response",
+	aborted: "aborted",
 };
 
-/** per-result excerpts for collapsed display — first 5 visual lines */
-const COLLAPSED_EXCERPTS: Excerpt[] = [{ focus: "head" as const, context: 5 }];
+const COLLAPSED_EXCERPTS: Excerpt[] = [{ focus: "head", context: 5 }];
 
-interface SearchResult {
-  url: string;
-  title: string;
-  publish_date?: string;
-  excerpts: string[];
+export interface WebSearchDetails extends ToolCostDetails {
+	provider?: ProviderId;
+	attempts: Attempt[];
+	credits?: { used: number; remaining: number };
+	notes: string[];
+	matchLineIndices?: number[];
+	resultSections?: BoxSection[];
 }
 
-/**
- * usage line item from the API response.
- * schema: https://docs.parallel.ai/public-openapi.json → UsageItem
- */
-interface UsageItem {
-  name: string;
-  count: number;
+export interface WebSearchDeps {
+	env?: Record<string, string | undefined>;
+	health?: ProviderHealth;
+	providers?: Record<ProviderId, SearchProvider>;
 }
 
-/** per-unit pricing by SKU name ($/unit). ref: https://docs.parallel.ai/pricing */
-const SKU_UNIT_COST: Record<string, number> = {
-  sku_search: 0.005,
-  sku_search_additional_results: 0.001,
-};
-
-/** falls back to base search cost when API omits usage (e.g., older API versions). */
-function costFromUsage(usage: UsageItem[] | undefined): number {
-  if (!usage?.length) return SKU_UNIT_COST.sku_search ?? 0;
-  let total = 0;
-  for (const item of usage) {
-    total += (SKU_UNIT_COST[item.name] ?? 0) * item.count;
-  }
-  return total;
+function defaultProviders(config: WebSearchExtConfig): Record<ProviderId, SearchProvider> {
+	return {
+		context: createContextProvider({ usdPerCredit: config.contextUsdPerCredit }),
+		deepseek: createDeepSeekProvider(),
+		parallel: createParallelProvider(),
+	};
 }
 
-interface SearchResponse {
-  search_id?: string;
-  results: SearchResult[];
-  warnings?: string[];
-  usage?: UsageItem[];
+function domainOf(input: string): string {
+	return input.trim().replace(/^[a-z]+:\/\//i, "").replace(/^www\./i, "").split(/[/?#]/)[0].toLowerCase();
 }
 
-function searchParallel(
-  apiKey: string,
-  body: Record<string, unknown>,
-  endpoint: string,
-  curlTimeoutSecs: number,
-  signal?: AbortSignal,
-): Promise<{ data?: SearchResponse; error?: string }> {
-  return new Promise((resolve) => {
-    const payload = JSON.stringify(body);
-
-    const args = [
-      "-sL",
-      "-X",
-      "POST",
-      "-H",
-      "Content-Type: application/json",
-      "-H",
-      `x-api-key: ${apiKey}`,
-      "-H",
-      "parallel-beta: search-extract-2025-10-10",
-      "-m",
-      String(curlTimeoutSecs),
-      "-d",
-      payload,
-      endpoint,
-    ];
-
-    const child = spawn("curl", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-
-    const onAbort = () => {
-      aborted = true;
-      if (!child.killed) child.kill("SIGTERM");
-    };
-    if (signal) {
-      if (signal.aborted) {
-        onAbort();
-      } else signal.addEventListener("abort", onAbort, { once: true });
-    }
-
-    child.stdout?.on("data", (data: Buffer) => {
-      stdout += data.toString("utf-8");
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      stderr += data.toString("utf-8");
-    });
-
-    child.on("error", (err) => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ error: `curl error: ${err.message}` });
-    });
-
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (aborted) {
-        resolve({ error: "search aborted" });
-        return;
-      }
-      if (code !== 0) {
-        resolve({
-          error: `search failed: ${stderr.trim() || `curl exited with code ${code}`}`,
-        });
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout) as SearchResponse;
-        resolve({ data: parsed });
-      } catch {
-        resolve({
-          error: `invalid response from Parallel API: ${stdout.slice(0, 200)}`,
-        });
-      }
-    });
-  });
+/** turns raw tool arguments into a request, or says what is wrong with them. */
+export function buildRequest(params: Record<string, unknown>, config: WebSearchExtConfig): SearchRequest | string {
+	const objective = typeof params.objective === "string" ? params.objective.trim() : "";
+	if (!objective) return "objective is required: describe what you are looking for";
+	const mode = params.mode ?? config.defaultMode;
+	if (!(SEARCH_MODES as readonly unknown[]).includes(mode)) return `mode must be one of ${SEARCH_MODES.join(", ")}`;
+	const freshness = params.freshness;
+	if (freshness !== undefined && !(FRESHNESS as readonly unknown[]).includes(freshness)) {
+		return `freshness must be one of ${FRESHNESS.join(", ")}`;
+	}
+	const rawMax = params.max_results ?? config.defaultMaxResults;
+	const maxResults = Math.round(Number(rawMax));
+	if (!Number.isFinite(maxResults) || maxResults < 1) return "max_results must be a positive number";
+	const languages = [...new Set(stringList(params.languages).map((l) => l.toLowerCase()))];
+	if (languages.length > MAX_LANGUAGES) return `at most ${MAX_LANGUAGES} languages`;
+	const badLang = languages.find((l) => !/^[a-z]{2,3}$/.test(l));
+	if (badLang) return `languages takes ISO 639-1 codes such as "en" or "ja", not "${badLang}"`;
+	const country = typeof params.country === "string" && params.country.trim() ? params.country.trim().toLowerCase() : undefined;
+	if (country && !/^[a-z]{2}$/.test(country)) return `country takes a two-letter code such as "us" or "de", not "${country}"`;
+	return {
+		objective,
+		queries: stringList(params.search_queries),
+		maxResults: Math.min(maxResults, MAX_RESULTS_CAP),
+		mode: mode as SearchMode,
+		includeDomains: stringList(params.include_domains).map(domainOf).filter(Boolean),
+		excludeDomains: stringList(params.exclude_domains).map(domainOf).filter(Boolean),
+		freshness: freshness as Freshness | undefined,
+		languages,
+		country,
+	};
 }
 
-function formatResults(results: SearchResult[]): {
-  text: string;
-  headerLineIndices: number[];
-} {
-  if (results.length === 0)
-    return { text: "(no results found)", headerLineIndices: [] };
-
-  const lines: string[] = [];
-  const headerLineIndices: number[] = [];
-
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i]!;
-    headerLineIndices.push(lines.length);
-    lines.push(`### ${r.title || "(untitled)"}`);
-    lines.push(r.url!);
-    if (r.publish_date) lines.push(`*${r.publish_date}*`);
-    if (r.excerpts?.length) {
-      lines.push("");
-      for (let j = 0; j < r.excerpts.length; j++) {
-        const excerptLines = r.excerpts[j]!.split("\n");
-        lines.push(...excerptLines);
-        if (j < r.excerpts.length - 1) lines.push("");
-      }
-    }
-
-    if (i < results.length - 1) {
-      lines.push("");
-      lines.push("---");
-      lines.push("");
-    }
-  }
-
-  return { text: lines.join("\n"), headerLineIndices };
+export function formatHits(hits: Hit[]): { text: string; headerLineIndices: number[] } {
+	if (!hits.length) return { text: "(no results found)", headerLineIndices: [] };
+	const lines: string[] = [];
+	const headerLineIndices: number[] = [];
+	hits.forEach((hit, i) => {
+		if (i > 0) lines.push("", "---", "");
+		headerLineIndices.push(lines.length);
+		lines.push(`### ${hit.title || "(untitled)"}`, hit.url);
+		if (hit.date) lines.push(`*${hit.date}*`);
+		hit.passages.forEach((passage, j) => {
+			lines.push("");
+			lines.push(...passage.split("\n"));
+			if (j < hit.passages.length - 1) lines.push("");
+		});
+	});
+	return { text: lines.join("\n"), headerLineIndices };
 }
 
-/** convert raw SearchResult[] into BoxSection[] for box-format rendering. */
-function resultsToSections(results: SearchResult[]): BoxSection[] {
-  return results.map((r) => {
-    const lines = [];
-    lines.push({ text: osc8Link(r.url, r.url), highlight: true });
-    if (r.publish_date) lines.push({ text: r.publish_date, highlight: true });
-    if (r.excerpts?.length) {
-      lines.push({ text: "", highlight: false });
-      for (let j = 0; j < r.excerpts.length; j++) {
-        for (const l of r.excerpts[j]!.split("\n")) {
-          lines.push({ text: l, highlight: false });
-        }
-        if (j < r.excerpts.length - 1)
-          lines.push({ text: "", highlight: false });
-      }
-    }
-    return {
-      header: r.title || "(untitled)",
-      blocks: [{ lines }],
-    };
-  });
+function hitsToSections(hits: Hit[]): BoxSection[] {
+	return hits.map((hit) => {
+		const lines = [{ text: osc8Link(hit.url, hit.url), highlight: true }];
+		if (hit.date) lines.push({ text: hit.date, highlight: true });
+		for (const passage of hit.passages) {
+			lines.push({ text: "", highlight: false });
+			for (const line of passage.split("\n")) lines.push({ text: line, highlight: false });
+		}
+		return { header: hit.title || "(untitled)", blocks: [{ lines }] };
+	});
 }
 
-interface WebSearchParams {
-  objective: string;
-  search_queries?: string[];
-  max_results?: number;
+function attemptLine(a: Attempt, label: string, maxReason = Number.POSITIVE_INFINITY): string {
+	const reason = a.reason && a.reason.length > maxReason ? `${a.reason.slice(0, maxReason - 1)}…` : a.reason;
+	return `${label}: ${KIND_LABEL[a.kind ?? "invalid_response"]}${reason ? ` — ${reason}` : ""}`;
 }
 
-export function createWebSearchTool(
-  config: WebSearchExtConfig = CONFIG_DEFAULTS,
-): ToolDefinition<any> {
-  return {
-    name: "web_search",
-    label: "Web Search",
-    description:
-      "Search the web for information relevant to a research objective.\n\n" +
-      "Use when you need up-to-date or precise documentation. " +
-      "Use `read_web_page` to fetch full content from a specific URL.\n\n" +
-      "# Examples\n\n" +
-      "Get API documentation for a specific provider\n" +
-      '```json\n{"objective":"I want to know the request fields for the Stripe billing create customer API. Prefer Stripe\'s docs site."}\n```\n\n' +
-      "See usage documentation for newly released library features\n" +
-      '```json\n{"objective":"I want to know how to use SvelteKit remote functions, which is a new feature shipped in the last month.","search_queries":["sveltekit","remote function"]}\n```',
-
-    parameters: Type.Object({
-      objective: Type.String({
-        description:
-          "A natural-language description of the broader task or research goal, " +
-          "including any source or freshness guidance.",
-      }),
-      search_queries: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            "Optional keyword queries to ensure matches for specific terms are " +
-            "prioritized (recommended for best results).",
-        }),
-      ),
-      max_results: Type.Optional(
-        Type.Number({
-          description: `The maximum number of results to return (default: ${config.defaultMaxResults}).`,
-        }),
-      ),
-      mode: Type.Optional(
-        Type.Union(
-          SEARCH_MODES.map((m) => Type.Literal(m)),
-          {
-            description:
-              `Retrieval depth (default: ${config.defaultMode}). ` +
-              "'fast' ~1s, shallowest excerpts — use for a single fact: a version number, " +
-              "a release date, whether an API still exists. English and Japanese only. " +
-              "'one-shot' ~1.5s, fuller excerpts — the sensible default for documentation lookups. " +
-              "'agentic' ~2.5s, multi-hop retrieval — use when one page will not answer it, " +
-              "e.g. comparing options or tracing a change across releases.",
-          },
-        ),
-      ),
-    }),
-
-    async execute(_toolCallId, params, signal) {
-      const p = params as WebSearchParams;
-      const apiKey = process.env.PARALLEL_API_KEY;
-      if (!apiKey) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                "PARALLEL_API_KEY not set. add `export PARALLEL_API_KEY=\"...\"` to ~/.zshrc " +
-                "and start a new shell. get a key at https://platform.parallel.ai",
-            },
-          ],
-          isError: true,
-        } as any;
-      }
-
-      const body: Record<string, unknown> = {
-        objective: p.objective,
-        max_results: p.max_results ?? config.defaultMaxResults,
-        excerpts: { max_chars_per_result: 2000 },
-        // always explicit: never inherit whatever the server default happens
-        // to be on a given day.
-        mode: p.mode ?? config.defaultMode,
-      };
-      if (p.search_queries?.length) {
-        body.search_queries = p.search_queries;
-      }
-
-      const { data, error } = await searchParallel(
-        apiKey,
-        body,
-        config.endpoint,
-        config.curlTimeoutSecs,
-        signal,
-      );
-
-      if (error) {
-        return {
-          content: [{ type: "text" as const, text: error }],
-          isError: true,
-        } as any;
-      }
-
-      if (!data?.results) {
-        return {
-          content: [{ type: "text" as const, text: "(no results)" }],
-        } as any;
-      }
-
-      const { text, headerLineIndices } = formatResults(data.results);
-      let output = text;
-
-      if (data.warnings?.length) {
-        output += `\n\n**Warnings:** ${data.warnings.join("; ")}`;
-      }
-
-      const resultSections = resultsToSections(data.results);
-      const details: ToolCostDetails & {
-        matchLineIndices?: number[];
-        resultSections?: BoxSection[];
-      } = {
-        cost: costFromUsage(data.usage),
-        matchLineIndices: headerLineIndices,
-        resultSections,
-      };
-      return {
-        content: [{ type: "text" as const, text: output }],
-        details,
-      };
-    },
-
-    renderCall(args: any, theme: any) {
-      const objective = args.objective || "...";
-      const short =
-        objective.length > 70 ? `${objective.slice(0, 70)}...` : objective;
-      let text =
-        theme.fg("toolTitle", theme.bold("web_search ")) +
-        theme.fg("dim", short);
-      if (args.search_queries?.length) {
-        text += theme.fg("muted", ` [${args.search_queries.join(", ")}]`);
-      }
-      return new Text(text, 0, 0);
-    },
-
-    renderResult(
-      result: any,
-      { expanded }: { expanded: boolean },
-      _theme: any,
-    ) {
-      const sections: BoxSection[] | undefined = result.details?.resultSections;
-      if (!sections?.length) {
-        const text = result.content?.[0];
-        return new Text(
-          text?.type === "text" ? text.text : "(no output)",
-          0,
-          0,
-        );
-      }
-      return boxRendererWindowed(
-        () => sections,
-        {
-          collapsed: { maxSections: 3, excerpts: COLLAPSED_EXCERPTS },
-          expanded: {},
-        },
-        undefined,
-        expanded,
-      );
-    },
-  };
+/** one line saying who answered and why earlier providers did not; the model reads it, so it is plain words. */
+export function sourceLine(
+	attempts: Attempt[],
+	providers: Record<ProviderId, SearchProvider>,
+	credits?: { used: number; remaining: number },
+): string {
+	const served = attempts.find((a) => a.outcome === "ok");
+	const passed = attempts.filter((a) => a !== served && a.outcome !== "ok");
+	const spent = credits ? ` (${credits.used} credits, ${credits.remaining.toLocaleString("en-US")} left)` : "";
+	const parts = served
+		? [`via ${providers[served.provider].label} in ${((served.ms ?? 0) / 1000).toFixed(1)}s${spent}`]
+		: ["no provider found results"];
+	for (const a of passed) {
+		parts.push(a.outcome === "empty" ? `${providers[a.provider].label}: no results` : attemptLine(a, providers[a.provider].label, 140));
+	}
+	return parts.join(" · ");
 }
 
-/**
- * build the tool as it should be registered: config resolved
- * (defaults -> global -> project) and prompt-patched.
- *
- * returns null when disabled via config, so index.ts can skip registration
- * entirely rather than advertising a tool that will not run.
- */
+function failureText(attempts: Attempt[], providers: Record<ProviderId, SearchProvider>): string {
+	const lines = ["web_search failed on every provider:"];
+	for (const a of attempts) lines.push(`- ${attemptLine(a, providers[a.provider].label)}`);
+	const missing = attempts.filter((a) => a.kind === "missing_key").map((a) => providers[a.provider].keyEnv);
+	const credits = attempts.filter((a) => a.kind === "credits").map((a) => providers[a.provider].label);
+	if (missing.length) lines.push(`Set ${missing.join(" or ")} in ~/.zshrc, then start a new shell and pi.`);
+	if (credits.length) lines.push(`Top up ${credits.join(" or ")}, or set another provider's key.`);
+	return lines.join("\n");
+}
+
+function errorResult(text: string, details?: WebSearchDetails) {
+	return { content: [{ type: "text" as const, text }], isError: true, ...(details && { details }) } as any;
+}
+
+export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS, deps: WebSearchDeps = {}): ToolDefinition<any> {
+	const providers = deps.providers ?? defaultProviders(config);
+	const timeoutMs = Object.fromEntries(PROVIDER_IDS.map((id) => [id, config.timeoutSecs[id] * 1000])) as Record<ProviderId, number>;
+	let health = deps.health;
+
+	return {
+		name: "web_search",
+		label: "Web Search",
+		prepareArguments: prepareWebArguments,
+		description:
+			"Search the web for information relevant to a research objective.\n\n" +
+			"Use when you need up-to-date or precise documentation. Use `read_web_page` to fetch full content from a " +
+			"specific URL, and `x_search` for posts on X. Providers are tried in turn (Context.dev, DeepSeek, Parallel); " +
+			"the result ends with the one that answered.\n\n" +
+			'Example: web_search({ objective: "The request fields of the Stripe create-customer API. Prefer Stripe\'s docs.", include_domains: ["stripe.com"] })\n' +
+			'Example: web_search({ objective: "How SvelteKit remote functions work; shipped last month.", search_queries: ["sveltekit remote functions"], freshness: "month" })',
+
+		parameters: Type.Object({
+			objective: Type.String({
+				description:
+					"A natural-language description of the broader task or research goal, including any source or freshness guidance.",
+			}),
+			search_queries: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "Optional keyword queries (3–6 words each) so specific terms are matched; 1–3 work best.",
+				}),
+			),
+			max_results: Type.Optional(
+				Type.Number({ description: `Optional. Results to return (default ${config.defaultMaxResults}, at most ${MAX_RESULTS_CAP}).` }),
+			),
+			mode: Type.Optional(
+				Type.Union(SEARCH_MODES.map((m) => Type.Literal(m)), {
+					description:
+						`Optional retrieval depth (default ${config.defaultMode}). ` +
+						"'fast' ~1s: title and a short summary per page — for a single fact, a version, whether an API exists. " +
+						"'one-shot' ~5–12s: the passages of each page that match the objective — the default for documentation. " +
+						"'agentic': longer passages plus page text — for comparisons and questions one passage will not answer.",
+				}),
+			),
+			include_domains: Type.Optional(
+				Type.Array(Type.String(), { description: 'Optional. Only return results from these domains, e.g. ["docs.python.org"].' }),
+			),
+			exclude_domains: Type.Optional(
+				Type.Array(Type.String(), { description: 'Optional. Never return results from these domains, e.g. ["pinterest.com"].' }),
+			),
+			freshness: Type.Optional(
+				Type.Union(FRESHNESS.map((f) => Type.Literal(f)), {
+					description: "Optional. Only pages published within the last day, week, month or year.",
+				}),
+			),
+			languages: Type.Optional(
+				Type.Array(Type.String(), { description: 'Optional. ISO 639-1 codes of the languages to return, e.g. ["en", "ja"].' }),
+			),
+			country: Type.Optional(
+				Type.String({ description: 'Optional. Two-letter country code to localize results, e.g. "de".' }),
+			),
+		}),
+
+		async execute(_toolCallId, params, signal) {
+			const request = buildRequest(params as Record<string, unknown>, config);
+			if (typeof request === "string") return errorResult(request);
+
+			const env = deps.env ?? process.env;
+			const order = config.orderByMode[request.mode] ?? config.order;
+			health ??= new ProviderHealth(path.join(getAgentDir(), "cache", "web-search-health.json"));
+
+			let chain;
+			try {
+				chain = await searchWithFallback(request, {
+					order,
+					providers,
+					keys: Object.fromEntries(order.map((id) => [id, env[providers[id].keyEnv]?.trim() || undefined])),
+					endpoints: config.endpoints,
+					timeoutMs,
+					health,
+					signal,
+				});
+			} catch (err) {
+				const aborted = err instanceof ProviderError && err.kind === "aborted";
+				return errorResult(aborted ? "web_search aborted" : `web_search failed: ${(err as Error).message}`);
+			}
+
+			const { result, attempts } = chain;
+			if (!result) {
+				return errorResult(failureText(attempts, providers), { cost: 0, attempts, notes: [] });
+			}
+
+			const source = sourceLine(attempts, providers, result.credits);
+			const hits = result.hits.map((hit) => ({ ...hit, url: cleanUrl(hit.url) }));
+			const { text, headerLineIndices } = formatHits(hits);
+			const trailer = [source, ...result.notes].map((line) => `[${line}]`).join("\n");
+			const details: WebSearchDetails = {
+				cost: result.costUsd,
+				provider: chain.provider,
+				attempts,
+				credits: result.credits,
+				notes: result.notes,
+				matchLineIndices: headerLineIndices,
+				resultSections: hitsToSections(hits),
+			};
+			return { content: [{ type: "text" as const, text: `${text}\n\n${trailer}` }], details };
+		},
+
+		renderCall(args: any, theme: any) {
+			const objective = String(args.objective ?? "...");
+			const short = objective.length > 70 ? `${objective.slice(0, 70)}...` : objective;
+			let text = theme.fg("toolTitle", theme.bold("web_search ")) + theme.fg("dim", short);
+			const queries = stringList(args.search_queries);
+			if (queries.length) text += theme.fg("muted", ` [${queries.join(", ")}]`);
+			const filters = [
+				...stringList(args.include_domains).map((d) => `site:${d}`),
+				...stringList(args.exclude_domains).map((d) => `-site:${d}`),
+				args.freshness && `past ${args.freshness}`,
+				args.mode && args.mode !== config.defaultMode && args.mode,
+			].filter(Boolean);
+			if (filters.length) text += theme.fg("muted", ` · ${filters.join(" ")}`);
+			return new Text(text, 0, 0);
+		},
+
+		renderResult(result: any, { expanded }: { expanded: boolean }) {
+			const details = result.details as WebSearchDetails | undefined;
+			const sections = details?.resultSections;
+			if (!details || !sections?.length) {
+				const text = result.content?.[0];
+				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+			}
+			const notices = [sourceLine(details.attempts, providers, details.credits), ...details.notes];
+			return boxRendererWindowed(
+				() => sections,
+				{ collapsed: { maxSections: 3, excerpts: COLLAPSED_EXCERPTS }, expanded: {} },
+				notices,
+				expanded,
+			);
+		},
+	};
+}
+
+/** the tool as registered: config resolved (defaults → global → project) and prompt-patched; null when disabled. */
 export function createConfiguredWebSearchTool(): ToolDefinition<any> | null {
-  const { enabled, config } = getEnabledExtensionConfig(
-    "web-search",
-    CONFIG_DEFAULTS,
-    { schema: WEB_SEARCH_CONFIG_SCHEMA },
-  );
-  if (!enabled) return null;
-  return withPromptPatch(createWebSearchTool(config));
+	const { enabled, config } = getEnabledExtensionConfig("web-search", CONFIG_DEFAULTS, { schema: WEB_SEARCH_CONFIG_SCHEMA });
+	if (!enabled) return null;
+	return withPromptPatch(createWebSearchTool(config));
 }

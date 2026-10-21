@@ -31,7 +31,7 @@ describe("chad allowlist: read-only by construction", () => {
 	test("has the research toolset", () => {
 		for (const tool of [
 			"read", "grep", "find", "ls", "bash", "skill",
-			"web_search", "read_web_page", "screenshot",
+			"web_search", "x_search", "read_web_page", "screenshot",
 		]) {
 			expect(allowlist).toContain(tool);
 		}
@@ -85,7 +85,7 @@ describe("chad description tells the parent what it is", () => {
 	});
 
 	test("names its own tools", () => {
-		for (const tool of ["web_search", "read_web_page", "screenshot", "bash", "GitHub"]) {
+		for (const tool of ["web_search", "x_search", "read_web_page", "screenshot", "bash", "GitHub"]) {
 			expect(chad.description).toContain(tool);
 		}
 	});

@@ -14,8 +14,8 @@ import { createDelegateTool, delegateAllowlist } from "./delegate";
 describe("delegate tool allowlist", () => {
 	const allowlist = delegateAllowlist();
 
-	test("includes the web toolset: web_search, read_web_page, screenshot", () => {
-		for (const tool of ["web_search", "read_web_page", "screenshot"]) {
+	test("includes the web toolset: web_search, x_search, read_web_page, screenshot", () => {
+		for (const tool of ["web_search", "x_search", "read_web_page", "screenshot"]) {
 			expect(allowlist).toContain(tool);
 		}
 	});
