@@ -1,9 +1,13 @@
 /**
  * x_search — X posts, users and threads through Grok's own X tools, on the
- * user's Grok CLI login (lib/x/grok-login.ts, lib/x/grok-proxy.ts). Grok runs exactly one X tool and
- * relays its raw result; every post it relays is checked against the ids the
- * server says the tool returned, so a mis-copied or invented post is dropped
- * and a skipped one is reported.
+ * user's Grok CLI login (lib/x/grok-login.ts, lib/x/grok-proxy.ts). Grok runs
+ * exactly one X tool and lists the post ids; the server's citations say which
+ * ids the tool really returned, and the posts themselves load straight from
+ * FxTwitter or X's embed endpoint (lib/x/hydrate.ts). Grok never retypes a
+ * post: on grok-4.6 its copy ran ~94 tokens/s, so two long posts took 90s.
+ *
+ * Grok copies the result itself (checked against the citations) only for
+ * account searches, and when no post source can load the posts.
  */
 
 import * as path from "node:path";
@@ -28,6 +32,7 @@ import {
 	type XSearchToolConfig,
 } from "./lib/x/grok-proxy";
 import { grokCliLogin, hasGrokLogin } from "./lib/x/grok-login";
+import { hydratePosts, POST_SOURCES, type HydrateOptions, type PostSource } from "./lib/x/hydrate";
 import { allPostIds, parsePosts, parseUsers, type XPost, type XUser } from "./lib/x/parse";
 
 export type XSearchExtConfig = {
@@ -37,15 +42,22 @@ export type XSearchExtConfig = {
 	/** sent when neither an installed Grok CLI nor a 426 has named a newer version. */
 	clientVersion: string;
 	timeoutSecs: number;
+	/** where posts load from, in order; empty makes Grok copy every result (slow on long posts). */
+	postSources: PostSource[];
 };
 
 export const X_CONFIG_DEFAULTS: XSearchExtConfig = {
 	model: "grok-4.6",
 	effort: "low",
 	baseUrl: GROK_PROXY_URL,
-	clientVersion: "1.0.62",
+	clientVersion: "1.0.67",
 	timeoutSecs: 90,
+	postSources: [...POST_SOURCES],
 };
+
+const LOAD_TIMEOUT_MS = 20_000;
+const COPY_CONTENT_CHARS = 1500;
+const SOURCE_NAMES: Record<PostSource, string> = { fxtwitter: "FxTwitter", syndication: "X's embed endpoint" };
 
 function isXSearchConfig(v: Record<string, unknown>): v is XSearchExtConfig {
 	return (
@@ -53,7 +65,8 @@ function isXSearchConfig(v: Record<string, unknown>): v is XSearchExtConfig {
 		typeof v.effort === "string" && v.effort.length > 0 &&
 		typeof v.baseUrl === "string" && /^https?:\/\//.test(v.baseUrl) &&
 		typeof v.clientVersion === "string" && /^\d+(\.\d+){1,3}$/.test(v.clientVersion) &&
-		typeof v.timeoutSecs === "number" && Number.isInteger(v.timeoutSecs) && v.timeoutSecs >= 5
+		typeof v.timeoutSecs === "number" && Number.isInteger(v.timeoutSecs) && v.timeoutSecs >= 5 &&
+		Array.isArray(v.postSources) && v.postSources.every((s) => (POST_SOURCES as readonly unknown[]).includes(s))
 	);
 }
 
@@ -139,6 +152,10 @@ export interface XSearchDetails extends ToolCostDetails {
 	tokenSource?: string;
 	clientVersion?: string;
 	ms: number;
+	/** ids: Grok listed ids and the posts were loaded; copy: Grok copied the result. */
+	via: "ids" | "copy";
+	loadedFrom?: Partial<Record<PostSource, number>>;
+	missingReason?: string;
 	resultSections?: BoxSection[];
 }
 
@@ -204,9 +221,61 @@ export function relayInstructions(req: XRequest): string {
 		"You are a retrieval relay, not an assistant.",
 		`Make exactly one call: ${req.tool} with the arguments ${JSON.stringify(req.args)}. Call no other tool and do not change the arguments.`,
 		`Then output the tool's result verbatim, line for line, exactly as the tool returned it, leaving out only ${drop.join(" and ")}.`,
-		'Copy every "- Content:" value in full, character for character: never shorten, summarise, translate or correct it.',
+		'Copy every "- Content:" value character for character: never summarise, translate or correct it.',
+		`If a "- Content:" value is longer than ${COPY_CONTENT_CHARS} characters, copy its first ${COPY_CONTENT_CHARS} characters and end it with " […]".`,
 		`No preamble, no commentary, no code fences. If the tool returned nothing, output exactly: ${NO_RESULTS}`,
 	].join("\n");
+}
+
+export function idsInstructions(req: XRequest): string {
+	const which = req.kind === "thread"
+		? "the ID of every post in the result: the requested post, its parent when shown, and every reply"
+		: "the ID of every post the tool returned, in the order it returned them";
+	return [
+		"You are a retrieval relay, not an assistant.",
+		`Make exactly one call: ${req.tool} with the arguments ${JSON.stringify(req.args)}. Call no other tool and do not change the arguments.`,
+		`Then output ${which}, one per line, digits only. Leave out the IDs of quoted posts.`,
+		`No other words, no code fences. If the tool returned nothing, output exactly: ${NO_RESULTS}`,
+	].join("\n");
+}
+
+const listedIds = (text: string) => [...new Set(text.match(/\b\d{5,20}\b/g) ?? [])];
+
+/**
+ * A thread is every loaded post linked by replies to a post known to be in
+ * it (the one asked for, or one X cited): a listed id that links to none of
+ * them is not part of the thread, whatever Grok wrote.
+ */
+export function buildThread(requested: string, anchors: Set<string>, loaded: Map<string, XPost>): { roots: XPost[]; unlinked: string[] } {
+	const keep = new Set([...anchors].filter((id) => loaded.has(id)));
+	for (let grew = true; grew; ) {
+		grew = false;
+		for (const [id, post] of loaded) {
+			if (keep.has(id)) continue;
+			const linked = (post.replyTo && keep.has(post.replyTo)) || [...keep].some((k) => loaded.get(k)?.replyTo === id);
+			if (linked) {
+				keep.add(id);
+				grew = true;
+			}
+		}
+	}
+	const ancestors = new Set<string>();
+	for (let at = loaded.get(requested)?.replyTo; at && keep.has(at) && !ancestors.has(at); at = loaded.get(at)?.replyTo) ancestors.add(at);
+
+	const ordered = [...keep].sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : 1));
+	const nodes = new Map(ordered.map((id) => [id, { ...loaded.get(id)!, replies: [] as XPost[] }]));
+	const roots: XPost[] = [];
+	for (const id of ordered) {
+		const node = nodes.get(id)!;
+		if (id === requested) node.role = "requested";
+		else if (ancestors.has(id)) node.role = "parent";
+		const parent = node.replyTo ? nodes.get(node.replyTo) : undefined;
+		if (parent) {
+			node.role ??= "reply";
+			parent.replies.push(node);
+		} else roots.push(node);
+	}
+	return { roots, unlinked: [...loaded.keys()].filter((id) => !keep.has(id)) };
 }
 
 /**
@@ -252,7 +321,8 @@ function postSections(posts: XPost[]): BoxSection[] {
 		if (p.quoted) lines.push({ text: `> @${p.quoted.username ?? "?"}: ${p.quoted.text.split("\n")[0]}`, highlight: false });
 		return { header: `${prefix}${postHeader(p)}`, blocks: [{ lines }] };
 	};
-	return posts.flatMap((p) => [section(p), ...p.replies.map((r) => section(r, "↳ "))]);
+	const walk = (p: XPost, prefix: string): BoxSection[] => [section(p, prefix), ...p.replies.flatMap((r) => walk(r, "↳ "))];
+	return posts.flatMap((p) => walk(p, ""));
 }
 
 function userSections(users: XUser[]): BoxSection[] {
@@ -265,13 +335,11 @@ function userSections(users: XUser[]): BoxSection[] {
 /** sums for the posts on this page, so "how many likes did I get" is one call, not arithmetic. */
 function totalsLine(posts: XPost[]): string | undefined {
 	if (!posts.length) return undefined;
-	const sum = (key: keyof XPost["engagement"]) => posts.reduce((n, p) => n + (p.engagement[key] ?? 0), 0);
-	const replies = posts.filter((p) => p.conversationId && p.conversationId !== p.id).length;
-	const n = (v: number) => v.toLocaleString("en-US");
-	return (
-		`these ${posts.length} posts (${posts.length - replies} original, ${replies} replies): ` +
-		`${n(sum("likes"))} likes, ${n(sum("views"))} views, ${n(sum("reposts"))} reposts, ${n(sum("replies"))} replies received`
-	);
+	const replies = posts.filter((p) => p.replyTo || (p.conversationId && p.conversationId !== p.id)).length;
+	const counts = ([["likes", "likes"], ["views", "views"], ["reposts", "reposts"], ["replies", "replies received"]] as const)
+		.filter(([key]) => posts.some((p) => p.engagement[key] !== undefined))
+		.map(([key, label]) => `${posts.reduce((n, p) => n + (p.engagement[key] ?? 0), 0).toLocaleString("en-US")} ${label}`);
+	return `these ${posts.length} posts (${posts.length - replies} original, ${replies} replies): ${counts.join(", ")}`;
 }
 
 /** a full page means there may be more: the next page is the same query with max_id just below the oldest post. */
@@ -285,17 +353,24 @@ function nextPageLine(details: XSearchDetails, query: string): string | undefine
 
 function trailer(details: XSearchDetails): string[] {
 	const ran = details.executed.map((c) => `${c.name} ${c.input}`).join("; ") || "no X tool call was reported";
-	const lines = [`ran ${ran} · ${details.model} · ${(details.ms / 1000).toFixed(1)}s`];
+	const from = Object.entries(details.loadedFrom ?? {}).map(([s, n]) => `${SOURCE_NAMES[s as PostSource]} (${n})`);
+	const source = from.length ? ` · posts loaded from ${from.join(", ")}` : "";
+	const lines = [`ran ${ran} · ${details.model} · ${(details.ms / 1000).toFixed(1)}s${source}`];
 	const totals = totalsLine(details.posts ?? []);
 	if (totals) lines.push(totals);
 	const next = nextPageLine(details, details.query);
 	if (next) lines.push(next);
-	if (details.dropped.length) {
+	const links = (ids: string[]) => ids.slice(0, 10).map((id) => `https://x.com/i/status/${id}`).join(" ");
+	if (details.dropped.length && details.via === "ids") {
+		const why = details.kind === "thread" ? "are not part of this thread" : "X's results do not include";
+		lines.push(`ignored ${details.dropped.length} id(s) Grok listed that ${why}: ${details.dropped.join(", ")}`);
+	} else if (details.dropped.length) {
 		lines.push(`dropped ${details.dropped.length} post(s) X did not return — Grok mis-copied them: ${details.dropped.join(", ")}`);
 	}
-	if (details.missing.length) {
-		const shown = details.missing.slice(0, 10).map((id) => `https://x.com/i/status/${id}`).join(" ");
-		lines.push(`Grok's copy left out ${details.missing.length} of the ${details.fetched} posts X returned: ${shown}`);
+	if (details.missing.length && details.via === "ids") {
+		lines.push(`could not load ${details.missing.length} post(s) (${details.missingReason ?? "unknown reason"}): ${links(details.missing)}`);
+	} else if (details.missing.length) {
+		lines.push(`Grok's copy left out ${details.missing.length} of the ${details.fetched} posts X returned: ${links(details.missing)}`);
 	}
 	return [...lines, ...details.notes];
 }
@@ -307,6 +382,114 @@ function errorResult(text: string) {
 export interface XSearchDeps {
 	tokens?: TokenSource[];
 	version?: ClientVersion;
+	posts?: Pick<HydrateOptions, "fxtwitterUrl" | "syndicationUrl">;
+}
+
+function newDetails(req: XRequest, res: ProxyResult, query: string, via: XSearchDetails["via"]): XSearchDetails {
+	const sourceIds = req.kind === "users" ? res.sourceUserIds : res.sourcePostIds;
+	return {
+		cost: 0,
+		kind: req.kind,
+		query,
+		limit: Number(req.args.limit ?? req.args.count ?? MAX_LIMIT),
+		executed: res.calls,
+		fetched: sourceIds.size,
+		dropped: [],
+		missing: [],
+		notes: [...req.notes, ...(res.incomplete ? [`Grok's answer was cut short (${res.incomplete}); posts may be missing`] : [])],
+		usage: res.usage,
+		model: res.model,
+		tokenSource: res.tokenSource,
+		clientVersion: res.clientVersion,
+		ms: 0,
+		via,
+	};
+}
+
+function postsBody(posts: XPost[], details: XSearchDetails): string {
+	details.posts = posts;
+	details.resultSections = postSections(posts);
+	return posts.length ? formatPosts(posts) : "";
+}
+
+/**
+ * The posts Grok listed, loaded from the post sources. The ids that count are
+ * the ones X cited (Grok's list only orders them); for a thread, the ones
+ * linked by replies to the requested post. Undefined when no source could
+ * load any of them, so the caller can have Grok copy the result instead.
+ */
+async function loadedBody(req: XRequest, res: ProxyResult, details: XSearchDetails, opts: HydrateOptions): Promise<string | undefined> {
+	const listed = listedIds(res.text);
+	const cited = res.sourcePostIds;
+	const fetched = res.usage.postsFetched;
+	const requested = req.kind === "thread" ? String(req.args.post_id) : "";
+	let wanted: string[];
+	if (req.kind === "thread") wanted = [...new Set([requested, ...cited, ...listed])];
+	else if (cited.size) {
+		wanted = [...new Set([...listed.filter((id) => cited.has(id)), ...cited])];
+		details.dropped = listed.filter((id) => !cited.has(id));
+	} else if (fetched === 0) {
+		details.dropped = listed;
+		wanted = [];
+	} else {
+		wanted = listed.slice(0, fetched ?? details.limit);
+		if (wanted.length) details.notes.push("X sent no source list, so these are the posts Grok listed, not checked against the search");
+	}
+	if (!wanted.length) return "";
+
+	const got = await hydratePosts(wanted, opts);
+	if (!got.posts.size) {
+		details.missingReason = [...got.failed.values()][0];
+		return undefined;
+	}
+	const from: Partial<Record<PostSource, number>> = {};
+	for (const source of got.from.values()) from[source] = (from[source] ?? 0) + 1;
+	details.loadedFrom = from;
+	details.missing = [...got.failed.keys()];
+	details.missingReason = [...got.failed.values()][0];
+
+	if (req.kind !== "thread") return postsBody(wanted.flatMap((id) => got.posts.get(id) ?? []), details);
+	const thread = buildThread(requested, new Set([requested, ...cited]), got.posts);
+	details.dropped = thread.unlinked;
+	return postsBody(thread.roots, details);
+}
+
+/** Grok's own copy of the result, every post or account checked against the ids X cited. */
+function copiedBody(req: XRequest, res: ProxyResult, details: XSearchDetails): string {
+	const users = req.kind === "users";
+	const sourceIds = users ? res.sourceUserIds : res.sourcePostIds;
+	const raw = res.text.trim();
+	let body: string;
+	const fetchedCount = users ? res.usage.usersFetched : res.usage.postsFetched;
+	const xReturnedNothing = !sourceIds.size && fetchedCount === 0;
+	if (users) {
+		let found = parseUsers(raw);
+		if (sourceIds.size || xReturnedNothing) {
+			details.dropped = found.filter((u) => !sourceIds.has(u.id)).map((u) => u.id);
+			found = found.filter((u) => sourceIds.has(u.id));
+		}
+		details.users = found;
+		details.resultSections = userSections(found);
+		body = found.length ? formatUsers(found) : "";
+	} else {
+		let found = parsePosts(raw);
+		if (sourceIds.size) found = verifyPosts(found, sourceIds, res.usage.postsFetched, details);
+		else if (xReturnedNothing) {
+			details.dropped = found.map((p) => p.id);
+			found = [];
+		}
+		body = postsBody(found, details);
+	}
+
+	if (body && !sourceIds.size) {
+		details.notes.push("Grok sent no source list, so these results could not be checked against what X returned");
+	}
+	if (body) return body;
+	if (details.dropped.length) return "(none of what Grok copied matches what X returned, so none of it is shown)";
+	if (details.missing.length) return "(Grok returned none of the posts X found; links below)";
+	if (!raw || raw === NO_RESULTS) return "";
+	details.notes.push("Grok's output did not match the X result format; shown as Grok returned it");
+	return raw;
 }
 
 export function createXSearchTool(config: XSearchExtConfig = X_CONFIG_DEFAULTS, deps: XSearchDeps = {}): ToolDefinition<any> {
@@ -359,91 +542,66 @@ export function createXSearchTool(config: XSearchExtConfig = X_CONFIG_DEFAULTS, 
 
 			version ??= new ClientVersion(path.join(getAgentDir(), "cache", "x-search.json"), config.clientVersion);
 			const started = Date.now();
-			const ask = () =>
-				callGrokProxy(
-					{
-						model: config.model,
-						effort: config.effort,
-						input: `${relayInstructions(req)}\n\n${req.tool} ${JSON.stringify(req.args)}`,
-						tool: req.toolConfig,
-						timeoutMs: config.timeoutSecs * 1000,
-						signal,
-					},
-					{ baseUrl: config.baseUrl, tokens, version: version! },
+			const query = String((params as Record<string, unknown>).query ?? "");
+			const ask = async (instructions: string): Promise<ProxyResult | undefined> => {
+				const once = () =>
+					callGrokProxy(
+						{
+							model: config.model,
+							effort: config.effort,
+							input: `${instructions}\n\n${req.tool} ${JSON.stringify(req.args)}`,
+							tool: req.toolConfig,
+							timeoutMs: config.timeoutSecs * 1000,
+							signal,
+						},
+						{ baseUrl: config.baseUrl, tokens, version: version! },
+					);
+				const first = await once();
+				if (first.calls.length) return first;
+				const second = await once();
+				return second.calls.length ? second : undefined;
+			};
+			const noToolCall = () =>
+				errorResult(
+					"x_search failed: twice, Grok answered without running an X tool, so nothing it wrote came from X and none of it is shown. " +
+						"Try again, or set a different model under \"x-search\" in ext-config.json.",
 				);
-			let res: ProxyResult;
+
+			let details: XSearchDetails;
+			let body: string | undefined;
 			try {
-				res = await ask();
-				if (!res.calls.length) res = await ask();
+				let unloaded: string | undefined;
+				if (req.kind !== "users" && config.postSources.length) {
+					const res = await ask(idsInstructions(req));
+					if (!res) return noToolCall();
+					details = newDetails(req, res, query, "ids");
+					body = await loadedBody(req, res, details, {
+						sources: config.postSources,
+						timeoutMs: LOAD_TIMEOUT_MS,
+						signal,
+						...deps.posts,
+					});
+					if (body === undefined) unloaded = details.missingReason ?? "no reason given";
+				}
+				if (body === undefined) {
+					const res = await ask(relayInstructions(req));
+					if (!res) return noToolCall();
+					details = newDetails(req, res, query, "copy");
+					if (unloaded) details.notes.push(`no post source could load these posts (${unloaded}), so Grok copied them; posts over ${COPY_CONTENT_CHARS} characters end in […]`);
+					body = copiedBody(req, res, details);
+				}
 			} catch (err) {
 				const message = err instanceof ProviderError ? err.message : String((err as Error)?.message ?? err);
 				const status = err instanceof ProviderError && err.status ? ` (HTTP ${err.status})` : "";
 				return errorResult(`x_search failed${status}: ${message}`);
 			}
-			if (!res.calls.length) {
-				return errorResult(
-					"x_search failed: twice, Grok answered without running an X tool, so nothing it wrote came from X and none of it is shown. " +
-						"Try again, or set a different model under \"x-search\" in ext-config.json.",
-				);
-			}
 
-			const users = req.kind === "users";
-			const sourceIds = users ? res.sourceUserIds : res.sourcePostIds;
-			const details: XSearchDetails = {
-				cost: 0,
-				kind: req.kind,
-				query: String((params as Record<string, unknown>).query ?? ""),
-				limit: Number(req.args.limit ?? req.args.count ?? MAX_LIMIT),
-				executed: res.calls,
-				fetched: sourceIds.size,
-				dropped: [],
-				missing: [],
-				notes: [...req.notes, ...(res.incomplete ? [`Grok's answer was cut short (${res.incomplete}); posts may be missing`] : [])],
-				usage: res.usage,
-				model: config.model,
-				tokenSource: res.tokenSource,
-				clientVersion: res.clientVersion,
-				ms: Date.now() - started,
-			};
-			const raw = res.text.trim();
-			let body: string;
-			const fetchedCount = users ? res.usage.usersFetched : res.usage.postsFetched;
-			const xReturnedNothing = !sourceIds.size && fetchedCount === 0;
-			if (users) {
-				let found = parseUsers(raw);
-				if (sourceIds.size || xReturnedNothing) {
-					details.dropped = found.filter((u) => !sourceIds.has(u.id)).map((u) => u.id);
-					found = found.filter((u) => sourceIds.has(u.id));
-				}
-				details.users = found;
-				details.resultSections = userSections(found);
-				body = found.length ? formatUsers(found) : "";
-			} else {
-				let found = parsePosts(raw);
-				if (sourceIds.size) found = verifyPosts(found, sourceIds, res.usage.postsFetched, details);
-				else if (xReturnedNothing) {
-					details.dropped = found.map((p) => p.id);
-					found = [];
-				}
-				details.posts = found;
-				details.resultSections = postSections(found);
-				body = found.length ? formatPosts(found) : "";
-			}
-
-			if (body && !sourceIds.size) {
-				details.notes.push("Grok sent no source list, so these results could not be checked against what X returned");
-			}
+			details!.ms = Date.now() - started;
 			if (!body) {
-				const nothing = !raw || raw === NO_RESULTS;
-				if (details.dropped.length) body = "(none of what Grok copied matches what X returned, so none of it is shown)";
-				else if (details.missing.length) body = "(Grok returned none of the posts X found; links below)";
-				else if (nothing) body = users ? "(no accounts found)" : "(no posts found)";
-				else {
-					body = raw;
-					details.notes.push("Grok's output did not match the X result format; shown as Grok returned it");
-				}
+				if (details!.missing.length) body = "(none of the posts X returned could be loaded; links below)";
+				else body = req.kind === "users" ? "(no accounts found)" : "(no posts found)";
 			}
-			return { content: [{ type: "text" as const, text: `${body}\n\n${trailer(details).map((l) => `[${l}]`).join("\n")}` }], details };
+			return { content: [{ type: "text" as const, text: `${body}\n\n${trailer(details!).map((l) => `[${l}]`).join("\n")}` }], details: details! };
 		},
 
 		renderCall(args: any, theme: any) {

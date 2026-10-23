@@ -2,8 +2,9 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClientVersion, jwtSecondsLeft, type TokenSource } from "./lib/x/grok-proxy";
-import { buildXRequest, createXSearchTool, relayInstructions, X_CONFIG_DEFAULTS } from "./x-search";
+import { ClientVersion, jwtSecondsLeft, versionFloor, type TokenSource } from "./lib/x/grok-proxy";
+import { syndicationToken } from "./lib/x/hydrate";
+import { buildXRequest, createXSearchTool, idsInstructions, relayInstructions, X_CONFIG_DEFAULTS, type XSearchExtConfig } from "./x-search";
 
 const card = (id: string, user: string, text: string) =>
 	`Main Post:\n- [post:0] ID: ${id}\n- Conversation ID: ${id}\n- Author: ${user} - @${user}\n- Timestamp: Wed, 21 Oct 2026 07:08:53 GMT\n- Engagement: Likes=5, Reposts=1, Quotes=0, Replies=2, Bookmarks=0, Views=100\n- Content: ${text}`;
@@ -11,6 +12,7 @@ const card = (id: string, user: string, text: string) =>
 interface Turn {
 	status?: number;
 	body?: string;
+	headers?: Record<string, string>;
 	text?: string;
 	postIds?: string[];
 	userIds?: string[];
@@ -63,29 +65,74 @@ function chunked(body: string): ReadableStream<Uint8Array> {
 
 let turns: Turn[] = [];
 let requests: { headers: Headers; body: any }[] = [];
+/** FxTwitter and X embed answers by post id, the models the proxy lists, and every id each was asked for. */
+let fx = new Map<string, any>();
+let syndication = new Map<string, any>();
+let models: any[] = [];
+let loads: string[] = [];
 const server = Bun.serve({
 	port: 0,
 	async fetch(req) {
+		const url = new URL(req.url);
+		if (url.pathname.startsWith("/fx/status/")) {
+			const id = url.pathname.split("/").pop()!;
+			loads.push(`fx:${id}`);
+			const tweet = fx.get(id);
+			return tweet ? Response.json({ code: 200, message: "OK", tweet }) : Response.json({ code: 404, message: "NOT_FOUND" }, { status: 404 });
+		}
+		if (url.pathname === "/syn/tweet-result") {
+			const id = url.searchParams.get("id")!;
+			loads.push(`syn:${id}:${url.searchParams.get("token")}`);
+			const tweet = syndication.get(id);
+			return tweet ? Response.json(tweet) : new Response("", { status: 404 });
+		}
+		if (url.pathname === "/models") return Response.json({ object: "list", data: models });
 		requests.push({ headers: req.headers, body: await req.json() });
 		const turn = turns.shift() ?? { text: "NO RESULTS" };
-		if (turn.status && turn.status !== 200) return new Response(turn.body ?? "", { status: turn.status });
+		if (turn.status && turn.status !== 200) return new Response(turn.body ?? "", { status: turn.status, headers: turn.headers });
 		return new Response(chunked(sse(turn)), { headers: { "content-type": "text/event-stream", "x-request-id": "req-1" } });
 	},
 });
 afterAll(() => server.stop(true));
+
+const fxTweet = (id: string, user: string, text: string, extra: Record<string, unknown> = {}) => ({
+	id,
+	url: `https://x.com/${user}/status/${id}`,
+	text,
+	author: { screen_name: user, name: user.toUpperCase() },
+	likes: 4,
+	retweets: 1,
+	replies: 2,
+	quotes: 0,
+	bookmarks: 5,
+	views: 518,
+	created_timestamp: 1788504749,
+	replying_to_status: null,
+	...extra,
+});
 
 const token = (label: string, value: string | undefined): TokenSource => ({ label, get: async () => value });
 let dir: string;
 beforeEach(() => {
 	turns = [];
 	requests = [];
+	fx = new Map();
+	syndication = new Map();
+	models = [];
+	loads = [];
 	dir = mkdtempSync(join(tmpdir(), "x-search-"));
 });
 
-function tool(tokens: TokenSource[] = [token("pi", "tok-pi")], fallback = "1.0.62") {
+/** by default Grok copies the result (no post sources); `loading()` loads posts by id from the fake FxTwitter and X embed. */
+function tool(tokens: TokenSource[] = [token("pi", "tok-pi")], fallback = "1.0.62", overrides: Partial<XSearchExtConfig> = { postSources: [] }) {
 	const version = new ClientVersion(join(dir, "x-search.json"), fallback, join(dir, "no-grok"));
-	return createXSearchTool({ ...X_CONFIG_DEFAULTS, baseUrl: `http://127.0.0.1:${server.port}` }, { tokens, version }) as any;
+	const base = `http://127.0.0.1:${server.port}`;
+	return createXSearchTool(
+		{ ...X_CONFIG_DEFAULTS, baseUrl: base, ...overrides },
+		{ tokens, version, posts: { fxtwitterUrl: `${base}/fx`, syndicationUrl: `${base}/syn` } },
+	) as any;
 }
+const loading = () => tool(undefined, undefined, {});
 async function run(params: Record<string, unknown>, t = tool()) {
 	const r = await t.execute("x", params, undefined, undefined, {});
 	return { text: r.content[0].text as string, isError: Boolean(r.isError), details: r.details };
@@ -265,8 +312,13 @@ describe("x_search against the proxy", () => {
 		expect(requests).toHaveLength(0);
 	});
 
-	test("a failure mid-stream is an error, not an empty result", async () => {
-		turns = [{ text: "partial", failMidStream: true }];
+	test("a failure mid-stream is retried once, and a second one is an error, not an empty result", async () => {
+		turns = [{ text: "partial", failMidStream: true }, { text: card("1111111111111111111", "real", "real post"), postIds: ["1111111111111111111"] }];
+		const recovered = await run({ query: "x" });
+		expect(recovered.isError).toBe(false);
+		expect(recovered.details.posts).toHaveLength(1);
+
+		turns = [{ text: "partial", failMidStream: true }, { text: "partial", failMidStream: true }];
 		const r = await run({ query: "x" });
 		expect(r.isError).toBe(true);
 		expect(r.text).toContain("model crashed");
@@ -292,6 +344,153 @@ describe("x_search against the proxy", () => {
 		const r = await run({ query: "x" });
 		expect(r.text).toStartWith("I could not run the search.");
 		expect(r.text).toContain("did not match the X result format");
+	});
+});
+
+describe("x_search loading posts by id", () => {
+	const A = "2095766933857763813";
+	const B = "2112215704711713256";
+	const C = "2036633333606883657";
+
+	test("Grok only lists ids; the cited posts load in its order from FxTwitter, full length, and an uncited id is ignored", async () => {
+		const long = "长".repeat(10_000);
+		fx.set(A, fxTweet(A, "agentbuff_dev", long, { replying_to_status: "2095746645887779085" }));
+		fx.set(B, fxTweet(B, "kafkaup", "short one"));
+		turns = [{ text: `${B}\n${A}\n${C}`, postIds: [A, B] }];
+		const r = await run({ query: '"web fetch"', sort: "top" }, loading());
+		expect(r.isError).toBe(false);
+		expect(requests[0].body.input[0].content).toStartWith(idsInstructions(buildXRequest({ query: '"web fetch"', sort: "top" }) as any));
+		expect(r.details.posts.map((p: any) => p.id)).toEqual([B, A]);
+		expect(r.details.posts[1].text).toBe(long);
+		expect(r.text).toStartWith("@kafkaup (KAFKAUP) · 2026-09-04 06:52 UTC · 4 likes, 1 reposts, 2 replies, 518 views\nhttps://x.com/kafkaup/status/");
+		expect(r.text).toContain(`https://x.com/agentbuff_dev/status/${A} (reply to https://x.com/i/status/2095746645887779085)`);
+		expect(r.text).toContain("posts loaded from FxTwitter (2)");
+		expect(r.text).toContain(`ignored 1 id(s) Grok listed that X's results do not include: ${C}`);
+		expect(r.text).toContain("these 2 posts (1 original, 1 replies)");
+		expect(loads.sort()).toEqual([`fx:${A}`, `fx:${B}`]);
+		expect(requests).toHaveLength(1);
+	});
+
+	test("a cited post Grok left off its list still loads", async () => {
+		fx.set(A, fxTweet(A, "a", "first"));
+		fx.set(B, fxTweet(B, "b", "second"));
+		turns = [{ text: "DONE", postIds: [A, B] }];
+		const r = await run({ query: "x" }, loading());
+		expect(r.details.posts.map((p: any) => p.id)).toEqual([A, B]);
+	});
+
+	test("what FxTwitter cannot load comes from X's embed endpoint; what neither can is linked with the reason", async () => {
+		fx.set(A, fxTweet(A, "a", "from fx"));
+		syndication.set(B, {
+			id_str: B,
+			text: "@someone from embed https://t.co/abc https://t.co/pic",
+			display_text_range: [9, 36],
+			entities: { urls: [{ url: "https://t.co/abc", expanded_url: "https://example.com/page" }] },
+			user: { screen_name: "b", name: "Bee" },
+			favorite_count: 8,
+			conversation_count: 6,
+			created_at: "2026-10-19T16:14:01.000Z",
+			note_tweet: { id: "x" },
+		});
+		turns = [{ text: `${A}\n${B}\n${C}`, postIds: [A, B, C] }];
+		const r = await run({ query: "x" }, loading());
+		expect(r.details.posts.map((p: any) => p.id)).toEqual([A, B]);
+		expect(r.text).toContain("from embed https://example.com/page\n[long post; X's embed shows only the start: https://x.com/b/status/");
+		expect(r.text).toContain("posts loaded from FxTwitter (1), X's embed endpoint (1)");
+		expect(r.text).toContain(`could not load 1 post(s) (X embed HTTP 404): https://x.com/i/status/${C}`);
+		expect(loads).toContain(`syn:${B}:${syndicationToken(B)}`);
+
+		fx = new Map();
+		turns = [{ text: B, postIds: [B] }];
+		const embedOnly = await run({ query: "x" }, loading());
+		expect(embedOnly.text).toContain("[these 1 posts (1 original, 0 replies): 8 likes, 6 replies received]");
+	});
+
+	test("when no source can load any post, Grok copies the result instead, and the answer says so", async () => {
+		turns = [
+			{ text: A, postIds: [A] },
+			{ text: card(A, "real", "copied by Grok"), postIds: [A] },
+		];
+		const r = await run({ query: "x" }, loading());
+		expect(requests).toHaveLength(2);
+		expect(requests[1].body.input[0].content).toContain("verbatim");
+		expect(r.details.posts.map((p: any) => p.text)).toEqual(["copied by Grok"]);
+		expect(r.text).toContain("no post source could load these posts (X embed HTTP 404), so Grok copied them");
+	});
+
+	test("a thread is built from reply links, and a listed post outside it is ignored", async () => {
+		const [P, R, Q, S] = ["1000000000000000001", "1000000000000000002", "1000000000000000003", "1000000000000000004"];
+		fx.set(P, fxTweet(P, "parent", "the parent"));
+		fx.set(R, fxTweet(R, "asker", "the asked post", { replying_to_status: P }));
+		fx.set(Q, fxTweet(Q, "replier", "a reply to it", { replying_to_status: R }));
+		fx.set(S, fxTweet(S, "stranger", "elsewhere", { replying_to_status: "999999999999999999" }));
+		turns = [{ text: [P, R, Q, S].join("\n"), postIds: [R], fetched: 3, call: { name: "x_thread_fetch", input: `{"post_id":"${R}"}` } }];
+		const r = await run({ query: `https://x.com/asker/status/${R}`, kind: "thread" }, loading());
+		const [root] = r.details.posts;
+		expect(r.details.posts).toHaveLength(1);
+		expect([root.id, root.role]).toEqual([P, "parent"]);
+		expect(root.replies.map((p: any) => [p.id, p.role])).toEqual([[R, "requested"]]);
+		expect(root.replies[0].replies.map((p: any) => [p.id, p.role])).toEqual([[Q, "reply"]]);
+		expect(r.text).toContain(`ignored 1 id(s) Grok listed that are not part of this thread: ${S}`);
+		expect(r.text).toContain("[the post you asked for]");
+		expect(r.text).not.toContain("elsewhere");
+	});
+
+	test("when X returned nothing, ids Grok wrote are not loaded", async () => {
+		turns = [{ text: A, postIds: [], fetched: 0 }];
+		const r = await run({ query: "x" }, loading());
+		expect(r.text).toStartWith("(no posts found)");
+		expect(loads).toEqual([]);
+	});
+
+	test("account searches are still copied by Grok, with no post loading", async () => {
+		turns = [{ text: "[X User Result 0]:\n- ID: 33836629\n- Name: R - @researcher", userIds: ["33836629"] }];
+		const r = await run({ query: "researcher", kind: "users" }, loading());
+		expect(r.details.users.map((u: any) => u.username)).toEqual(["researcher"]);
+		expect(requests[0].body.input[0].content).toContain("verbatim");
+		expect(loads).toEqual([]);
+	});
+});
+
+describe("x_search recovering on its own", () => {
+	test("a retired model is replaced by one the proxy still lists, and the replacement is remembered", async () => {
+		models = [{ id: "grok-4.7" }, { id: "grok-4.7-build-fast" }, { id: "grok-4.6" }];
+		turns = [
+			{ status: 404, body: '{"code":"not-found","error":"The model grok-4.6 does not exist or your team abc does not have access to it."}' },
+			{ text: "NO RESULTS" },
+		];
+		const r = await run({ query: "x" });
+		expect(r.isError).toBe(false);
+		expect(requests.map((q) => [q.body.model, q.headers.get("x-grok-model-override")])).toEqual([["grok-4.6", "grok-4.6"], ["grok-4.7", "grok-4.7"]]);
+		expect(r.text).toContain("· grok-4.7 ·");
+
+		turns = [{ text: "NO RESULTS" }];
+		await run({ query: "y" });
+		expect(requests[2].body.model).toBe("grok-4.7");
+	});
+
+	test("a reasoning effort the model refuses is dropped from the retry", async () => {
+		turns = [{ status: 400, body: '{"code":"invalid-argument","error":"This model does not support `reasoning_effort` value `low`."}' }, { text: "NO RESULTS" }];
+		const r = await run({ query: "x" });
+		expect(r.isError).toBe(false);
+		expect(requests[0].body.reasoning).toEqual({ effort: "low" });
+		expect(requests[1].body.reasoning).toBeUndefined();
+	});
+
+	test("a 429 is retried once after Retry-After", async () => {
+		turns = [{ status: 429, body: '{"error":"slow down"}', headers: { "retry-after": "0" } }, { text: "NO RESULTS" }];
+		const r = await run({ query: "x" });
+		expect(r.isError).toBe(false);
+		expect(requests).toHaveLength(2);
+	});
+
+	test("a 426 in any wording teaches the version it names", async () => {
+		turns = [{ status: 426, body: '{"error":"client too old (1.0.62); minimum supported is 1.3.0"}' }, { text: "NO RESULTS" }];
+		const r = await run({ query: "x" });
+		expect(r.isError).toBe(false);
+		expect(requests[1].headers.get("x-grok-client-version")).toBe("1.3.0");
+		expect(versionFloor("Your Grok CLI version (1.0.62) is outdated. Please update to version 1.0.70 or later", "1.0.62")).toBe("1.0.70");
+		expect(versionFloor("outdated, update", "1.0.62")).toBeUndefined();
 	});
 });
 

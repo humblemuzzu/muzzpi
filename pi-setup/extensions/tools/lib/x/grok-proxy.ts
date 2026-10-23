@@ -48,6 +48,8 @@ export interface ProxyUsage {
 
 export interface ProxyResult {
 	text: string;
+	/** the model that answered: the configured one, or the replacement chosen when the proxy no longer serves it. */
+	model: string;
 	calls: { name: string; input: string }[];
 	/** ids of every post and user the X tool returned, from the server's own citations — the ground truth. */
 	sourcePostIds: Set<string>;
@@ -59,7 +61,14 @@ export interface ProxyResult {
 	incomplete?: string;
 }
 
-const VERSION_FLOOR = /version\s+(\d+(?:\.\d+){1,3})\s+or later/i;
+const VERSION = /\b\d+(?:\.\d+){1,3}\b/g;
+const MAX_WAIT_429_MS = 10_000;
+
+/** the version a 426 asks for: the newest version it names that is newer than the one refused, whatever the wording. */
+export function versionFloor(body: string, refused: string): string | undefined {
+	const named = (body.match(VERSION) ?? []).filter((v) => compareVersions(v, refused) > 0);
+	return named.reduce<string | undefined>((best, v) => (!best || compareVersions(v, best) > 0 ? v : best), undefined);
+}
 
 function compareVersions(a: string, b: string): number {
 	const pa = a.split(".").map(Number);
@@ -76,7 +85,7 @@ const isVersion = (v: unknown): v is string => typeof v === "string" && /^\d+(\.
 /**
  * The newest of: the floor a 426 taught us (cached on disk so sub-agents start
  * with it), the installed Grok CLI's version (it auto-updates), the configured
- * fallback.
+ * fallback. The same file remembers the model that replaced a retired one.
  */
 export class ClientVersion {
 	constructor(
@@ -91,21 +100,40 @@ export class ClientVersion {
 	}
 
 	learn(version: string): void {
+		this.write({ clientVersion: version, learnedAt: new Date().toISOString() });
+	}
+
+	/** the model to send instead of `configured`, once the proxy has said it no longer serves it. */
+	modelFor(configured: string): string {
+		const replaced = this.read()?.modelReplacement;
+		return replaced?.configured === configured && typeof replaced.use === "string" && replaced.use ? replaced.use : configured;
+	}
+
+	learnModel(configured: string, use: string): void {
+		this.write({ modelReplacement: { configured, use, learnedAt: new Date().toISOString() } });
+	}
+
+	private read(file = this.cacheFile): Record<string, any> | undefined {
+		try {
+			const value = JSON.parse(fs.readFileSync(file, "utf-8"));
+			return value && typeof value === "object" ? value : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private write(fields: Record<string, unknown>): void {
 		try {
 			fs.mkdirSync(path.dirname(this.cacheFile), { recursive: true });
 			const tmp = `${this.cacheFile}.${process.pid}.tmp`;
-			fs.writeFileSync(tmp, JSON.stringify({ clientVersion: version, learnedAt: new Date().toISOString() }));
+			fs.writeFileSync(tmp, JSON.stringify({ ...this.read(), ...fields }));
 			fs.renameSync(tmp, this.cacheFile);
 		} catch {}
 	}
 
 	private readField(file: string, field: string): string | undefined {
-		try {
-			const value = JSON.parse(fs.readFileSync(file, "utf-8"))?.[field];
-			return isVersion(value) ? value : undefined;
-		} catch {
-			return undefined;
-		}
+		const value = this.read(file)?.[field];
+		return isVersion(value) ? value : undefined;
 	}
 }
 
@@ -208,20 +236,54 @@ export interface ProxyDeps {
 	version: ClientVersion;
 }
 
+const HOST = "cli-chat-proxy.grok.com";
+
+function proxyHeaders(token: string, version: string, model?: string): Record<string, string> {
+	return {
+		Authorization: `Bearer ${token}`,
+		"X-XAI-Token-Auth": "xai-grok-cli",
+		"x-grok-client-version": version,
+		...(model && { "x-grok-model-override": model }),
+		"User-Agent": "muzzpi-x-search",
+	};
+}
+
+/** a model the proxy still serves, to replace one it no longer does: the newest listed one that is not a pricier "fast" variant. */
+async function replacementModel(baseUrl: string, token: string, version: string, gone: string, signal: AbortSignal): Promise<string | undefined> {
+	try {
+		const res = await fetch(`${baseUrl}/models`, { headers: { Accept: "application/json", ...proxyHeaders(token, version) }, signal });
+		if (!res.ok) return undefined;
+		const listed: any[] = (await res.json())?.data ?? [];
+		const usable = listed.filter(
+			(m) => typeof m?.id === "string" && m.id !== gone && !m.hidden && m.supports_backend_search !== false && m.supported_in_api !== false,
+		);
+		return (usable.find((m) => !/fast/i.test(m.id)) ?? usable[0])?.id;
+	} catch {
+		return undefined;
+	}
+}
+
+const MODEL_GONE = /does not exist|not found|deprecat|retired|unknown model|no longer/i;
+
 /**
- * One X search. Recovers on its own from the three failures that have a known
- * fix: a rejected token (renew it once, then try the next login), an outdated
- * client version (retry with the floor the 426 names), and a single 5xx.
+ * One X search. Recovers on its own from every failure that has a known fix,
+ * each at most once: a rejected token (renew it, then try the next login), an
+ * outdated client version (the floor the 426 names), a retired model (one the
+ * proxy lists instead, remembered), a reasoning effort the model refuses (sent
+ * without one), a 429 (after Retry-After, up to 10s), a 5xx or a failure
+ * mid-answer, and a dropped connection.
  */
 export async function callGrokProxy(req: ProxyRequest, deps: ProxyDeps): Promise<ProxyResult> {
-	const body = {
-		model: req.model,
+	let model = deps.version.modelFor(req.model);
+	let effort: string | undefined = req.effort;
+	const body = () => ({
+		model,
 		input: [{ role: "user", content: req.input }],
 		tools: [req.tool],
 		stream: true,
 		store: false,
-		reasoning: { effort: req.effort },
-	};
+		...(effort && { reasoning: { effort } }),
+	});
 	const signal = deadline(req.timeoutMs, req.signal);
 	/** a token renewal runs the Grok CLI for up to a minute; an abort or the deadline must not wait for it. */
 	const untilAborted = <T>(work: Promise<T>): Promise<T> =>
@@ -231,10 +293,12 @@ export async function callGrokProxy(req: ProxyRequest, deps: ProxyDeps): Promise
 			signal.addEventListener("abort", stop, { once: true });
 			work.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
 		});
+	const aborted = () => abortError(req.signal, req.timeoutMs, "X search");
+	const pause = (ms: number) => untilAborted(new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	const retried = new Set<string>();
+	const firstTime = (what: string) => !retried.has(what) && Boolean(retried.add(what));
 	const tried: string[] = [];
 	let version = deps.version.current();
-	let retriedVersion = false;
-	let retried5xx = false;
 	let renewed: string | undefined;
 	let renewedSource = -1;
 
@@ -251,30 +315,31 @@ export async function callGrokProxy(req: ProxyRequest, deps: ProxyDeps): Promise
 		try {
 			res = await fetch(`${deps.baseUrl}/responses`, {
 				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Accept: "text/event-stream",
-					Authorization: `Bearer ${token}`,
-					"X-XAI-Token-Auth": "xai-grok-cli",
-					"x-grok-model-override": req.model,
-					"x-grok-client-version": version,
-					"User-Agent": "muzzpi-x-search",
-				},
-				body: JSON.stringify(body),
+				headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...proxyHeaders(token, version, model) },
+				body: JSON.stringify(body()),
 				signal,
 			});
 		} catch (err) {
-			if (signal.aborted) throw abortError(req.signal, req.timeoutMs, "X search");
-			throw networkError(err, "cli-chat-proxy.grok.com");
+			if (signal.aborted) throw aborted();
+			if (firstTime("network")) {
+				await pause(1000);
+				continue;
+			}
+			throw networkError(err, HOST);
 		}
 
 		if (res.status === 200 && res.body) {
 			let outcome: StreamOutcome;
 			try {
 				outcome = await readEventStream(res.body);
+				if (!outcome.response) throw new ProviderError("invalid_response", "Grok's stream ended without a completed response");
 			} catch (err) {
-				if (signal.aborted) throw abortError(req.signal, req.timeoutMs, "X search");
-				throw err instanceof ProviderError ? err : networkError(err, "cli-chat-proxy.grok.com");
+				if (signal.aborted) throw aborted();
+				if (firstTime("server")) {
+					await pause(1000);
+					continue;
+				}
+				throw err instanceof ProviderError ? err : networkError(err, HOST);
 			}
 			if (!outcome.response) throw new ProviderError("invalid_response", "Grok's stream ended without a completed response");
 			const usage = outcome.response.usage ?? {};
@@ -282,6 +347,7 @@ export async function callGrokProxy(req: ProxyRequest, deps: ProxyDeps): Promise
 			const sources = collectSources(outcome.response);
 			return {
 				text: outcome.text,
+				model,
 				calls: (outcome.response.output ?? [])
 					.filter((o: any) => o?.type === "custom_tool_call")
 					.map((o: any) => ({ name: String(o.name), input: String(o.input ?? "") })),
@@ -302,10 +368,9 @@ export async function callGrokProxy(req: ProxyRequest, deps: ProxyDeps): Promise
 		}
 
 		const text = await res.text().catch(() => "");
-		if (res.status === 426 && !retriedVersion) {
-			const floor = text.match(VERSION_FLOOR)?.[1];
-			if (floor && compareVersions(floor, version) > 0) {
-				retriedVersion = true;
+		if (res.status === 426) {
+			const floor = versionFloor(text, version);
+			if (floor && firstTime("version")) {
 				version = floor;
 				deps.version.learn(floor);
 				continue;
@@ -326,9 +391,24 @@ export async function callGrokProxy(req: ProxyRequest, deps: ProxyDeps): Promise
 			t++;
 			continue;
 		}
-		if (res.status >= 500 && !retried5xx) {
-			retried5xx = true;
-			await new Promise((r) => setTimeout(r, 1000));
+		if (res.status === 400 && effort && /reasoning|effort/i.test(text) && firstTime("effort")) {
+			effort = undefined;
+			continue;
+		}
+		if ((res.status === 404 || res.status === 400) && /model/i.test(text) && MODEL_GONE.test(text) && firstTime("model")) {
+			const replacement = await untilAborted(replacementModel(deps.baseUrl, token, version, model, signal));
+			if (replacement) {
+				deps.version.learnModel(req.model, replacement);
+				model = replacement;
+				continue;
+			}
+		}
+		if (res.status === 429 && firstTime("rate")) {
+			await pause(Math.min((retryAfterSec(res.headers) ?? 2) * 1000, MAX_WAIT_429_MS));
+			continue;
+		}
+		if (res.status >= 500 && firstTime("server")) {
+			await pause(1000);
 			continue;
 		}
 		throw proxyError(res.status, res.headers, text);

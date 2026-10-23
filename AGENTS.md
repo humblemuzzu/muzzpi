@@ -302,6 +302,10 @@ API-tier limits and no X tools, and Grok then invents posts. It renews an expiri
 `grok models` (it never writes `~/.grok/auth.json`), must send `x-grok-client-version` (426 without;
 the floor is re-learned from the 426), keeps the relay rules in the user message (sent as
 `instructions`, Grok skipped the tool), and refuses any answer without an X tool call.
+**Grok only lists post ids; the posts load from FxTwitter, then X's embed endpoint** (`lib/x/hydrate.ts`).
+Never make Grok retype posts by default: it streams ~94 tok/s on grok-4.6, so two long posts took
+90 s. X's citations are the ground truth and arrive however little Grok writes. Grok's copy stays
+for `users` and as the fallback when no source loads. A retired model is replaced from `/v1/models`.
 
 ### searchd — the index behind find and grep
 

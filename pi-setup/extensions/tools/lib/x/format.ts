@@ -26,9 +26,11 @@ export function postHeader(post: XPost): string {
 
 function postLines(post: XPost, indent: string): string[] {
 	const lines = [`${indent}${postHeader(post)}`];
-	const link = post.conversationId && post.conversationId !== post.id
-		? `${post.url} (reply in https://x.com/i/status/${post.conversationId})`
-		: post.url;
+	const link = post.replyTo
+		? `${post.url} (reply to https://x.com/i/status/${post.replyTo})`
+		: post.conversationId && post.conversationId !== post.id
+			? `${post.url} (reply in https://x.com/i/status/${post.conversationId})`
+			: post.url;
 	lines.push(`${indent}${link}`);
 	if (post.role === "requested") lines.push(`${indent}[the post you asked for]`);
 	for (const line of post.text.split("\n")) lines.push(`${indent}${line}`);

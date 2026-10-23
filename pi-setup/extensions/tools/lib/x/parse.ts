@@ -32,6 +32,8 @@ export interface XPost {
 	username?: string;
 	name?: string;
 	conversationId?: string;
+	/** the post this one replies to, when the source names it. */
+	replyTo?: string;
 	createdAt?: string;
 	engagement: XEngagement;
 	media: XMedia[];

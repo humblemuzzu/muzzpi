@@ -176,7 +176,8 @@ Pick by what you need back:
   one answered and why the others did not. **`read_web_page`** fetches a page, or
   asks a question about it and gets the answer from a child agent.
 - **`x_search`**: X posts, accounts and threads through Grok's own X tools on your
-  Grok subscription, every post checked against what X returned.
+  Grok subscription. Grok picks the posts; their full text and counts load straight
+  from FxTwitter, so a search takes ~5 s and no post is retyped by a model.
 - **7 GitHub tools** read, search, glob, list and diff any repo `gh` can see,
   without cloning.
 - **`screenshot`** captures a window, a screen region or a whole web page, sized
