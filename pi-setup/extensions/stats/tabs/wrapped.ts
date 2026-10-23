@@ -82,7 +82,7 @@ function miniYear(ctx: Ctx): string[] {
 
 export const wrappedTab: Tab = {
 	title: "Wrapped",
-	hint: "/stats wrapped saves it as a PNG",
+	hint: "badges earned in this range",
 	render(ctx) {
 		const { s, ink, width, planUsd } = ctx;
 		const known = s.filter.provider === undefined;

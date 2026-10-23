@@ -5,13 +5,17 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	CURSOR_MARKER,
+	decodeKittyPrintable,
 	fuzzyFilter,
 	Key,
 	matchesKey,
 	truncateToWidth,
 	visibleWidth,
 } from "@mariozechner/pi-tui";
+import { withoutTyped } from "../tools/lib/command-args";
+import { contributeHelp } from "../tools/lib/help-channel";
 
+const SHORTCUT = "ctrl+shift+k";
 const CONFIG =
 	process.env.PI_STUDIO_GHOSTTY_CONFIG ??
 	join(homedir(), "Library/Application Support/com.mitchellh.ghostty/config");
@@ -382,9 +386,12 @@ class Studio {
 		else if (matchesKey(data, Key.backspace)) {
 			this.search = this.search.slice(0, -1);
 			this.afterSearch();
-		} else if (data.length >= 1 && !data.startsWith("\x1b") && data.charCodeAt(0) >= 32) {
-			this.search += data;
-			this.afterSearch();
+		} else {
+			const typed = decodeKittyPrintable(data) ?? (!data.startsWith("\x1b") && data.charCodeAt(0) >= 32 ? data : undefined);
+			if (typed) {
+				this.search += typed;
+				this.afterSearch();
+			}
 		}
 		this.repaint();
 	}
@@ -495,14 +502,47 @@ export default function themeStudio(pi: ExtensionAPI) {
 		}
 	}
 
-	for (const name of ["studio", "theme"]) {
-		pi.registerCommand(name, {
-			description: "Switch pi theme, Ghostty theme, font, size, cursor and opacity with live preview",
-			handler: async (_args, ctx) => open(ctx),
-		});
-	}
-	pi.registerShortcut("ctrl+shift+k", {
-		description: "Theme studio",
+	let ui: ExtensionContext["ui"] | undefined;
+	let names: string[] | undefined;
+	pi.on("session_start", (_event, ctx) => {
+		ui = ctx.hasUI ? ctx.ui : undefined;
+		names = undefined;
+	});
+	/** read once per session: pi scans the custom themes folder on every call */
+	const themeNames = (): string[] => {
+		try {
+			names ??= (ui?.getAllThemes() ?? []).map((t) => t.name).sort();
+			return names;
+		} catch {
+			return [];
+		}
+	};
+
+	pi.registerCommand("theme", {
+		description: "Change the pi and Ghostty theme, font and cursor, with a live preview",
+		getArgumentCompletions: (prefix) => {
+			const typed = prefix.trim().toLowerCase();
+			const current = ui?.theme.name;
+			const items = themeNames()
+				.filter((name) => name.toLowerCase().startsWith(typed))
+				.map((name) => ({ value: name, label: name, description: name === current ? "pi theme now" : "switch pi to it" }));
+			return withoutTyped(items, prefix);
+		},
+		handler: async (args, ctx) => {
+			const wanted = args.trim();
+			if (!wanted) return open(ctx);
+			const name = ctx.ui.getAllThemes().find((t) => t.name.toLowerCase() === wanted.toLowerCase())?.name;
+			if (!name) {
+				const known = ctx.ui.getAllThemes().map((t) => t.name).sort().join(", ");
+				return ctx.ui.notify(`No pi theme called "${wanted}". Themes: ${known}. /theme on its own opens the picker.`, "error");
+			}
+			const result = ctx.ui.setTheme(name);
+			ctx.ui.notify(result.success ? `pi theme: ${name}.` : `Could not switch to ${name}: ${result.error ?? "unknown error"}`, result.success ? "info" : "error");
+		},
+	});
+	pi.registerShortcut(SHORTCUT, {
+		description: "Open the theme picker",
 		handler: (ctx) => open(ctx),
 	});
+	contributeHelp(pi, (help) => help.shortcut({ command: "theme", key: SHORTCUT }));
 }

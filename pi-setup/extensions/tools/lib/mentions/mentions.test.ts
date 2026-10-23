@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import mentionsExtension from "../../../mentions";
+import { collectHelp } from "../help-channel";
 
 type Handler = (event: any, ctx: any) => any;
 
@@ -11,7 +12,7 @@ function loadExtension() {
 	const sent: { message: any; options: any }[] = [];
 	mentionsExtension({
 		on: (name: string, handler: Handler) => handlers.set(name, handler),
-		registerCommand: () => {},
+		events: { on: () => () => {}, emit() {} },
 		sendMessage: (message: any, options: any) => sent.push({ message, options }),
 	} as any);
 	const ctx = { cwd: process.cwd(), hasUI: false };
@@ -76,5 +77,14 @@ describe("mentions extension", () => {
 			expect(ext.sent).toEqual([{ ...mentionMessage, options: { deliverAs: streamingBehavior } }]);
 			expect(await ext.start()).toBeUndefined();
 		}
+	});
+
+	test("/help lists exactly the mentions that resolve", () => {
+		const listeners: ((data: unknown) => void)[] = [];
+		const events = { on: (_channel: string, handler: (data: unknown) => void) => (listeners.push(handler), () => {}), emit: (_channel: string, data: unknown) => listeners.forEach((h) => h(data)) };
+		mentionsExtension({ on() {}, events, sendMessage() {} } as any);
+		const texts = collectHelp(events).mentions.map((m) => m.text);
+		expect(texts.sort()).toEqual(["@chad", "@codereview", "@commit/", "@finder", "@oracle", "@task"]);
+		expect(collectHelp(events).mentions.find((m) => m.text === "@oracle")!.description).toStartWith("the oracle sub-agent: ");
 	});
 });

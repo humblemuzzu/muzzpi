@@ -1,65 +1,74 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Key } from "@mariozechner/pi-tui";
-import { buildEntries } from "./entries";
-import { CommandPalette } from "./palette";
-import type { PaletteEntry } from "./types";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { collectHelp, contributeHelp } from "../tools/lib/help-channel";
+import { loadBuiltinCommands } from "./builtins";
+import { buildEntries, editorTextFor } from "./entries";
+import { HelpView } from "./palette";
+import type { HelpEntry } from "./types";
 
-export default function commandPaletteExtension(pi: ExtensionAPI) {
-  async function openPalette(ctx: import("@mariozechner/pi-coding-agent").ExtensionContext) {
-    if (!ctx.hasUI) return;
+const SHORTCUT = "ctrl+shift+p";
+const MAX_WIDTH = 110;
 
-    const entries = buildEntries(pi, ctx);
+export default function helpExtension(pi: ExtensionAPI) {
+	contributeHelp(pi, (help) => help.shortcut({ command: "help", key: SHORTCUT }));
 
-    const selected = await ctx.ui.custom<PaletteEntry | null>(
-      (tui, theme, _kb, done) => {
-        const palette = new CommandPalette(entries, theme, done);
-        return {
-          render: (w: number) => palette.render(w),
-          handleInput: (data: string) => {
-            palette.handleInput(data);
-            tui.requestRender();
-          },
-          invalidate: () => palette.invalidate(),
-          get focused() {
-            return palette.focused;
-          },
-          set focused(v: boolean) {
-            palette.focused = v;
-          },
-        };
-      },
-      {
-        overlay: true,
-        overlayOptions: {
-          anchor: "top-center",
-          width: 72,
-          minWidth: 40,
-          maxHeight: "60%",
-          offsetY: 2,
-        },
-      },
-    );
+	async function open(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI || ctx.mode !== "tui") {
+			ctx.ui.notify("/help needs the interactive TUI. Type / to see every command.", "info");
+			return;
+		}
+		const entries = buildEntries(pi.getCommands(), await loadBuiltinCommands(), collectHelp(pi.events));
+		let columns = 100;
+		let repaint = () => {};
+		const picked = await ctx.ui.custom<HelpEntry | undefined>(
+			(tui, theme, _keybindings, done) => {
+				columns = tui.terminal.columns;
+				repaint = () => tui.requestRender();
+				const view = new HelpView(entries, theme, done, () => tui.terminal.rows);
+				return {
+					render: (width: number) => view.render(width),
+					handleInput: (data: string) => {
+						view.handleInput(data);
+						tui.requestRender();
+					},
+					invalidate: () => view.invalidate(),
+					get focused() {
+						return view.focused;
+					},
+					set focused(value: boolean) {
+						view.focused = value;
+					},
+				};
+			},
+			{
+				overlay: true,
+				overlayOptions: () => ({ anchor: "top-center", width: Math.min(MAX_WIDTH, Math.floor(columns * 0.9)), minWidth: 50, maxHeight: "100%", offsetY: 1 }),
+			},
+		);
+		if (picked) act(picked, ctx, repaint);
+	}
 
-    if (selected) {
-      try {
-        await selected.action(ctx);
-      } catch (err) {
-        ctx.ui.notify(`Command failed: ${err}`, "error");
-      }
-    }
-  }
+	/** pi's setEditorText does not repaint, so the typed command would stay invisible until the next key. */
+	function act(entry: HelpEntry, ctx: ExtensionContext, repaint: () => void): void {
+		if (entry.action.kind === "run") {
+			pi.sendUserMessage(`/${entry.action.command}`, { expandPromptTemplates: true });
+			return;
+		}
+		const text = editorTextFor(entry, ctx.ui.getEditorText());
+		if (text === undefined) {
+			ctx.ui.notify(`Your prompt has a draft in it, so ${entry.name} was not typed over it. Send or clear the draft, then pick it again.`, "info");
+			return;
+		}
+		ctx.ui.setEditorText(text);
+		repaint();
+	}
 
-  pi.registerShortcut("ctrl+shift+p", {
-    description: "Open command palette",
-    handler: async (ctx) => {
-      await openPalette(ctx);
-    },
-  });
+	pi.registerCommand("help", {
+		description: "Every muzzpi command, shortcut and @mention in one searchable list",
+		handler: async (_args, ctx) => open(ctx),
+	});
 
-  pi.registerCommand("palette", {
-    description: "Open command palette",
-    handler: async (_args, ctx) => {
-      await openPalette(ctx);
-    },
-  });
+	pi.registerShortcut(SHORTCUT, {
+		description: "Open /help",
+		handler: async (ctx) => open(ctx),
+	});
 }

@@ -21,6 +21,27 @@ const LABEL_KEY = "ideas";
 const HARNESS_VIEW: Pick<Where, "root" | "isHarness"> = { root: "", isHarness: true };
 const PLAIN_LIST_LIMIT = 20;
 
+export const TAG_HINTS = [
+	{ tag: "pi:", description: "file it under muzzpi itself, not this project" },
+	{ tag: "bug:", description: "mark it as a bug" },
+	{ tag: "dislike:", description: "mark it as something that bugs you" },
+	{ tag: "idea:", description: "a plain idea (the default)" },
+];
+
+/** Tag suggestions only while the tags at the start are being typed, never inside the idea itself. */
+export function completeIdea(typed: string): { value: string; label: string; description: string }[] | null {
+	const match = /^((?:[a-z]+:\s*)*)([a-z]+)$/i.exec(typed.trimStart());
+	if (!match) return null;
+	const before = match[1]!;
+	const word = match[2]!.toLowerCase();
+	const items = TAG_HINTS.filter((t) => t.tag.startsWith(word) && !before.toLowerCase().includes(t.tag)).map((t) => ({
+		value: `${before}${t.tag} `,
+		label: t.tag,
+		description: t.description,
+	}));
+	return items.length > 0 ? items : null;
+}
+
 function newestOpen(ideas: Idea[]): Idea[] {
 	return ideas.filter((idea) => idea.status === "open").sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
 }
@@ -119,7 +140,8 @@ export default function ideas(pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("idea", {
-		description: "Park an idea for this project (pi: in front files it under the harness) · /idea alone opens the list",
+		description: "Save an idea for later; /idea on its own lists them",
+		getArgumentCompletions: completeIdea,
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim()) await save(args, ctx);

@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadSecrets, setActiveTags } from "./psst";
+import { listVaultEntries, loadSecrets, makeScrubber, setActiveTags } from "./psst";
 
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 const root = mkdtempSync(join(tmpdir(), "psst-vault-"));
@@ -85,6 +85,25 @@ describe("loadSecrets reads a psst vault", () => {
 		expect(await loadSecrets()).toEqual([]);
 		process.env.PSST_PASSWORD = "right";
 		expect((await loadSecrets()).map((s) => s.value)).toEqual(["secret-value"]);
+	});
+
+	it("scrubs every secret, even ones the tag filter keeps from the agent", async () => {
+		process.env.PSST_PASSWORD = "scrub";
+		await vaultIn("scrub", sha256("scrub"), [["WORK_KEY", "work-value-1", ["work"]], ["HOME_KEY", "home-value-2", ["home"]]]);
+		setActiveTags(["work"]);
+		expect((await loadSecrets()).map((s) => s.name)).toEqual(["WORK_KEY"]);
+		const scrub = await makeScrubber();
+		expect(scrub("a work-value-1 b home-value-2 c")).toBe("a [REDACTED:WORK_KEY] b [REDACTED:HOME_KEY] c");
+	});
+
+	it("lists names and tags without a key, and sees a write right away", async () => {
+		delete process.env.PSST_PASSWORD;
+		const file = await vaultIn("entries", sha256("unused"), [["B_KEY", "b", ["y"]], ["A_KEY", "a", ["x", "y"]]]);
+		expect(listVaultEntries()).toEqual([{ name: "A_KEY", tags: ["x", "y"] }, { name: "B_KEY", tags: ["y"] }]);
+		const db = new DatabaseSync(file);
+		db.prepare("INSERT INTO secrets (name, encrypted_value, iv, tags) VALUES (?, ?, ?, ?)").run("C_KEY", randomBytes(20), randomBytes(12), "not json");
+		db.close();
+		expect(listVaultEntries().map((e) => `${e.name}:${e.tags.join("+")}`)).toEqual(["A_KEY:x+y", "B_KEY:y", "C_KEY:"]);
 	});
 
 	it("skips one undecryptable row and keeps the rest", async () => {

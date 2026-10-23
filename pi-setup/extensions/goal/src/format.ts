@@ -91,27 +91,23 @@ function statusLabel(status: GoalStatus): string {
 
 function commandHint(status: GoalStatus): string {
   if (status === "active") {
-    return "/goal copy, /goal pause, /goal clear";
+    return "/goal pause, /goal copy, /goal clear";
   }
   if (status === "paused" || status === "blocked") {
-    return "/goal copy, /goal resume, /goal clear";
+    return "/goal resume, /goal copy, /goal clear";
   }
-  if (status === "complete") {
-    return "/goal copy, /goal <objective> to replace, /goal clear";
-  }
-  return "/goal copy, /goal clear";
+  return "/goal <what should be done> to set a new one, /goal copy, /goal clear";
 }
 
-export function formatGoalSummary(goal: ThreadGoal | null): string {
+/** Where the goal stands, one fact per line. */
+export function formatGoalStatus(goal: ThreadGoal | null): string[] {
   if (!goal) {
-    return ["Usage: /goal <objective>", "No goal is currently set."].join("\n");
+    return ["No goal set. With a goal, the agent keeps working until it can show the goal is met."];
   }
 
   const lines = [
-    `Status: ${statusLabel(goal.status)}`,
-    `Objective: ${goal.objective}`,
-    `Time used: ${formatDuration(goal.usage.activeSeconds)}`,
-    `Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}`,
+    `Goal: ${goal.objective}`,
+    `Status: ${statusLabel(goal.status)} · ${formatDuration(goal.usage.activeSeconds)} · ${formatTokenValue(goal.usage.tokensUsed)} tokens`,
   ];
 
   if (goal.tokenBudget !== null) {
@@ -120,9 +116,12 @@ export function formatGoalSummary(goal: ThreadGoal | null): string {
   if (goal.status === "blocked") {
     lines.push(`Blocked on: ${goal.blockedReason}`);
   }
+  return lines;
+}
 
-  lines.push(`Hint: ${commandHint(goal.status)}`);
-  return lines.join("\n");
+export function formatGoalSummary(goal: ThreadGoal | null): string {
+  const hint = goal ? commandHint(goal.status) : "/goal <what should be done>, or /goal strict <task> for a checked goal";
+  return [...formatGoalStatus(goal), `You can type: ${hint}`].join("\n");
 }
 
 function compactBudgetUsage(goal: ThreadGoal): string {

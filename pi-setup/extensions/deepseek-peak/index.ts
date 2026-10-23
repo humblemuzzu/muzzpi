@@ -19,6 +19,8 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { AGENT_RUNS_CHANNEL, type RunSnapshot } from "../tools/lib/agent-channel";
+import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/command-args";
+import { prefsFile, readPrefs, writePrefs } from "../tools/lib/prefs";
 import {
 	EFFECTIVE_FROM_MS,
 	PEAK_WINDOWS_UTC,
@@ -51,6 +53,13 @@ const LABEL_PRIORITY = 40;
  * minute never shows up more than 5s late; the extra ticks are no-ops.
  */
 const POLL_MS = 5_000;
+
+const PREFS = "deepseek-peak";
+
+const WORDS: Word[] = [
+	{ name: "off", aliases: ["hide"], description: "hide the clock and the DeepSeek label" },
+	{ name: "on", aliases: ["show"], description: "show them again" },
+];
 
 function isDeepseekModel(ctx: ExtensionContext | null): boolean {
 	const model = ctx?.model;
@@ -115,7 +124,7 @@ function buildReport(now: Date, ctx: ExtensionContext | null): string {
 	}
 
 	lines.push(``);
-	lines.push(`   /deepseek off  hides the border label + clock · /deepseek on  restores`);
+	lines.push(`   /deepseek off hides the clock and this label under the prompt; /deepseek on shows them. Remembered across sessions.`);
 	return lines.join("\n");
 }
 
@@ -123,7 +132,10 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let lastClock: string | null = null;
 	let lastLabel: string | null = null;
+	/** false once the runtime went stale: the poll stops for good */
 	let enabled = true;
+	/** the user's /deepseek off, kept across sessions */
+	let hidden = readPrefs(prefsFile(PREFS)).hidden === true;
 	let ctxRef: ExtensionContext | null = null;
 	let deepseekRunLive = false;
 	let lastInUse: boolean | null = null;
@@ -140,7 +152,7 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 	};
 
 	const paint = (force = false): void => {
-		if (!enabled || !ctxRef) return;
+		if (!enabled || hidden || !ctxRef) return;
 		const now = new Date();
 		const inUse = isDeepseekModel(ctxRef) || deepseekRunLive;
 		if (inUse !== lastInUse) {
@@ -217,7 +229,7 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 		paintSafely(true);
 		// hidden (/deepseek off) or already broken — a poll that can only no-op
 		// is not worth owning.
-		if (!enabled) return;
+		if (!enabled || hidden) return;
 		timer = setInterval(() => paintSafely(), POLL_MS);
 		timer.unref?.();
 	});
@@ -252,16 +264,31 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 		paintSafely(true);
 	});
 
+	const remember = (ctx: ExtensionContext, next: boolean): boolean => {
+		try {
+			writePrefs(prefsFile(PREFS), { hidden: next });
+			return true;
+		} catch (err) {
+			ctx.ui.notify(`Could not save that for next time: ${err instanceof Error ? err.message : String(err)}`, "warning");
+			return false;
+		}
+	};
+
 	pi.registerCommand("deepseek", {
-		description:
-			"DeepSeek peak/off-peak pricing clock — current phase, time until it flips, " +
-			"peak windows in your local timezone, and the rate card. '/deepseek off' hides the border label + clock.",
+		description: "DeepSeek's cheap and peak hours in your time zone, and what each costs",
+		getArgumentCompletions: (prefix) => completeWords(WORDS, prefix),
 		handler: async (args, ctx) => {
 			ctxRef = ctx;
-			const cmd = (args || "").trim().toLowerCase();
+			const { word } = splitArgs(args);
+			const found = word ? findWord(WORDS, word) : undefined;
+			if (word && !found) {
+				ctx.ui.notify(`/deepseek has no "${word}". Use /deepseek off, /deepseek on, or /deepseek on its own for the price clock.`, "error");
+				return;
+			}
 
-			if (cmd === "off" || cmd === "hide") {
-				enabled = false;
+			if (found?.name === "off") {
+				hidden = true;
+				const saved = remember(ctx, true);
 				stop();
 				lastClock = null;
 				lastLabel = null;
@@ -270,17 +297,19 @@ export default function deepseekPeakExtension(pi: ExtensionAPI) {
 				// "/deepseek off" leaves behind a clock that no longer ticks.
 				pi.events.emit("editor:remove-label", { key: LABEL_KEY });
 				pi.events.emit("editor:remove-label", { key: CLOCK_KEY });
-				ctx.ui.notify("DeepSeek label + clock hidden. '/deepseek on' to restore.", "info");
+				ctx.ui.notify(`Clock and DeepSeek label hidden${saved ? ", also in future sessions" : ""}. /deepseek on shows them.`, "info");
 				return;
 			}
 
-			if (cmd === "on" || cmd === "show") {
+			if (found?.name === "on") {
+				hidden = false;
 				enabled = true;
+				const saved = remember(ctx, false);
 				stop();
 				paintSafely(true);
 				timer = setInterval(() => paintSafely(), POLL_MS);
 				timer.unref?.();
-				ctx.ui.notify("DeepSeek label + clock restored.", "info");
+				ctx.ui.notify(`Clock and DeepSeek label shown${saved ? ", also in future sessions" : ""}.`, "info");
 				return;
 			}
 

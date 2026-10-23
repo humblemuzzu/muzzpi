@@ -44,18 +44,18 @@ loader level turns one off.
 | `editor/` | Custom box-drawing bordered editor with labels (context %, cost, model, git branch), enlarged prompt bar, inline `[image #N]` clipboard-paste, and a cache line below the box (hit %, read/write totals, and a TTL countdown where the provider declares one) |
 | `tools/` | Full replacement tool suite. See below. |
 | `system-prompt.ts` | Injects the full Amp system prompt with runtime template vars (parent sessions); a sub-agent instead gets a short generated prompt naming exactly its own `--tools` allowlist |
-| `mentions.ts` | `@mention` resolution (`@session`, `@commit`, `@handoff`) + agent directives (`@oracle`, `@finder`, `@codereview`, `@task` → `delegate`) |
+| `mentions.ts` | `@commit/<sha>` resolution + agent directives (`@oracle`, `@finder`, `@codereview`, `@chad`, `@task` → `delegate`); `/help` lists them |
 | `session-name.ts` | Auto-generates session names from the first message (Claude Haiku) |
-| `stats/` | `/stats` or `Ctrl+Shift+S` — usage analytics over every pi, Claude Code, Codex and OpenCode session on the machine, deduplicated across them: cost, tokens, cache hits and busts, models, tools, sub-agents, projects and commits, work rhythm, and a wrapped card, with ▲/▼ vs the previous window, `h`/`p`/`o` harness, project and provider filters, a model leaderboard, cache-bust log and context pressure. Costs the harness did not record are priced from pi's own model catalog. `/stats export [range]` writes markdown, `/stats wrapped [range]` a PNG, `/stats budget <usd>` sets a monthly budget with a linear projection, `/stats widget on` shows today's spend under the editor |
-| `md-export.ts` | `/md` — exports the current session branch to readable markdown (clipboard or file) |
+| `stats/` | `/stats` or `Ctrl+Shift+S` — usage analytics over every pi, Claude Code, Codex and OpenCode session on the machine, deduplicated across them: cost, tokens, cache hits and busts, models, tools, sub-agents, projects and commits, work rhythm, and a yearly-review card, with ▲/▼ vs the previous window, `h`/`p`/`o` harness, project and provider filters, a model leaderboard, cache-bust log and context pressure. Costs the harness did not record are priced from pi's own model catalog. `/stats` alone opens a menu; `/stats 7d` opens the view at a range, `/stats export [range]` writes markdown, `/stats budget <usd>` sets a monthly budget with a linear projection, `/stats widget on` shows today's spend under the editor |
+| `md-export.ts` | `/md` — exports this chat to readable markdown (clipboard or file); its menu picks tool calls, thinking, branch or whole session and how many turns |
 | `notify.ts` | Desktop notification when the agent finishes (OSC 777) |
-| `command-palette/` | `Ctrl+Shift+P` command-palette overlay |
+| `command-palette/` | `/help` or `Ctrl+Shift+P` — every command, shortcut, @mention and skill in one searchable list; enter runs ours and types pi's own into the prompt |
 | `agents-ui/` | The background agents on screen: a dock above the editor while any run (`↓` on an empty editor to manage, `s` steer, `c` continue, `x` stop, `X` twice stops all), a full-screen view of one agent's conversation where typing steers or continues it (`Enter`, or `/agents <id>`), and `/agents` / `Ctrl+Shift+A` for the whole list |
-| `local-model.ts` | `/local` — start/stop the llama.cpp router |
-| `deepseek-peak/` | `/deepseek` — a peak/off-peak pricing clock in the editor border |
+| `local-model.ts` | `/local` — start/stop the llama.cpp router and load/unload its model, without blocking pi |
+| `deepseek-peak/` | `/deepseek` — a peak/off-peak pricing clock in the editor border; `/deepseek off` is remembered |
 | `guardrails/` | Comment gate on `edit` / `write` (the behaviour rules themselves ship in the system prompt, not here) |
-| `theme-studio/` | `/studio`, `/theme`, `Ctrl+Shift+K` — live-preview a pi theme and the Ghostty theme/font/size; Esc reverts, Enter keeps |
-| `you-should-know/` | `/ysk` — a side agent on `deepseek-flash` that flags what you might have missed, and inlines what each sub-agent actually did as evidence. **Off until `/ysk on`**; ~0.1–0.3¢ per check |
+| `theme-studio/` | `/theme`, `Ctrl+Shift+K` — live-preview a pi theme and the Ghostty theme/font/size; Esc reverts, Enter keeps; `/theme <name>` switches the pi theme directly |
+| `you-should-know/` | `/ysk` — a side agent on `deepseek-flash` that flags what you might have missed, and inlines what each sub-agent actually did as evidence. **Off until `/ysk on`**; under a cent per check (0.8¢ averaged over 14), and `/ysk status` shows what it has cost |
 
 ### Custom Tools
 
@@ -83,7 +83,7 @@ for it; a call can pass `model` / `thinking` to override:
 **New GitHub tools** (GitHub API): `read_github`, `search_github`, `list_directory_github`,
 `glob_github`, `list_repositories`, `commit_search`, `diff`
 
-Also adds `/psst*` secret-vault commands + a tool-output secret-scrub hook.
+Also adds the `/psst` secret-vault command (names, add a secret, which tags the agent is offered) + a tool-output secret-scrub hook that covers every vault secret, filtered or not.
 
 ### Agent Prompts (`agents/`)
 
@@ -165,9 +165,9 @@ pi-setup/
 ├── verify-patches.sh           # Read-only audit of every patch/config
 ├── extensions/                 # extensions + tools/ suite
 │   ├── editor/                 # Custom TUI editor + cache line
-│   ├── command-palette/        # Ctrl+Shift+P palette
+│   ├── command-palette/        # /help, Ctrl+Shift+P
 │   ├── agents-ui/              # background-agent dock, list and full-screen view
-│   ├── theme-studio/           # /studio — live theme + Ghostty preview
+│   ├── theme-studio/           # /theme — live theme + Ghostty preview
 │   ├── deepseek-peak/          # /deepseek — peak/off-peak clock
 │   ├── guardrails/             # edit/write comment gate
 │   ├── you-should-know/        # /ysk — side agent (off until asked)

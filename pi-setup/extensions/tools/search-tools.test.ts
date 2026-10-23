@@ -129,3 +129,28 @@ describe("grep", () => {
 		expect(r.text).toContain("stopped at 2 matches");
 	});
 });
+
+describe("an ambient RIPGREP_CONFIG_PATH", () => {
+	const withConfig = async <T>(run: () => Promise<T>): Promise<T> => {
+		const config = join(REPO, "..", `${REPO.split("/").pop()}.ripgreprc`);
+		writeFileSync(config, "--fixed-strings\n--glob=!*.md\n");
+		const previous = process.env.RIPGREP_CONFIG_PATH;
+		process.env.RIPGREP_CONFIG_PATH = config;
+		try {
+			return await run();
+		} finally {
+			if (previous === undefined) delete process.env.RIPGREP_CONFIG_PATH;
+			else process.env.RIPGREP_CONFIG_PATH = previous;
+			rmSync(config, { force: true });
+		}
+	};
+
+	test("does not turn a grep regex into a literal or hide files", async () => {
+		const r = await withConfig(() => grep({ pattern: "gam+a", path: "src", context: 0 }));
+		expect(r.text).toContain("notes.md:3: gamma");
+	});
+
+	test("does not hide files from find", async () => {
+		expect((await withConfig(() => find({ filePattern: "*.md" }))).text).toBe("src/notes.md");
+	});
+});

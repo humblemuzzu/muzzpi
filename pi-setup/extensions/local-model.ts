@@ -1,21 +1,20 @@
 /**
  * /local — manage the local llama.cpp router from inside pi.
  *
- * Rebuild of the `local-model.ts` deleted in bcfefc3 (2026-07-23). The original
- * shelled out to an external `start-local.sh` that lived OUTSIDE the repo; that
- * script was later deleted and took the whole extension down with it. So this
- * version embeds the server command — there is nothing on disk it can lose.
+ * The server command is embedded: an earlier version ran a script outside the
+ * repo, and deleting that script took the extension down (bcfefc3). Every probe
+ * and wait is asynchronous, since starting and loading take up to two minutes.
  *
- * SYSTEM PROMPT (llama-local and llama.cpp):
- * before_agent_start REPLACES the full assembled prompt with BARE_SYSTEM_PROMPT
- * when provider is llama-local or llama.cpp. Every other provider gets undefined
- * → prompt unchanged. Sub-agent children (PI_SUBAGENT_TOOLS set) are left alone
- * so the short tool-list prompt from system-prompt.ts still applies.
+ * For llama-local and llama.cpp only, before_agent_start REPLACES the system
+ * prompt with BARE_SYSTEM_PROMPT; sub-agent children keep system-prompt.ts's.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { execFile, execSync } from "child_process";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { execFile } from "child_process";
+import { closeSync, openSync, readSync, statSync } from "fs";
 import * as os from "os";
+import { completeWords, findWord, splitArgs, type Word } from "./tools/lib/command-args";
+import { canShowMenu, type MenuItem, menuAsText, showMenu } from "./tools/lib/command-menu";
 import { SUB_AGENT_TOOLS_ENV } from "./tools/lib/sub-agent-prompt";
 
 const PROVIDER_ID = "llama-local";
@@ -26,6 +25,7 @@ const SLEEP_IDLE = Number(process.env.LLAMA_SLEEP_IDLE || 300);
 const DEFAULT_MODEL = process.env.LLAMA_DEFAULT_MODEL || "Qwen3.8-27B-Uncensored";
 const TMUX_SESSION = "llama";
 const LOG_FILE = "/tmp/llama-server.log";
+const LOG_LINES = 40;
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const BARE_SYSTEM_PROMPT = `You are a local coding agent on the user's machine. Be brief. Use tools when needed. Do not claim work without a tool call. Two failures of the same tool → stop and report.
@@ -46,14 +46,21 @@ Tools (schemas also in the API):
 - read_session / search_sessions — session history
 `;
 
-// ── shell helpers ────────────────────────────────────────────────────────────
-function sh(cmd: string, timeout = 10_000): { ok: boolean; out: string } {
-	try {
-		return { ok: true, out: execSync(cmd, { timeout, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }) };
-	} catch (e: any) {
-		return { ok: false, out: String(e?.stdout ?? "") + String(e?.stderr ?? e?.message ?? "") };
-	}
+// ── process helpers ──────────────────────────────────────────────────────────
+interface Result {
+	ok: boolean;
+	out: string;
 }
+
+function run(cmd: string, args: string[], timeout = 10_000): Promise<Result> {
+	return new Promise((resolve) => {
+		execFile(cmd, args, { timeout, encoding: "utf-8" }, (error, stdout, stderr) =>
+			resolve({ ok: !error, out: error ? `${stdout ?? ""}${stderr ?? ""}` || error.message : (stdout ?? "") }),
+		);
+	});
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function fmtBytes(n: number): string {
 	if (!n || n < 0) return "?";
@@ -80,16 +87,11 @@ interface LlamaModel {
 	architecture?: { input_modalities?: string[] };
 }
 
-function tmuxAlive(): boolean {
-	return sh(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null`).ok;
-}
+const tmuxAlive = async () => (await run("tmux", ["has-session", "-t", TMUX_SESSION])).ok;
+const serverUp = async () => (await run("curl", ["-sf", "--max-time", "2", `${BASE}/health`])).ok;
 
-function serverUp(): boolean {
-	return sh(`curl -sf --max-time 2 ${BASE}/health`).ok;
-}
-
-function listModels(): LlamaModel[] {
-	const r = sh(`curl -sf --max-time 3 ${BASE}/models`);
+async function listModels(): Promise<LlamaModel[]> {
+	const r = await run("curl", ["-sf", "--max-time", "3", `${BASE}/models`]);
 	if (!r.ok) return [];
 	try {
 		return JSON.parse(r.out)?.data ?? [];
@@ -98,52 +100,74 @@ function listModels(): LlamaModel[] {
 	}
 }
 
-function findModel(id = DEFAULT_MODEL): LlamaModel | undefined {
-	return listModels().find((m) => m.id === id);
+async function findModel(id = DEFAULT_MODEL): Promise<LlamaModel | undefined> {
+	return (await listModels()).find((m) => m.id === id);
 }
 
-function serverRam(): string {
-	const r = sh(`ps -eo rss,comm | grep llama-server | grep -v grep | awk '{s+=$1} END {print s}'`);
-	const kb = Number((r.out || "").trim());
+async function serverRam(): Promise<string> {
+	const r = await run("ps", ["-eo", "rss=,comm="]);
+	const kb = r.out
+		.split("\n")
+		.filter((line) => line.includes("llama-server"))
+		.reduce((sum, line) => sum + (Number(line.trim().split(/\s+/)[0]) || 0), 0);
 	return kb > 0 ? fmtBytes(kb * 1024) : "0 MB";
 }
 
+function logTail(lines = LOG_LINES): string {
+	try {
+		const size = statSync(LOG_FILE).size;
+		const length = Math.min(size, 64 * 1024);
+		const buffer = Buffer.alloc(length);
+		const fd = openSync(LOG_FILE, "r");
+		try {
+			readSync(fd, buffer, 0, length, size - length);
+		} finally {
+			closeSync(fd);
+		}
+		return buffer.toString("utf8").split("\n").slice(-lines - 1).join("\n").trim();
+	} catch {
+		return "";
+	}
+}
+
 // ── server actions ───────────────────────────────────────────────────────────
-function startServer(): { ok: boolean; out: string } {
-	if (tmuxAlive()) return { ok: true, out: "already running" };
+async function startServer(): Promise<Result> {
+	if (await tmuxAlive()) return { ok: true, out: "already running" };
 	const cmd =
 		`llama-server --models-dir '${MODELS_DIR}' --no-models-autoload --jinja ` +
 		`--host 127.0.0.1 --port ${PORT} -ngl 999 -c ${CTX} ` +
 		`--sleep-idle-seconds ${SLEEP_IDLE} 2>&1 | tee ${LOG_FILE}`;
-	const r = sh(`tmux new-session -d -s ${TMUX_SESSION} -x 200 -y 50 ${JSON.stringify(cmd)}`);
+	const r = await run("tmux", ["new-session", "-d", "-s", TMUX_SESSION, "-x", "200", "-y", "50", cmd]);
 	if (!r.ok) return r;
 	for (let i = 0; i < 30; i++) {
-		if (serverUp()) return { ok: true, out: "started" };
-		sh("sleep 1", 2000);
+		if (await serverUp()) return { ok: true, out: "started" };
+		await sleep(1000);
 	}
-	return { ok: false, out: "server did not become healthy within 30s" };
+	return { ok: false, out: "the server did not answer within 30 s" };
 }
 
-function stopServer(): { ok: boolean; out: string } {
-	if (!tmuxAlive()) return { ok: true, out: "not running" };
-	const r = sh(`tmux kill-session -t ${TMUX_SESSION}`);
+async function stopServer(): Promise<Result> {
+	if (!(await tmuxAlive())) return { ok: true, out: "not running" };
+	const r = await run("tmux", ["kill-session", "-t", TMUX_SESSION]);
 	return r.ok ? { ok: true, out: "stopped" } : r;
 }
 
-function loadModel(id: string): { ok: boolean; out: string } {
-	const r = sh(`curl -sf --max-time 5 -X POST ${BASE}/models/load -H 'Content-Type: application/json' -d '{"model":"${id}"}'`);
+async function loadModel(id: string): Promise<Result> {
+	const body = JSON.stringify({ model: id });
+	const r = await run("curl", ["-sf", "--max-time", "5", "-X", "POST", `${BASE}/models/load`, "-H", "Content-Type: application/json", "-d", body]);
 	if (!r.ok) return r;
 	for (let i = 0; i < 60; i++) {
-		const v = findModel(id)?.status?.value;
+		const v = (await findModel(id))?.status?.value;
 		if (v === "loaded" || v === "sleeping") return { ok: true, out: v };
-		if (v === "unloaded") return { ok: false, out: "model returned to unloaded — check /local logs" };
-		sh("sleep 2", 3000);
+		if (v === "unloaded") return { ok: false, out: "the model went back to unloaded; /local logs shows why" };
+		await sleep(2000);
 	}
-	return { ok: false, out: "model did not finish loading within 120s" };
+	return { ok: false, out: "the model did not finish loading within 120 s" };
 }
 
-function unloadModel(id: string): { ok: boolean; out: string } {
-	return sh(`curl -sf --max-time 5 -X POST ${BASE}/models/unload -H 'Content-Type: application/json' -d '{"model":"${id}"}'`);
+async function unloadModel(id: string): Promise<Result> {
+	const body = JSON.stringify({ model: id });
+	return run("curl", ["-sf", "--max-time", "5", "-X", "POST", `${BASE}/models/unload`, "-H", "Content-Type: application/json", "-d", body]);
 }
 
 // ── presentation ─────────────────────────────────────────────────────────────
@@ -155,262 +179,213 @@ const STATE_ICON: Record<string, string> = {
 	unloaded: "⚪",
 };
 
-function run(cmd: string, args: string[], timeout: number): Promise<{ ok: boolean; out: string }> {
-	return new Promise((resolve) => {
-		execFile(cmd, args, { timeout, encoding: "utf-8" }, (error, stdout) => resolve({ ok: !error, out: stdout ?? "" }));
-	});
+interface Snapshot {
+	up: boolean;
+	tmux: boolean;
+	models: LlamaModel[];
 }
 
-async function statusBarLabel(): Promise<string> {
-	if (!(await run("tmux", ["has-session", "-t", TMUX_SESSION], 10_000)).ok) return "";
-	if (!(await run("curl", ["-sf", "--max-time", "2", `${BASE}/health`], 10_000)).ok) return "";
-	const r = await run("curl", ["-sf", "--max-time", "3", `${BASE}/models`], 10_000);
-	let models: LlamaModel[] = [];
-	try {
-		models = r.ok ? (JSON.parse(r.out)?.data ?? []) : [];
-	} catch {}
-	const m = models.find((model) => model.id === DEFAULT_MODEL);
+async function snapshot(): Promise<Snapshot> {
+	const tmux = await tmuxAlive();
+	const up = tmux && (await serverUp());
+	return { up, tmux, models: up ? await listModels() : [] };
+}
+
+function statusBarLabel(s: Snapshot): string {
+	if (!s.up) return "";
+	const m = s.models.find((model) => model.id === DEFAULT_MODEL);
 	if (!m) return `🟡 local :${PORT}`;
-	const icon = STATE_ICON[m.status.value] ?? "🟡";
-	return `${icon} ${m.id}`;
+	return `${STATE_ICON[m.status.value] ?? "🟡"} ${m.id}`;
 }
 
-function statusReport(): string {
-	const tmux = tmuxAlive();
-	const up = tmux && serverUp();
-	if (!up) {
-		return (
-			`⚪ Local server is NOT running\n\n` +
-			`   tmux session '${TMUX_SESSION}': ${tmux ? "alive but not answering" : "not running"}\n` +
-			`   Start it with:  /local start`
-		);
-	}
+/** For the menu: is the server up, and is the default model in memory. */
+function shortStatus(s: Snapshot, ram: string): string[] {
+	if (!s.up) return [s.tmux ? "The server is starting or stuck: its tmux session is alive but not answering." : "The server is stopped."];
+	const m = s.models.find((model) => model.id === DEFAULT_MODEL);
+	return [`Server running on ${BASE} · ${ram} of memory`, m ? `${m.id}: ${m.status.value}` : `${DEFAULT_MODEL} is not in ${MODELS_DIR}`];
+}
 
-	const models = listModels();
-	const m = models.find((x) => x.id === DEFAULT_MODEL) ?? models[0];
+async function fullReport(): Promise<string> {
+	const s = await snapshot();
+	if (!s.up) {
+		return `⚪ The local server is stopped\n\n   tmux session '${TMUX_SESSION}': ${s.tmux ? "alive but not answering" : "not running"}\n   /local start starts it`;
+	}
 	const lines = [
 		`🟢 Local server running on ${BASE}`,
 		``,
 		`   tmux session : ${TMUX_SESSION}`,
-		`   RAM in use   : ${serverRam()}`,
+		`   memory       : ${await serverRam()}`,
 		`   auto-sleep   : after ${SLEEP_IDLE}s idle (wakes in ~1s)`,
 		`   log file     : ${LOG_FILE}`,
 		``,
 	];
-
-	if (!m) {
-		lines.push(`   No models discovered in ${MODELS_DIR}`);
+	if (s.models.length === 0) {
+		lines.push(`   No models found in ${MODELS_DIR}`);
 		return lines.join("\n");
 	}
-
-	for (const mm of models) {
-		const icon = STATE_ICON[mm.status.value] ?? "🟡";
+	for (const mm of s.models) {
 		const meta = mm.meta ?? {};
-		lines.push(`   ${icon} ${mm.id} — ${mm.status.value}`);
+		lines.push(`   ${STATE_ICON[mm.status.value] ?? "🟡"} ${mm.id} — ${mm.status.value}`);
 		lines.push(`        quant   : ${meta.ftype ?? "?"}   size: ${fmtBytes(meta.size ?? 0)}`);
-		lines.push(
-			`        context : ${fmtNum(meta.n_ctx ?? CTX)} active` +
-				(meta.n_ctx_train ? ` (model max ${fmtNum(meta.n_ctx_train)})` : ""),
-		);
-		lines.push(
-			`        params  : ${fmtCount(meta.n_params ?? 0)}   input: ${(mm.architecture?.input_modalities ?? ["text"]).join("+")}`,
-		);
+		lines.push(`        context : ${fmtNum(meta.n_ctx ?? CTX)} active${meta.n_ctx_train ? ` (model max ${fmtNum(meta.n_ctx_train)})` : ""}`);
+		lines.push(`        params  : ${fmtCount(meta.n_params ?? 0)}   input: ${(mm.architecture?.input_modalities ?? ["text"]).join("+")}`);
 	}
-
-	lines.push(``, `   Select in pi with /model → ${PROVIDER_ID}/${m.id}`);
+	const m = s.models.find((x) => x.id === DEFAULT_MODEL) ?? s.models[0]!;
+	lines.push(``, `   Pick it in pi with /model → ${PROVIDER_ID}/${m.id}`);
 	return lines.join("\n");
 }
 
+const WORDS: Word[] = [
+	{ name: "start", aliases: ["on"], description: `start the server and load ${DEFAULT_MODEL}` },
+	{ name: "stop", aliases: ["off", "kill"], description: "shut the server down and free its memory" },
+	{ name: "restart", description: "stop, then start again" },
+	{ name: "load", description: `load ${DEFAULT_MODEL} into a running server` },
+	{ name: "unload", description: "drop the model from memory; the server keeps listening" },
+	{ name: "status", description: "the server, its memory and every model in detail" },
+	{ name: "logs", aliases: ["log"], description: `the last ${LOG_LINES} lines of the server log` },
+];
+
+const USAGE = WORDS.map((w) => `/local ${w.name.padEnd(8)} ${w.description}`);
+
 // ── extension ────────────────────────────────────────────────────────────────
 export default function localModelExtension(pi: ExtensionAPI) {
-	const refreshStatus = (ctx: any) => {
+	let busy: string | undefined;
+
+	const refreshStatus = (ctx: ExtensionContext, known?: Snapshot) => {
 		if (!ctx.hasUI) return;
-		void statusBarLabel().then((label) => {
+		void (known ? Promise.resolve(known) : snapshot()).then((s) => {
 			try {
-				ctx.ui.setStatus("local-model", label);
+				ctx.ui.setStatus("local-model", statusBarLabel(s));
 			} catch {
 				/* the session was replaced while the probe ran */
 			}
 		});
 	};
 
-	pi.registerCommand("local", {
-		description:
-			"Manage the local llama.cpp model server. '/local' shows status, " +
-			"'/local start' starts it, '/local stop' shuts it down, " +
-			"also: status, unload, logs, restart.",
-		handler: async (args, ctx) => {
-			const cmd = (args || "").trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-
-			// ── /local stop ──────────────────────────────────────────────────
-			if (cmd === "stop" || cmd === "off" || cmd === "kill") {
-				if (!tmuxAlive()) {
-					ctx.ui.notify("Local server is already stopped.", "info");
-					refreshStatus(ctx);
-					return;
-				}
-				const r = stopServer();
-				refreshStatus(ctx);
-				ctx.ui.notify(
-					r.ok
-						? `🛑 Local server stopped. RAM released.\n\n   Start again with /local start`
-						: `Failed to stop: ${r.out}`,
-					r.ok ? "success" : "error",
-				);
-				return;
-			}
-
-			// ── /local start ─────────────────────────────────────────────────
-			if (cmd === "start" || cmd === "on") {
-				ctx.ui.setStatus("local-model", "⏳ starting local server…");
-				const s = startServer();
-				if (!s.ok) {
-					refreshStatus(ctx);
-					ctx.ui.notify(`Failed to start server:\n${s.out.slice(-500)}`, "error");
-					return;
-				}
-				ctx.ui.setStatus("local-model", `⏳ loading ${DEFAULT_MODEL}…`);
-				const l = loadModel(DEFAULT_MODEL);
-				refreshStatus(ctx);
-				ctx.ui.notify(
-					l.ok
-						? `✅ ${DEFAULT_MODEL} ready\n\n${statusReport()}`
-						: `Server is up but the model failed to load:\n${l.out}`,
-					l.ok ? "success" : "error",
-				);
-				return;
-			}
-
-			// ── /local restart ───────────────────────────────────────────────
-			if (cmd === "restart") {
-				stopServer();
-				sh("sleep 2", 4000);
-				const s = startServer();
-				if (s.ok) loadModel(DEFAULT_MODEL);
-				refreshStatus(ctx);
-				ctx.ui.notify(s.ok ? `♻️ Restarted\n\n${statusReport()}` : `Restart failed: ${s.out}`, s.ok ? "success" : "error");
-				return;
-			}
-
-			// ── /local unload ────────────────────────────────────────────────
-			if (cmd === "unload") {
-				if (!serverUp()) {
-					ctx.ui.notify("Server is not running.", "warning");
-					return;
-				}
-				const r = unloadModel(DEFAULT_MODEL);
-				refreshStatus(ctx);
-				ctx.ui.notify(
-					r.ok
-						? `⚪ ${DEFAULT_MODEL} unloaded. Server still listening on ${BASE}.`
-						: `Failed to unload: ${r.out}`,
-					r.ok ? "info" : "error",
-				);
-				return;
-			}
-
-			// ── /local logs ──────────────────────────────────────────────────
-			if (cmd === "logs" || cmd === "log") {
-				const r = sh(`tail -40 ${LOG_FILE} 2>/dev/null`);
-				ctx.ui.notify(r.out?.trim() || "No log output yet.", "info");
-				return;
-			}
-
-			// ── /local status ────────────────────────────────────────────────
-			if (cmd === "status") {
-				refreshStatus(ctx);
-				ctx.ui.notify(statusReport(), "info");
-				return;
-			}
-
-			// ── /local help ──────────────────────────────────────────────────
-			if (cmd === "help" || cmd === "?") {
-				ctx.ui.notify(
-					`/local            — status, or offer to start if stopped\n` +
-						`/local start      — start server + load ${DEFAULT_MODEL}\n` +
-						`/local stop       — shut the server down, release RAM\n` +
-						`/local restart    — stop then start again\n` +
-						`/local unload     — drop the model, keep the server listening\n` +
-						`/local status     — full detail (quant, context, params, RAM)\n` +
-						`/local logs       — last 40 lines of the server log`,
-					"info",
-				);
-				return;
-			}
-
-			// ── /local (bare) ────────────────────────────────────────────────
-			const running = tmuxAlive() && serverUp();
+	async function start(ctx: ExtensionCommandContext): Promise<void> {
+		ctx.ui.setStatus("local-model", "⏳ starting the local server…");
+		const s = await startServer();
+		if (!s.ok) {
 			refreshStatus(ctx);
+			ctx.ui.notify(`The server did not start: ${s.out.slice(-500)}`, "error");
+			return;
+		}
+		ctx.ui.setStatus("local-model", `⏳ loading ${DEFAULT_MODEL}…`);
+		const l = await loadModel(DEFAULT_MODEL);
+		refreshStatus(ctx);
+		ctx.ui.notify(l.ok ? `✅ ${DEFAULT_MODEL} is ready. Pick it with /model → ${PROVIDER_ID}/${DEFAULT_MODEL}.` : `The server is up but the model did not load: ${l.out}`, l.ok ? "info" : "error");
+	}
 
-			if (!running) {
-				if (!ctx.hasUI) {
-					ctx.ui.notify(`${statusReport()}\n\n(run '/local start' to start it)`, "warning");
-					return;
-				}
-				const choice = await ctx.ui.select("Local server is not running.", [
-					`Start it and load ${DEFAULT_MODEL}`,
-					"Show logs",
-					"Cancel",
-				]);
-				if (!choice || choice === "Cancel") return;
-				if (choice === "Show logs") {
-					const r = sh(`tail -40 ${LOG_FILE} 2>/dev/null`);
-					ctx.ui.notify(r.out?.trim() || "No log output yet.", "info");
-					return;
-				}
-				ctx.ui.setStatus("local-model", "⏳ starting local server…");
-				const s = startServer();
-				if (!s.ok) {
-					refreshStatus(ctx);
-					ctx.ui.notify(`Failed to start:\n${s.out.slice(-500)}`, "error");
-					return;
-				}
-				ctx.ui.setStatus("local-model", `⏳ loading ${DEFAULT_MODEL}…`);
-				const l = loadModel(DEFAULT_MODEL);
+	async function stop(ctx: ExtensionCommandContext): Promise<void> {
+		if (!(await tmuxAlive())) {
+			refreshStatus(ctx);
+			ctx.ui.notify("The local server is already stopped.", "info");
+			return;
+		}
+		const r = await stopServer();
+		refreshStatus(ctx);
+		ctx.ui.notify(r.ok ? "🛑 Local server stopped; its memory is free." : `Could not stop it: ${r.out}`, r.ok ? "info" : "error");
+	}
+
+	async function load(ctx: ExtensionCommandContext): Promise<void> {
+		if (!(await serverUp())) {
+			ctx.ui.notify("The server is stopped. /local start starts it and loads the model.", "warning");
+			return;
+		}
+		ctx.ui.setStatus("local-model", `⏳ loading ${DEFAULT_MODEL}…`);
+		const l = await loadModel(DEFAULT_MODEL);
+		refreshStatus(ctx);
+		ctx.ui.notify(l.ok ? `✅ ${DEFAULT_MODEL} is ready.` : `The model did not load: ${l.out}`, l.ok ? "info" : "error");
+	}
+
+	async function unload(ctx: ExtensionCommandContext): Promise<void> {
+		if (!(await serverUp())) {
+			ctx.ui.notify("The server is stopped, so nothing is loaded.", "info");
+			return;
+		}
+		const r = await unloadModel(DEFAULT_MODEL);
+		refreshStatus(ctx);
+		ctx.ui.notify(r.ok ? `⚪ ${DEFAULT_MODEL} unloaded. The server still listens on ${BASE}.` : `Could not unload it: ${r.out}`, r.ok ? "info" : "error");
+	}
+
+	async function act(name: string, ctx: ExtensionCommandContext): Promise<void> {
+		switch (name) {
+			case "start":
+				return start(ctx);
+			case "stop":
+				return stop(ctx);
+			case "restart":
+				await stopServer();
+				await sleep(2000);
+				return start(ctx);
+			case "load":
+				return load(ctx);
+			case "unload":
+				return unload(ctx);
+			case "status":
 				refreshStatus(ctx);
-				ctx.ui.notify(l.ok ? `✅ ${DEFAULT_MODEL} ready\n\n${statusReport()}` : `Model failed to load:\n${l.out}`, l.ok ? "success" : "error");
+				ctx.ui.notify(await fullReport(), "info");
+				return;
+			case "logs":
+				ctx.ui.notify(logTail() || "The log is empty.", "info");
+				return;
+		}
+	}
+
+	async function menu(ctx: ExtensionCommandContext): Promise<string | undefined> {
+		const s = await snapshot();
+		refreshStatus(ctx, s);
+		const model = s.models.find((m) => m.id === DEFAULT_MODEL);
+		const loaded = model?.status.value === "loaded" || model?.status.value === "sleeping";
+		const items: MenuItem[] = s.up
+			? [
+					loaded
+						? { id: "unload", label: "Unload the model", description: "Frees its memory; the server keeps listening." }
+						: { id: "load", label: "Load the model", description: `Loads ${DEFAULT_MODEL} so pi can use it.` },
+					{ id: "stop", label: "Stop the server", description: "Shuts it down and frees all its memory." },
+					{ id: "restart", label: "Restart the server" },
+					{ id: "status", label: "Show details", description: "Memory, context size and every model." },
+					{ id: "logs", label: "Show the log" },
+				]
+			: [
+					{ id: "start", label: "Start the server", description: `Starts llama.cpp and loads ${DEFAULT_MODEL}; takes up to two minutes.` },
+					{ id: "logs", label: "Show the log" },
+				];
+		const spec = {
+			title: "Local model · llama.cpp",
+			status: [...shortStatus(s, s.up ? await serverRam() : ""), "pi's own /llama manages which models the router lists; this starts and stops the server."],
+			items,
+		};
+		if (!canShowMenu(ctx)) {
+			ctx.ui.notify(menuAsText(spec, USAGE), "info");
+			return undefined;
+		}
+		return (await showMenu(ctx, spec))?.id;
+	}
+
+	pi.registerCommand("local", {
+		description: "Start or stop the local llama.cpp model server, and load or unload its model",
+		getArgumentCompletions: (prefix) => completeWords(WORDS, prefix),
+		handler: async (args, ctx) => {
+			const { word } = splitArgs(args);
+			const found = word ? findWord(WORDS, word) : undefined;
+			if (word && !found) {
+				ctx.ui.notify(`/local has no "${word}". Try: ${WORDS.map((w) => w.name).join(", ")}, or /local on its own for the menu.`, "error");
 				return;
 			}
-
-			if (!ctx.hasUI) {
-				ctx.ui.notify(statusReport(), "info");
+			if (busy) {
+				ctx.ui.notify(`The local server is busy (${busy}); try again when it finishes.`, "info");
 				return;
 			}
-
-			const m = findModel();
-			const loaded = m?.status?.value === "loaded" || m?.status?.value === "sleeping";
-			const choice = await ctx.ui.select(statusReport(), [
-				loaded ? "Unload model (keep server)" : `Load ${DEFAULT_MODEL}`,
-				"Stop server (release RAM)",
-				"Restart server",
-				"Show logs",
-				"Close",
-			]);
-			if (!choice || choice === "Close") return;
-
-			if (choice.startsWith("Unload")) {
-				unloadModel(DEFAULT_MODEL);
-				refreshStatus(ctx);
-				ctx.ui.notify(`⚪ ${DEFAULT_MODEL} unloaded. Server still listening.`, "info");
-			} else if (choice.startsWith("Load")) {
-				const l = loadModel(DEFAULT_MODEL);
-				refreshStatus(ctx);
-				ctx.ui.notify(l.ok ? `✅ ${DEFAULT_MODEL} ready` : `Failed: ${l.out}`, l.ok ? "success" : "error");
-			} else if (choice.startsWith("Stop")) {
-				stopServer();
-				refreshStatus(ctx);
-				ctx.ui.notify("🛑 Local server stopped. RAM released.", "success");
-			} else if (choice.startsWith("Restart")) {
-				stopServer();
-				sh("sleep 2", 4000);
-				const s = startServer();
-				if (s.ok) loadModel(DEFAULT_MODEL);
-				refreshStatus(ctx);
-				ctx.ui.notify(s.ok ? "♻️ Restarted" : `Restart failed: ${s.out}`, s.ok ? "success" : "error");
-			} else if (choice.startsWith("Show logs")) {
-				const r = sh(`tail -40 ${LOG_FILE} 2>/dev/null`);
-				ctx.ui.notify(r.out?.trim() || "No log output yet.", "info");
-			}
+			const name = found?.name ?? (await menu(ctx));
+			if (!name) return;
+			// not awaited: a start can take two minutes, and pi waits for a command handler before it takes the next prompt
+			busy = name;
+			void act(name, ctx)
+				.catch(() => undefined)
+				.finally(() => {
+					busy = undefined;
+				});
 		},
 	});
 

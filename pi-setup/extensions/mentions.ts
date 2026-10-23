@@ -11,10 +11,11 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { contributeHelp } from "./tools/lib/help-channel";
 import {
 	clearCommitIndexCache,
 	clearSessionMentionCache,
-	listMentionKinds,
+	listMentionSources,
 	MentionAwareProvider,
 	renderResolvedMentionsText,
 	resolveMentions,
@@ -85,19 +86,10 @@ export default function mentionsExtension(pi: ExtensionAPI): void {
 		);
 	});
 
-	// /mentions command — verify sources are registered, list available kinds
-	pi.registerCommand("mentions", {
-		description: "Show registered @mention kinds (debug)",
-		handler: async (_args, ctx) => {
-			const kinds = listMentionKinds();
-			const lines = [
-				`registered @mention kinds (${kinds.length}):`,
-				...kinds.map((k) => `  @${k}`),
-				"",
-				"agent kinds (standalone):  @oracle  @finder  @codereview  @task  @chad",
-				"data kinds (with /value):  @commit/<sha>  @session/<id>  @handoff/<id>",
-			];
-			ctx.ui.notify(lines.join("\n"), "info");
-		},
+	contributeHelp(pi, (help) => {
+		for (const source of listMentionSources()) {
+			if (source.standalone) help.mention({ text: `@${source.kind}`, description: `the ${source.kind} sub-agent: ${source.description}` });
+			else help.mention({ text: `@${source.kind}/`, description: `a ${source.description}: type its id after the slash` });
+		}
 	});
 }

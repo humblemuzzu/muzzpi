@@ -4,7 +4,8 @@
  *
  * The vault is read here directly (node:sqlite + node:crypto); writes go
  * through the `psst` CLI, which owns the format (history, pruning).
- * /psst-tag filters which secrets are loaded; cleared = all of them.
+ * `/psst tags` filters which secrets the agent is offered; cleared = all of them.
+ * Scrubbing always covers every secret in the vault, filtered or not.
  *
  * the agent never sees secret values — only names in the system prompt,
  * and $NAME references in bash commands that resolve at spawn time.
@@ -40,7 +41,7 @@ const GCM_TAG_BYTES = 16;
 /** the keychain is asked again at most this often, after a miss or a key that fails to decrypt. */
 const KEY_RETRY_MS = 30_000;
 
-interface VaultLocation {
+export interface VaultLocation {
 	dir: string;
 	global: boolean;
 }
@@ -49,7 +50,7 @@ interface VaultLocation {
  * <cwd>/.psst before ~/.psst; in each, psst's own order: the legacy layout,
  * then envs/default. Only SQLite vaults: psst's AWS backend has no vault.db.
  */
-function findVault(): VaultLocation | undefined {
+export function findVault(): VaultLocation | undefined {
 	for (const global of [false, true]) {
 		const base = path.join(global ? os.homedir() : process.cwd(), ".psst");
 		for (const dir of [base, path.join(base, "envs", "default")]) {
@@ -126,6 +127,15 @@ function readRows(dbPath: string): SecretRow[] {
 	}
 }
 
+function parseTags(raw: string | null): string[] {
+	try {
+		const tags: unknown = JSON.parse(raw || "[]");
+		return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === "string") : [];
+	} catch {
+		return [];
+	}
+}
+
 /** AES-256-GCM as written by WebCrypto: the 16-byte tag is the tail of the ciphertext. */
 function decrypt(row: SecretRow, key: Buffer): string {
 	const sealed = Buffer.from(row.encrypted_value);
@@ -150,7 +160,8 @@ function vaultStamp(dbPath: string): string {
 
 // --- loading ---
 
-let cached: { stamp: string; secrets: SecretEntry[] } | undefined;
+/** one entry per tag filter, so the agent's filtered list and the scrubber's full one do not evict each other */
+const cached = new Map<string, { stamp: string; secrets: SecretEntry[] }>();
 
 /** active tag filter. empty = load all secrets. */
 let activeTags: string[] = [];
@@ -164,16 +175,17 @@ export function getActiveTags(): string[] {
 }
 
 /**
- * load vault secrets — only secrets the agent can USE (via $NAME in bash).
- * used for: bash env injection, system prompt (names only).
+ * load vault secrets — by default only those the active tag filter lets the
+ * agent USE (via $NAME in bash): bash env injection, system prompt (names only).
  */
-export async function loadSecrets(): Promise<SecretEntry[]> {
+export async function loadSecrets(tags: readonly string[] = activeTags): Promise<SecretEntry[]> {
 	const vault = findVault();
 	if (!vault) return [];
 	const dbPath = path.join(vault.dir, VAULT_DB);
-	const tags = activeTags;
-	const stamp = `${dbPath}|${tags.join(",")}|${vaultStamp(dbPath)}`;
-	if (cached?.stamp === stamp) return cached.secrets;
+	const filter = tags.join(",");
+	const stamp = `${dbPath}|${vaultStamp(dbPath)}`;
+	const hit = cached.get(filter);
+	if (hit?.stamp === stamp) return hit.secrets;
 
 	const key = await vaultKey();
 	if (!key) return [];
@@ -184,15 +196,41 @@ export async function loadSecrets(): Promise<SecretEntry[]> {
 	}
 	// a failure is never cached: an empty list would also switch off scrubbing
 	if (!secrets) return [];
-	cached = { stamp, secrets };
+	cached.set(filter, { stamp, secrets });
 	return secrets;
+}
+
+export interface VaultEntry {
+	name: string;
+	tags: string[];
+}
+
+let entryCache: { stamp: string; entries: VaultEntry[] } | undefined;
+
+/**
+ * Every secret's name and tags, sorted by name. Both are stored in the clear,
+ * so nothing is decrypted: this is cheap enough to run on a keystroke.
+ */
+export function listVaultEntries(): VaultEntry[] {
+	const vault = findVault();
+	if (!vault) return [];
+	const dbPath = path.join(vault.dir, VAULT_DB);
+	const stamp = `${dbPath}|${vaultStamp(dbPath)}`;
+	if (entryCache?.stamp === stamp) return entryCache.entries;
+	try {
+		const entries = readRows(dbPath).map((row) => ({ name: row.name, tags: parseTags(row.tags) }));
+		entryCache = { stamp, entries };
+		return entries;
+	} catch {
+		return [];
+	}
 }
 
 /**
  * undefined when the vault cannot be read or no secret decrypts with this key.
  * A single bad row is skipped, so the others are still injected and scrubbed.
  */
-function readSecrets(dbPath: string, key: Buffer, filter: string[]): SecretEntry[] | undefined {
+function readSecrets(dbPath: string, key: Buffer, filter: readonly string[]): SecretEntry[] | undefined {
 	let rows: SecretRow[];
 	try {
 		rows = readRows(dbPath);
@@ -203,7 +241,7 @@ function readSecrets(dbPath: string, key: Buffer, filter: string[]): SecretEntry
 	let failed = 0;
 	for (const row of rows) {
 		try {
-			const tags = JSON.parse(row.tags || "[]") as string[];
+			const tags = parseTags(row.tags);
 			if (filter.length > 0 && !tags.some((tag) => filter.includes(tag))) continue;
 			const value = decrypt(row, key);
 			if (value) secrets.push({ name: row.name, value, tags });
@@ -278,8 +316,8 @@ function authJsonValues(): string[] {
 export async function loadAllScrubValues(): Promise<string[]> {
 	const values: string[] = [];
 
-	// 1. vault secrets
-	const vaultSecrets = await loadSecrets();
+	// 1. vault secrets, all of them: a tag filter limits what the agent is offered, not what is hidden
+	const vaultSecrets = await loadSecrets([]);
 	for (const s of vaultSecrets) {
 		if (s.value.length >= 4) values.push(s.value);
 	}
@@ -457,7 +495,7 @@ export function redactSecretPatterns(text: string): string {
  * scrubbed against the same secrets without re-reading them.
  */
 export async function makeScrubber(): Promise<(text: string) => string> {
-	const vaultSecrets = await loadSecrets();
+	const vaultSecrets = await loadSecrets([]);
 	const vaultValues = new Set(vaultSecrets.map((s) => s.value));
 	const extraValues = (await loadAllScrubValues()).filter((v) => !vaultValues.has(v));
 	return (text) => redactSecretPatterns(scrubValues(scrubOutput(text, vaultSecrets), extraValues));

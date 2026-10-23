@@ -12,6 +12,34 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## 1.4.0 (2026-10-23) — from 1.3.0, no patch drift
+
+**Patch drift (stock 1.3.0 vs stock 1.4.0, registry tarballs):** none. All 4
+core patch files byte-identical, copied; `base-version` → 1.4.0. pi-tui
+`utils.js` unchanged, width patcher clean. Bundle recipe sha256 `bb8134c8…` and
+esbuild 0.28.2 unchanged, so `UPSTREAM` stays. Third-party deps identical.
+
+**Changes checked against our setup:**
+- pi-ai client identity (`utils/identity.js`): Anthropic OAuth requests no
+  longer merge pi's `User-Agent`, only `claude-cli/<ver>`; `cache_control` code
+  untouched. Attribution headers only to OpenRouter/NVIDIA/OpenCode, only with
+  install telemetry on. `pi-telemetry` was already a 1.3.0 dep; no-op adapter.
+- Summaries drop the fixed output cap (`reserveTokens` ignored). Our
+  `summaryMaxTokens` keeps 0.8 × 150k, capped by `model.maxTokens`: same for Claude.
+- `_restoreToolsFromTranscript` now activates extension tools a branch never
+  mentioned; still gated on `_usesDefaultTools`, so child resumes are unchanged.
+- Extension dialogs stack instead of replacing each other (fix for `ask`/approval).
+- Codemode queues for a worker (60 s) instead of failing at 2; the
+  `codemode-harness.ts` retry is now redundant.
+- pi's `grep` passes `rg --no-config`; ours now does too (`grep.ts`, `lib/rg.ts`),
+  pinned by `search-tools.test.ts`.
+- `resolveTranscriptTools` modes are OpenAI/Responses only; Anthropic unaffected.
+- Verified: staged 1.4.0 in /tmp (payload vs 1.3.0 identical except install
+  path, ttl 1h ×4, canary 4/4, real `finder`), then `update-pi.sh`:
+  `verify-patches.sh` all PASS, smoke, canary 4/4, real `finder`, write/edit/
+  failed edit, tools `bun test` 2073 pass / 0 fail.
+- Backup: `~/pi-update-backup-1.3.0-20261023-174218`.
+
 ## Claude prompt cache: 1h main session, warming, compaction at 850k (2026-10-20)
 
 - `anthropic-sub` rewrites the main session's plan requests to `ttl: "1h"` +

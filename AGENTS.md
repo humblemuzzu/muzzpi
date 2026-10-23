@@ -40,7 +40,7 @@ Write the one-line rule and delete whatever it supersedes.
 ## Providers and defaults
 
 ```
-pi CLI (v1.3.0) — @earendil-works/pi-coding-agent
+pi CLI (v1.4.0) — @earendil-works/pi-coding-agent
   ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)   [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
@@ -228,8 +228,8 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `stats/` | `/stats`, Ctrl+Shift+S — analytics over pi, Claude Code, Codex and OpenCode sessions + git. Per-harness ledgers in `<agent dir>/cache/stats` keep sessions whose source is gone (Claude prunes after 30 days): never delete them casually. Bump `ledger.ts` `VERSION` when a parser's output changes. OpenCode is read via the `sqlite3` CLI, read-only. Nothing may reach the model: no tools, no `sendMessage`. The widget reads pi's ledger only, never a cold parse |
 | `notify.ts` | OSC 777 desktop notifications |
 | `md-export.ts` | `/md` session → markdown |
-| `command-palette/` | Ctrl+Shift+P |
-| `theme-studio/` | `/studio`, `/theme`, Ctrl+Shift+K — live pi + Ghostty theme/font/cursor/opacity preview. Esc reverts, Enter keeps. Writes the Ghostty config at `PI_STUDIO_GHOSTTY_CONFIG` or the default path |
+| `command-palette/` | `/help`, Ctrl+Shift+P: every command, shortcut, @mention and skill; enter runs ours, types pi's own into the editor |
+| `theme-studio/` | `/theme`, Ctrl+Shift+K — live pi + Ghostty theme/font/cursor/opacity preview. Esc reverts, Enter keeps. Writes the Ghostty config at `PI_STUDIO_GHOSTTY_CONFIG` or the default path |
 | `editor/` | box-drawn editor, clipboard image paste, one meta row below (cache, `setStatus` texts, diff); `/hud` / Ctrl+Shift+I opens the detail view. Labels take `priority` (narrow drops lowest) and `when: "idle"\|"detail"`. Values stay plain text (the user reads them); colour only for an alert |
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent) |
 | `agents-ui/` | the background agents on screen: dock above the editor, `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
@@ -237,7 +237,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
 | `ideas/` | `/idea <text>` parks an idea per project, `pi:` in front (or any idea in the repo holding `pi-setup/extensions/ideas`) files it under the harness; `/idea` lists. `<agent dir>/ideas/*.jsonl` is append-only user data, never rewritten; the `.md` views are regenerated. `cli.js` is herdr's ⌘I popup. Parent only |
-| `goal/` | `/goal`, `/create-goal` and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it. A continuation delivered after its goal stopped is rewritten once and stored as a `context_edit`; ones that ran are never rewritten |
+| `goal/` | `/goal` (`/goal strict <task>` sends `create-goal.md`) and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it. A continuation delivered after its goal stopped is rewritten once and stored as a `context_edit`; ones that ran are never rewritten |
 | `tools/` | custom tools |
 
 ### guardrails — the comment gate, and where the rules live
@@ -275,6 +275,13 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
   `before_agent_start` message (mentions).
 - **Clipboard paste** loads pi's `dist/utils/clipboard-image.js` on the first paste,
   not at startup; if it is missing, leave `onPasteImage` unset (pi's path-insert).
+- **Slash commands:** typed alone one opens `lib/command-menu.ts`; words go through
+  `command-args.ts` (unknown word = error; no suggestion equals the typed text, or enter accepts it
+  instead of sending); a setting a command changes is saved (new ones in `lib/prefs.ts`); retired
+  names stay in `tools/retired-commands.ts`; shortcuts and @mentions reach `/help` only through
+  `contributeHelp`. pi: `ui.input` never shows its placeholder (`askText`),
+  `setEditorText` does not repaint, `sendUserMessage` runs a command only with
+  `expandPromptTemplates: true`, and a command handler is awaited before the next prompt.
 
 ## Custom tools
 
@@ -508,14 +515,11 @@ edit there, deployed by `install.sh`, read at session start.
 build number (`0.6.0 (build 11429)`).
 
 pi's `/llama` uses provider `llama.cpp` (`/login llama.cpp`); ours is `/local` + provider
-`llama-local` (no login, always listed), `/local [start|stop|restart|unload|status|logs]`, no
-auto-start. For those two providers only, `local-model.ts` **replaces** the system prompt with a
-short tool crib and skips the rules section. **Do not widen those two provider gates.** Local
-models loop for minutes on self-directed work — always time them out.
-
-Gotchas: it's `ctx.hasUI`, not `ctx.canPrompt` (undefined, i.e. falsy, in a
-real TUI); `toLocaleString()` follows the en-IN system locale — always pass
-`"en-US"`.
+`llama-local` (no login, always listed, no auto-start). For those two providers only,
+`local-model.ts` **replaces** the system prompt with a short tool crib and skips the rules
+section. **Do not widen those two provider gates.** Local models loop for minutes on
+self-directed work — always time them out. Gotchas: it's `ctx.hasUI`, not `ctx.canPrompt`
+(falsy in a real TUI); `toLocaleString()` follows the en-IN locale — always pass `"en-US"`.
 
 ## Skills
 

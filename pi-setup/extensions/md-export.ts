@@ -1,9 +1,11 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
+import { withoutTyped } from "./tools/lib/command-args";
+import { canShowMenu, type MenuSpec, showMenu } from "./tools/lib/command-menu";
 
 /**
  * Processes Pi agent JSONL session logs into readable text format
@@ -583,102 +585,160 @@ function describeToolFilter(toolFilter: ToolFilter | null): string | null {
 // Use session's cwd (where you ran pi from) instead of ~/.pi/agent/pi-sessions-extracted/
 const OUTPUT_DIR_FALLBACK = path.join(os.homedir(), ".pi", "agent", "pi-sessions-extracted");
 
+export interface MdRequest {
+  thinking: boolean;
+  /** null: tool calls left out */
+  toolFilter: ToolFilter | null;
+  wholeSession: boolean;
+  lastTurns: number | null;
+}
+
+const MD_WORDS: Record<string, string> = {
+  tc: "include tool calls (+name only that tool, -name leave one out)",
+  thinking: "include thinking",
+  all: "the whole session, not just this branch",
+};
+
+const MD_USAGE = "Use tc (tool calls, +name/-name to pick tools), thinking (or t), all (whole session) and a number (last N turns), like /md tc t 3.";
+
+/** The words after /md; anything it does not know is an error, never ignored. */
+export function parseMdArgs(args: string): { ok: true; request: MdRequest } | { ok: false; message: string } {
+  const tokens = args.trim().split(/\s+/).filter(Boolean).map((t) => t.toLowerCase());
+  let thinking = false;
+  let toolCalls = false;
+  let wholeSession = false;
+  let lastTurns: number | null = null;
+  for (const token of tokens) {
+    if (token === "t" || token === "think" || token === "thinking") thinking = true;
+    else if (token === "tc" || token === "tools") toolCalls = true;
+    else if (token === "all" || token === "file") wholeSession = true;
+    else if (/^\d+$/.test(token)) {
+      const n = Number(token);
+      if (n < 1) return { ok: false, message: "The number of turns must be 1 or more, like /md 2." };
+      lastTurns = n;
+    } else if (token === "+all" || token === "-all") {
+      return { ok: false, message: "+all and -all don't exist: use tc for every tool call, or tc +name for one tool." };
+    } else if (!/^[+-].+/.test(token)) {
+      return { ok: false, message: `/md has no "${token}". ${MD_USAGE}` };
+    }
+  }
+  if (hasToolFilterTokens(tokens) && !toolCalls) {
+    return { ok: false, message: "Picking tools needs tc too, like /md tc -bash or /md tc +ask." };
+  }
+  return { ok: true, request: { thinking, toolFilter: toolCalls ? parseToolFilter(tokens) : null, wholeSession, lastTurns } };
+}
+
+const TURN_CHOICES = ["everything", "last turn", "last 3 turns", "last 10 turns"];
+
+function turnsLabel(n: number | null): string {
+  return n === null ? "everything" : n === 1 ? "last turn" : `last ${n} turns`;
+}
+
+function turnsFromLabel(label: string): number | null {
+  const n = /^last (\d+) turns$/.exec(label)?.[1];
+  return label === "last turn" ? 1 : n ? Number(n) : null;
+}
+
+export function mdMenu(request: MdRequest, outputDir: string): MenuSpec {
+  const turns = turnsLabel(request.lastTurns);
+  const filter = describeToolFilter(request.toolFilter);
+  return {
+    title: "Export this chat as Markdown",
+    items: [
+      {
+        id: "tools",
+        label: "Tool calls",
+        values: ["left out", "included"],
+        value: request.toolFilter ? "included" : "left out",
+        ...(filter && filter !== "tool calls" ? { note: filter.replace(/^tool calls /, "") } : {}),
+      },
+      { id: "thinking", label: "Thinking", values: ["left out", "included"], value: request.thinking ? "included" : "left out" },
+      { id: "scope", label: "From", values: ["this branch", "the whole session"], value: request.wholeSession ? "the whole session" : "this branch" },
+      { id: "turns", label: "How much", values: TURN_CHOICES.includes(turns) ? TURN_CHOICES : [...TURN_CHOICES, turns], value: turns },
+      { id: "copy", label: "Copy to clipboard" },
+      { id: "save", label: "Save as a .md file", note: `in ${outputDir}` },
+    ],
+    initial: "copy",
+  };
+}
+
+/** The request with the menu's settings applied; a tool filter typed on the command line is kept while tool calls stay on. */
+export function applyMdMenu(request: MdRequest, values: Record<string, string>): MdRequest {
+  const tools = values.tools === "included";
+  return {
+    thinking: values.thinking === "included",
+    toolFilter: tools ? (request.toolFilter ?? parseToolFilter([])) : null,
+    wholeSession: values.scope === "the whole session",
+    lastTurns: turnsFromLabel(values.turns ?? "everything"),
+  };
+}
+
+function completeMd(typed: string): { value: string; label: string; description: string }[] | null {
+  const cut = typed.lastIndexOf(" ") + 1;
+  const before = typed.slice(0, cut);
+  const word = typed.slice(cut).toLowerCase();
+  const used = new Set(before.toLowerCase().split(/\s+/));
+  const items = Object.entries(MD_WORDS)
+    .filter(([name]) => name.startsWith(word) && !used.has(name))
+    .map(([name, description]) => ({ value: `${before}${name} `, label: name, description }));
+  return withoutTyped(items, typed);
+}
+
 export default function (pi: ExtensionAPI) {
+  async function exportChat(ctx: ExtensionCommandContext, sessionFile: string, request: MdRequest, target: "copy" | "save", outputDir: string): Promise<void> {
+    const options: ExportOptions = { includeThinking: request.thinking, toolFilter: request.toolFilter };
+    const result = request.wholeSession
+      ? await generateMarkdownFromSession(sessionFile, options, request.lastTurns)
+      : generateMarkdownFromBranch(ctx.sessionManager, sessionFile, options, request.lastTurns);
+    if (!result) {
+      ctx.ui.notify(`Nothing to export: no conversation in ${request.wholeSession ? "this session" : "this branch"} yet.`, "warning");
+      return;
+    }
+    const extras = [request.thinking ? "thinking" : "", describeToolFilter(request.toolFilter) ?? ""].filter(Boolean);
+    const what = `${request.wholeSession ? "the whole session" : "this branch"}${request.lastTurns ? `, ${turnsLabel(request.lastTurns)}` : ""}${extras.length ? `, with ${extras.join(" and ")}` : ""}`;
+    if (target === "copy") {
+      copyToClipboard(result.content);
+      ctx.ui.notify(`Copied ${what} to the clipboard.`, "info");
+      return;
+    }
+    const outputFile = path.join(outputDir, result.filename);
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(outputFile, result.content, "utf-8");
+    ctx.ui.notify(`Saved ${what} to ${outputFile}`, "info");
+  }
+
   pi.registerCommand("md", {
-    description:
-      "Export current session as markdown (current /tree branch) on clipboard or to file. Tool calls and thinking blocks are excluded by default. Use '/md tc' to include tool calls, optionally filtered with exact tool names like '/md tc -bash -read' or '/md tc +ask'. Use '/md t' to include thinking blocks. Use '/md all' for full file. Pass a number (e.g. '/md 2' or '/md tc t 2') to export only the last N turns.",
+    description: "Copy or save this chat as Markdown, with or without tool calls and thinking",
+    getArgumentCompletions: completeMd,
     handler: async (args, ctx) => {
       const sessionFile = ctx.sessionManager.getSessionFile();
-
       if (!sessionFile) {
-        ctx.ui.notify("No session file (ephemeral session)", "error");
+        ctx.ui.notify("This session isn't saved to a file, so there is nothing to export.", "error");
         return;
       }
-
-      const argsTrimmed = args.trim();
-      const tokens = argsTrimmed ? argsTrimmed.split(/\s+/).filter(Boolean) : [];
-      const tokensLower = tokens.map((t) => t.toLowerCase());
-
-      const includeThinking =
-        tokensLower.includes("t") ||
-        tokensLower.includes("think") ||
-        tokensLower.includes("thinking");
-
-      const includeToolCalls = tokensLower.includes("tc");
-      const exportAll = tokensLower.includes("all") || tokensLower.includes("file");
-      const toolFilterTokensPresent = hasToolFilterTokens(tokensLower);
-
-      if (toolFilterTokensPresent && !includeToolCalls) {
-        ctx.ui.notify("Tool filters require 'tc' (e.g. /md tc -bash or /md tc +ask)", "error");
+      const parsed = parseMdArgs(args);
+      if (!parsed.ok) {
+        ctx.ui.notify(parsed.message, "error");
         return;
       }
-
-      if (tokensLower.includes("+all") || tokensLower.includes("-all")) {
-        ctx.ui.notify("'+all' and '-all' are not supported; use '/md tc' or '/md tc +tool'", "error");
-        return;
+      const outputDir = ctx.sessionManager.getCwd() || OUTPUT_DIR_FALLBACK;
+      let request = parsed.request;
+      let target: "copy" | "save";
+      if (canShowMenu(ctx)) {
+        const choice = await showMenu(ctx, mdMenu(request, outputDir));
+        if (choice?.id !== "copy" && choice?.id !== "save") return;
+        request = applyMdMenu(request, choice.values);
+        target = choice.id;
+      } else {
+        const copy = "Copy to clipboard";
+        const picked = await ctx.ui.select("Export this chat as Markdown", [copy, `Save as a .md file in ${outputDir}`]);
+        if (!picked) return;
+        target = picked === copy ? "copy" : "save";
       }
-
-      const toolFilter = includeToolCalls ? parseToolFilter(tokensLower) : null;
-      const options: ExportOptions = {
-        includeThinking,
-        toolFilter,
-      };
-
-      const turnsToken = tokens.find((t) => /^\d+$/.test(t)) || null;
-      const lastTurns = turnsToken ? parseInt(turnsToken, 10) : null;
-      if (turnsToken && (!Number.isFinite(lastTurns) || lastTurns < 1)) {
-        ctx.ui.notify("Turn limit must be >= 1 (e.g. /md 2)", "error");
-        return;
-      }
-
-      const turnSuffix = lastTurns ? ` (last ${lastTurns} turns)` : "";
-      const extras: string[] = [];
-      if (includeThinking) {
-        extras.push("thinking");
-      }
-      const toolFilterDescription = describeToolFilter(toolFilter);
-      if (toolFilterDescription) {
-        extras.push(toolFilterDescription);
-      }
-      const extrasSuffix = extras.length > 0 ? ` (with ${extras.join(" + ")})` : "";
-      const title = `Export session${turnSuffix}${extrasSuffix} as Markdown`;
-      const OUTPUT_DIR = ctx.sessionManager.getCwd() || OUTPUT_DIR_FALLBACK;
-      const choice = await ctx.ui.select(`${title}\n\nSelect export method:`, [
-        "Copy to clipboard",
-        `Save to .md file in ${OUTPUT_DIR}/`,
-      ]);
-
-      if (!choice) {
-        return;
-      }
-
       try {
-        const result = exportAll
-          ? await generateMarkdownFromSession(sessionFile, options, lastTurns)
-          : generateMarkdownFromBranch(ctx.sessionManager, sessionFile, options, lastTurns);
-
-        if (!result) {
-          const mode = exportAll ? "session file" : "current branch";
-          ctx.ui.notify(`No meaningful conversation found in ${mode}`, "error");
-          return;
-        }
-
-        const suffix = extrasSuffix;
-        const mode = exportAll ? " (full file)" : " (branch)";
-
-        if (choice === "Copy to clipboard") {
-          copyToClipboard(result.content);
-          ctx.ui.notify(`Copied to clipboard${suffix}${mode}`, "success");
-          return;
-        }
-
-        const outputFile = path.join(OUTPUT_DIR, result.filename);
-        fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-        fs.writeFileSync(outputFile, result.content, "utf-8");
-        ctx.ui.notify(`Saved${suffix}${mode}: ${outputFile}`, "success");
+        await exportChat(ctx, sessionFile, request, target, outputDir);
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        ctx.ui.notify(`Export failed: ${errMsg}`, "error");
+        ctx.ui.notify(`Export failed: ${err instanceof Error ? err.message : String(err)}`, "error");
       }
     },
   });

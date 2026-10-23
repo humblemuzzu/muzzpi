@@ -12,6 +12,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isKeyRelease, matchesKey, type Component, type TUI } from "@mariozechner/pi-tui";
 import { AGENT_CONTROL_CHANNEL, AGENT_RUNS_CHANNEL, type ControlRequest, type RunSnapshot } from "../tools/lib/agent-channel";
+import { withoutTyped } from "../tools/lib/command-args";
+import { contributeHelp } from "../tools/lib/help-channel";
 import { AgentView, type ViewActions } from "./agent-view";
 import { Dock, type DockHost } from "./dock";
 import { ListView, type ListResult } from "./list-view";
@@ -196,7 +198,10 @@ export default function agentsUi(pi: ExtensionAPI): void {
 	});
 
 	const open = async (args: string, current: ExtensionContext) => {
-		if (!mounted(current)) return;
+		if (!mounted(current)) {
+			if (current.hasUI) current.ui.notify("The agents view needs the interactive TUI.", "info");
+			return;
+		}
 		ctx = current;
 		const query = args.trim();
 		if (!query) return openList();
@@ -206,7 +211,18 @@ export default function agentsUi(pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("agents", {
-		description: "Background agents: the list, or /agents <id> for one agent's full view",
+		description: "See, steer and stop background agents; /agents chad opens one",
+		getArgumentCompletions: (prefix) => {
+			const typed = prefix.trim().toLowerCase();
+			const items = store
+				.all()
+				.filter((run) => run.id.toLowerCase().startsWith(typed) || run.agent.toLowerCase().startsWith(typed))
+				.map((run) => {
+					const short = run.id.slice(run.id.indexOf("-") + 1).slice(0, 8);
+					return { value: run.id, label: `${run.agent} ${short}`, description: `${run.status} · ${run.label}` };
+				});
+			return withoutTyped(items, prefix);
+		},
 		handler: (args, current) => open(args, current),
 	});
 
@@ -214,4 +230,5 @@ export default function agentsUi(pi: ExtensionAPI): void {
 		description: "Open the agents list",
 		handler: (current) => open("", current),
 	});
+	contributeHelp(pi, (help) => help.shortcut({ command: "agents", key: SHORTCUT }));
 }

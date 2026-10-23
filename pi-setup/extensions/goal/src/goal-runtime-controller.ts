@@ -33,6 +33,7 @@ export interface GoalRuntimeController extends GoalRuntimeEventHandlers {
   clearGoal(source: GoalEntrySource, ctx: ExtensionContext): void;
   updateGoal(source: GoalEntrySource, ctx: ExtensionContext, toolCallId: string, status: "complete" | "blocked", reason?: string): GoalResult;
   cancelProviderLimitAutoResume(goalId: string, ctx: StatusContext): void;
+  isProviderLimitAutoResumeScheduled(goalId: string): boolean;
   resumeGoalWithContinuation(goalId: string, source: GoalEntrySource, ctx: StatusContext): GoalResult;
 }
 
@@ -221,13 +222,14 @@ export function createGoalRuntimeController(pi: ExtensionAPI): GoalRuntimeContro
       providerLimitAutoResume.clear();
       status.refreshUi(ctx);
     },
+    isProviderLimitAutoResumeScheduled: (goalId) => providerLimitAutoResume.isScheduledFor(goalId),
     updateGoal,
     resumeGoalWithContinuation,
     ...eventHandlers,
   };
 }
 
-export function registerGoalRuntimeController(pi: ExtensionAPI): void {
+export function registerGoalRuntimeController(pi: ExtensionAPI, strictGoalPrompt: (task: string) => string): void {
   const controller = createGoalRuntimeController(pi);
   registerGoalTools(pi, {
     getGoal: () => controller.getGoalForDisplay(),
@@ -240,7 +242,9 @@ export function registerGoalRuntimeController(pi: ExtensionAPI): void {
     setGoal: controller.setGoal.bind(controller),
     clearGoal: controller.clearGoal.bind(controller),
     cancelProviderLimitAutoResume: controller.cancelProviderLimitAutoResume.bind(controller),
+    isProviderLimitAutoResumeScheduled: controller.isProviderLimitAutoResumeScheduled.bind(controller),
     resumeGoalWithContinuation: controller.resumeGoalWithContinuation.bind(controller),
+    strictGoalPrompt,
   });
   registerGoalRuntimeEvents(pi, controller);
 }

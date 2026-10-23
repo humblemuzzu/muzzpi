@@ -20,6 +20,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { hasToolCost } from "../tools/lib/tool-cost";
 import { clipboardImageModule } from "../tools/lib/pi-package-dir";
+import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/command-args";
+import { contributeHelp } from "../tools/lib/help-channel";
 import {
 	SPINNER_INTERVAL_MS,
 	activityLabel,
@@ -516,6 +518,10 @@ const WRITING_TOOLS = new Set(["edit", "write", "bash", "undo_edit", "redo_edit"
 const CHANGES_DEBOUNCE_MS = 1500;
 
 const HUD_SHORTCUT = "ctrl+shift+i";
+const HUD_WORDS: Word[] = [
+	{ name: "on", description: "show the detail row" },
+	{ name: "off", description: "hide the detail row" },
+];
 const hudFile = () => join(getAgentDir(), "cache", "editor-hud.json");
 
 function readDetailSetting(): boolean {
@@ -950,16 +956,22 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("hud", {
-		description: "Prompt bar detail view: full cache meter, context size, provider, run figures · /hud [on|off]",
+		description: "Show or hide more detail under the prompt: cache, context, model and timings",
+		getArgumentCompletions: (prefix) => completeWords(HUD_WORDS, prefix),
 		handler: async (args, ctx) => {
-			const arg = (args ?? "").trim().toLowerCase();
-			if (arg && arg !== "on" && arg !== "off") {
-				ctx.ui.notify(`unknown: ${arg} · /hud [on|off]`, "error");
+			const { word } = splitArgs(args);
+			if (word && !findWord(HUD_WORDS, word)) {
+				ctx.ui.notify(`/hud has no "${word}". Use /hud on, /hud off, or /hud on its own to switch.`, "error");
 				return;
 			}
-			setDetail(ctx, arg ? arg === "on" : !detail);
+			const next = word ? word === "on" : !detail;
+			const already = next === detail;
+			setDetail(ctx, next);
+			const state = next ? "on: cache, context, model and timings show under the prompt" : "off";
+			ctx.ui.notify(`Detail row ${already ? "already " : ""}${state}. ${HUD_SHORTCUT} switches it; remembered across sessions.`, "info");
 		},
 	});
+	contributeHelp(pi, (help) => help.shortcut({ command: "hud", key: HUD_SHORTCUT }));
 
 	// pi emits this before invalidating. Afterwards every ctx call throws, and an
 	// uncaught throw inside a live timer is process.exit(1).

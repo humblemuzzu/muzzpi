@@ -220,29 +220,34 @@ mentions a token stays readable.
 
 - A box-drawn editor with model, context and git branch on the border, and a
   cache line under it: hit rate, reads, writes.
+- `/help` lists every command, shortcut and @mention in one searchable list and
+  runs what you pick. Every command typed on its own opens a small menu that says
+  where things stand and what each choice does; words after it are suggested as
+  you type, and settings you change are remembered across sessions.
 - `/stats`: nine tabs over every session pi, Claude Code, Codex and OpenCode left
   on the machine: cost, tokens, cache, models, tools, sub-agents, projects
-  matched to commits, your rhythm, and a wrapped card. Local and read-only.
-- `/studio`: preview pi themes **and** your Ghostty theme, font, cursor and
+  matched to commits, your rhythm, and a yearly-review card. Local and read-only.
+- `/theme`: preview pi themes **and** your Ghostty theme, font, cursor and
   opacity live. Esc reverts, Enter keeps.
-- A dock for the agents running in the background and a full-screen view of any one's conversation, a command palette, pinned sessions,
+- A dock for the agents running in the background and a full-screen view of any one's conversation, pinned sessions,
   auto-named sessions, desktop notifications, a DeepSeek peak-price clock.
 - Hindi, Bengali and emoji cannot smear the screen: pi-tui is patched to never
   undercount a character's width.
 
 | Command | Key | Does |
 |---|---|---|
-| `/stats` | `Ctrl+Shift+S` | usage dashboard |
-| `/studio`, `/theme` | `Ctrl+Shift+K` | live theme and Ghostty preview |
+| `/help` | `Ctrl+Shift+P` | every command, shortcut and @mention, searchable; enter runs it |
+| `/stats` | `Ctrl+Shift+S` | usage dashboard, reports, a monthly budget |
+| `/theme` | `Ctrl+Shift+K` | live theme and Ghostty preview; `/theme <name>` switches straight away |
+| `/hud` | `Ctrl+Shift+I` | more detail under the prompt |
 | `/agents` | `Ctrl+Shift+A` | background agents: list, full-screen view of each, steer / stop / continue |
-| `/palette` | `Ctrl+Shift+P` | command palette |
 | `/ysk` | `Ctrl+Shift+Y` | a side agent that flags what you missed; off until `/ysk on` |
 | `/idea` | | park an idea for this project (`pi:` in front files it under the harness); `/idea` alone lists them ([more](herdr/README.md#idea-park-a-thought-keep-working)) |
-| `/goal` | | a long-running goal, audited before it is marked done |
-| `/md` | | session to markdown |
+| `/goal` | | a long-running goal, audited before it is marked done; `/goal strict <task>` has the agent write it |
+| `/md` | | this chat as markdown, with or without tool calls and thinking |
 | `/deepseek` | | DeepSeek peak and off-peak clock |
 | `/local` | | run a local model through llama.cpp |
-| `/psst` | | the secrets vault |
+| `/psst` | | the secrets vault: names, add a secret, which ones the agent gets |
 | `/resume` | `Ctrl+B` | pin a session to the top |
 
 ## 10 · Skills

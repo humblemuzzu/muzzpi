@@ -35,7 +35,7 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 	const bus = new Bus();
 	const events = { control: [] as unknown[] };
 	bus.on(AGENT_CONTROL_CHANNEL, (request) => events.control.push(request));
-	const sessionHandlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+	const sessionHandlers = new Map<string, ((event: unknown, ctx: unknown) => void)[]>();
 	const commands = new Map<string, (args: string, ctx: unknown) => unknown>();
 	const shortcuts = new Map<string, (ctx: unknown) => unknown>();
 	const editor = { text: options.editorText ?? "", getText() { return this.text; }, render: () => [] as string[], invalidate() {}, focused: false };
@@ -80,13 +80,14 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 	};
 	const pi: any = {
 		events: bus,
-		on: (name: string, handler: (event: unknown, ctx: unknown) => void) => sessionHandlers.set(name, handler),
+		on: (name: string, handler: (event: unknown, ctx: unknown) => void) => sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
 		registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => unknown }) => commands.set(name, def.handler),
 		registerShortcut: (key: string, def: { handler: (ctx: unknown) => unknown }) => shortcuts.set(key, def.handler),
 	};
 	agentsUi(pi);
-	const start = () => sessionHandlers.get("session_start")!({ reason: "startup" }, ctx);
-	const stop = () => sessionHandlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+	const fire = (name: string, event: unknown) => sessionHandlers.get(name)!.forEach((handler) => handler(event, ctx));
+	const start = () => fire("session_start", { reason: "startup" });
+	const stop = () => fire("session_shutdown", { reason: "quit" });
 	const key = (data: string) => {
 		for (const listener of state.inputListeners) {
 			const result = listener(data) as { consume?: boolean } | undefined;

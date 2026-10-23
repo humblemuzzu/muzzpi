@@ -11,13 +11,15 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { getMarkdownTheme, type Theme } from "@mariozechner/pi-coding-agent";
+import { getAgentDir, getMarkdownTheme, type Theme } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Text, type KeybindingsManager, type TUI } from "@mariozechner/pi-tui";
 import type { Message } from "@mariozechner/pi-ai";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/command-args";
+import { canShowMenu, type MenuItem, menuAsText, showMenu } from "../tools/lib/command-menu";
+import { contributeHelp } from "../tools/lib/help-channel";
 import {
 	CHECK_EVERY_TURNS,
 	FREE_IGNORES,
@@ -43,14 +45,22 @@ const WIDGET_KEY = "you-should-know";
 const COMMAND = "ysk";
 const SHORTCUT = "ctrl+shift+y";
 
-const STATE_DIR = join(homedir(), ".pi", "agent", "you-should-know");
-const STATE_FILE = join(STATE_DIR, "state.json");
-const LOG_FILE = join(STATE_DIR, "checks.jsonl");
+const stateDir = () => join(getAgentDir(), "you-should-know");
+const stateFile = () => join(stateDir(), "state.json");
+const logFile = () => join(stateDir(), "checks.jsonl");
 const PROMPT_FILENAME = "detect-prompt.md";
+
+const WORDS: Word[] = [
+	{ name: "on", description: "start the side agent (it costs a little per check)" },
+	{ name: "off", description: "stop it" },
+	{ name: "status", description: "checks run, notes shown, money spent" },
+];
+
+const USAGE = ["/ysk on       start it", "/ysk off      stop it", "/ysk status   checks, notes and spend", `${SHORTCUT}  answer the latest note`];
 
 function loadState(): State {
 	try {
-		const raw = JSON.parse(readFileSync(STATE_FILE, "utf8")) as Partial<State>;
+		const raw = JSON.parse(readFileSync(stateFile(), "utf8")) as Partial<State>;
 		const base = emptyState();
 		const strings = (value: unknown) =>
 			Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : undefined;
@@ -72,17 +82,55 @@ function loadState(): State {
 
 function saveState(state: State): void {
 	try {
-		mkdirSync(STATE_DIR, { recursive: true });
-		writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`);
+		mkdirSync(stateDir(), { recursive: true });
+		writeFileSync(stateFile(), `${JSON.stringify(state, null, 2)}\n`);
 	} catch {
 		// a state file we cannot write costs us dedup, not correctness
 	}
 }
 
+interface Spend {
+	total: number;
+	/** log lines that carried a cost */
+	priced: number;
+}
+
+/** Every check and explanation logs what it cost, so the log is the one record of the spend. */
+function spendSoFar(): Spend {
+	let text = "";
+	try {
+		text = readFileSync(logFile(), "utf8");
+	} catch {
+		return { total: 0, priced: 0 };
+	}
+	const spend = { total: 0, priced: 0 };
+	for (const line of text.split("\n")) {
+		try {
+			const cost = line ? (JSON.parse(line) as { cost?: unknown }).cost : undefined;
+			if (typeof cost === "number" && Number.isFinite(cost)) {
+				spend.total += cost;
+				spend.priced += 1;
+			}
+		} catch {
+			// a torn last line from a crash mid-append; the rest still count
+		}
+	}
+	return spend;
+}
+
+function formatSpent(usd: number): string {
+	return `$${usd.toFixed(usd > 0 && usd < 1 ? 3 : 2)}`;
+}
+
+/** What a check costs, measured from the log once there is one. */
+function costPerCheck(spend: Spend): string {
+	return spend.priced > 0 ? `about ${((100 * spend.total) / spend.priced).toFixed(1)}¢ a check so far` : "about a cent a check or less";
+}
+
 function logCheck(entry: Record<string, unknown>): void {
 	try {
-		mkdirSync(STATE_DIR, { recursive: true });
-		appendFileSync(LOG_FILE, `${JSON.stringify(entry)}\n`);
+		mkdirSync(stateDir(), { recursive: true });
+		appendFileSync(logFile(), `${JSON.stringify(entry)}\n`);
 	} catch {
 		// logging is never worth an error
 	}
@@ -100,7 +148,7 @@ function loadTemplate(): string {
 	} catch {
 		// import.meta.url unavailable — fall back to the deployed location
 	}
-	candidates.push(join(homedir(), ".pi", "agent", "extensions", "you-should-know", PROMPT_FILENAME));
+	candidates.push(join(getAgentDir(), "extensions", "you-should-know", PROMPT_FILENAME));
 	for (const path of candidates) {
 		try {
 			const text = readFileSync(path, "utf8");
@@ -208,6 +256,7 @@ export default function (pi: ExtensionAPI) {
 			},
 			{ signal, sessionId: ctx.sessionManager.getSessionId() },
 		);
+		logCheck({ ts: new Date().toISOString(), outcome: "explained", cost: result.usage.cost.total });
 		return textOf(result) || note.line;
 	};
 
@@ -242,32 +291,80 @@ export default function (pi: ExtensionAPI) {
 		pi.sendUserMessage(`A side agent flagged this while you were working:\n\n${quoted}`, { deliverAs: "followUp" });
 	};
 
+	const NOTE_ANSWERS: MenuItem[] = [
+		{ id: "learn", label: "Learn more", description: "A short explanation, written for you now." },
+		{ id: "known", label: "I know this already", description: "It won't bring this up again." },
+		{ id: "chat", label: "Talk it over in the main chat", description: "Sends the note to the agent you're working with." },
+		{ id: "dismiss", label: "Dismiss" },
+	];
+
+	const pickAnswer = async (ctx: ExtensionContext, note: Note): Promise<string | undefined> => {
+		if (canShowMenu(ctx)) {
+			return (await showMenu(ctx, { title: `✦ ${note.tag}`, status: [flatten(note.line)], items: NOTE_ANSWERS }))?.id;
+		}
+		const picked = await ctx.ui.select(`✦ ${note.tag}`, NOTE_ANSWERS.map((a) => a.label));
+		return NOTE_ANSWERS.find((a) => a.label === picked)?.id;
+	};
+
 	const respond = async (ctx: ExtensionContext): Promise<void> => {
 		const note = notes[0];
 		if (!note) {
-			ctx.ui.notify("Nothing to know right now.", "info");
+			ctx.ui.notify("No note right now. When the side agent spots something, it shows above the prompt.", "info");
 			return;
 		}
-		const choice = await ctx.ui.select(`✦ ${note.tag}`, [
-			"1  Learn more",
-			"2  Know this already",
-			"3  Chat in main session",
-			"0  Dismiss",
-		]);
-		if (!choice) return;
-		if (choice.startsWith("1")) {
+		const answer = await pickAnswer(ctx, note);
+		if (answer === "learn") {
 			// Dropped only on success, so a failed explanation does not take the note with it.
 			if (await showExplanation(ctx, note)) dropNote(ctx, note);
-		} else if (choice.startsWith("2")) {
+		} else if (answer === "known") {
 			pushCapped(state.known, note.line);
 			dropNote(ctx, note);
 			ctx.ui.notify("Won't mention that again.", "info");
-		} else if (choice.startsWith("3")) {
+		} else if (answer === "chat") {
 			dropNote(ctx, note);
 			chatInMain(note);
-		} else {
+		} else if (answer === "dismiss") {
 			dropNote(ctx, note);
 		}
+	};
+
+	const statusLine = (): string =>
+		`${state.enabled ? "On" : "Off"} · ${state.checks} checks · ${state.shown} notes shown · ${formatSpent(spendSoFar().total)} spent` +
+		(disabledReason ? ` · not running: ${disabledReason}` : "");
+
+	const setEnabled = (ctx: ExtensionContext, on: boolean): void => {
+		state.enabled = on;
+		if (!on) notes = [];
+		saveState(state);
+		render(ctx);
+		ctx.ui.notify(
+			on
+				? `you-should-know is on: every ${CHECK_EVERY_TURNS} turns it checks what you might have missed, on deepseek-flash (${costPerCheck(spendSoFar())}). Remembered across sessions.`
+				: "you-should-know is off. Remembered across sessions.",
+			"info",
+		);
+	};
+
+	const menu = async (ctx: ExtensionContext): Promise<void> => {
+		const items: MenuItem[] = [];
+		if (state.enabled && notes.length > 0) items.push({ id: "answer", label: "Answer the latest note", note: SHORTCUT });
+		items.push(
+			state.enabled
+				? { id: "off", label: "Turn it off", description: "No more checks until you turn it on." }
+				: { id: "on", label: "Turn it on", description: `Checks every ${CHECK_EVERY_TURNS} turns on deepseek-flash, ${costPerCheck(spendSoFar())}.` },
+		);
+		const spec = {
+			title: "you-should-know",
+			status: ["A side agent that watches the session and flags what you might have missed.", statusLine()],
+			items,
+		};
+		if (!canShowMenu(ctx)) {
+			ctx.ui.notify(menuAsText(spec, USAGE), "info");
+			return;
+		}
+		const choice = await showMenu(ctx, spec);
+		if (choice?.id === "answer") await respond(ctx);
+		else if (choice?.id === "on" || choice?.id === "off") setEnabled(ctx, choice.id === "on");
 	};
 
 	/** Fire-and-forget by design: a check must never delay the main agent. */
@@ -391,43 +488,33 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand(COMMAND, {
-		description:
-			"Side agent that flags what you might have missed. Off by default: '/ysk on' enables it, '/ysk' answers the latest note, '/ysk status' shows checks and spend.",
+		description: "A side agent that flags what you might have missed (off until you turn it on)",
+		getArgumentCompletions: (prefix) => completeWords(WORDS, prefix),
 		handler: async (args, ctx) => {
-			const command = (args ?? "").trim().toLowerCase();
-			if (command === "on" || command === "off") {
-				state.enabled = command === "on";
-				if (!state.enabled) notes = [];
-				saveState(state);
-				render(ctx);
-				ctx.ui.notify(
-					state.enabled
-						? "you-should-know on. It checks every 6 turns on deepseek-flash (~0.1-0.3¢ each)."
-						: "you-should-know off.",
-					"info",
-				);
+			const { word } = splitArgs(args);
+			if (!word) return menu(ctx);
+			const found = findWord(WORDS, word);
+			if (!found) {
+				ctx.ui.notify(`/ysk has no "${word}". Use /ysk on, /ysk off, /ysk status, or /ysk on its own.`, "error");
 				return;
 			}
-			if (command === "status") {
-				ctx.ui.notify(
-					`you-should-know: ${state.enabled ? "on" : "off"} · ${state.checks} checks · ${state.shown} notes shown` +
-						(disabledReason ? ` · disabled: ${disabledReason}` : ""),
-					"info",
-				);
+			if (found.name === "status") {
+				ctx.ui.notify(`you-should-know: ${statusLine()}`, "info");
 				return;
 			}
-			if (!state.enabled) {
-				ctx.ui.notify("you-should-know is off. '/ysk on' to enable it.", "info");
-				return;
-			}
-			await respond(ctx);
+			setEnabled(ctx, found.name === "on");
 		},
 	});
 
 	pi.registerShortcut(SHORTCUT, {
 		description: "Answer the side agent's note",
 		handler: async (ctx) => {
+			if (!state.enabled) {
+				ctx.ui.notify("you-should-know is off. /ysk on starts it.", "info");
+				return;
+			}
 			await respond(ctx);
 		},
 	});
+	contributeHelp(pi, (help) => help.shortcut({ command: "ysk", key: SHORTCUT }));
 }

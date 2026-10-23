@@ -1,7 +1,7 @@
 /**
  * /stats — usage analytics over every session pi, Claude Code, Codex and
  * OpenCode left on this Mac: spend, tokens, cache, models, tools, agents,
- * projects and commits, rhythm, wrapped.
+ * projects and commits, rhythm, and a yearly-review card.
  *
  * Read-only over each harness's own files and the repos sessions ran in;
  * the only writes are its own ledgers, settings and exports under
@@ -23,7 +23,9 @@ import { dayKey, HARNESS_LABEL, HARNESSES } from "./record";
 import { markdownReport } from "./report";
 import { readSettings, todayText, widgetLine, writeSettings } from "./today";
 import { StatsView, terminalRows } from "./view";
-import { writeWrappedPng } from "./wrapped";
+import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/command-args";
+import { askText, canShowMenu, type MenuSpec, menuAsText, showMenu } from "../tools/lib/command-menu";
+import { contributeHelp } from "../tools/lib/help-channel";
 
 const SHORTCUT = "ctrl+shift+s";
 const WIDGET_KEY = "stats-today";
@@ -47,12 +49,28 @@ function planUsd(): number {
 	return Number.isFinite(n) && n > 0 ? n : 200;
 }
 
-const USAGE = "/stats [export|wrapped] [7d|30d|90d|1y|all] \u00b7 /stats widget on|off \u00b7 /stats budget <usd>|off";
+const USAGE = [
+	"/stats 7d            open the view at a range: 7d, 30d, 90d, 1y or all",
+	"/stats export 30d    write a Markdown report for a range",
+	"/stats widget on     show today's spend under the prompt (off hides it)",
+	"/stats budget 500    set a monthly budget in USD (off clears it)",
+];
 
-/** The range named on the command line: 30 days when none is, undefined for one that does not exist. */
-function rangeArg(arg: string | undefined): RangeId | undefined {
-	return arg ? RANGES.find((r) => r.id === arg)?.id : "30d";
+const RANGE_LABEL: Record<RangeId, string> = { "7d": "last 7 days", "30d": "last 30 days", "90d": "last 90 days", "1y": "last year", all: "all time" };
+
+function rangeOf(text: string): RangeId | undefined {
+	const wanted = text.toLowerCase();
+	return RANGES.find((r) => r.id === wanted)?.id;
 }
+
+const rangeSuggestions = () => RANGES.map((r) => ({ value: r.id, description: RANGE_LABEL[r.id] }));
+
+const WORDS: Word[] = [
+	{ name: "export", description: "write a Markdown report", next: rangeSuggestions },
+	{ name: "widget", description: "today's spend under the prompt", next: () => [{ value: "on" }, { value: "off" }] },
+	{ name: "budget", description: "a monthly budget in USD", next: () => [{ value: "off", description: "clear the budget" }] },
+	...RANGES.map((r) => ({ name: r.id, description: `open the view at the ${RANGE_LABEL[r.id]}` })),
+];
 
 /** pi's model catalog, the only price list used: local, and the same one pi prices its own turns from. */
 function priceBook(ctx: ExtensionContext): PriceBook {
@@ -124,7 +142,7 @@ class Loading {
 	}
 }
 
-async function open(ctx: ExtensionContext): Promise<void> {
+async function open(ctx: ExtensionContext, range?: RangeId): Promise<void> {
 	const { budget } = await readSettings(cacheDir());
 	await ctx.ui.custom<null>(
 		(tui: TUI, theme: Theme, _kb, done) => {
@@ -140,7 +158,7 @@ async function open(ctx: ExtensionContext): Promise<void> {
 			}, controller.signal)
 				.then(({ ds, problems }) => {
 					if (controller.signal.aborted) return;
-					view = new StatsView(ds, ink, { planUsd: planUsd(), windows: contextWindows(ctx, ds.lifetime.modelRank), budget, problems }, () => done(null));
+					view = new StatsView(ds, ink, { planUsd: planUsd(), windows: contextWindows(ctx, ds.lifetime.modelRank), budget, problems, range }, () => done(null));
 					tui.requestRender();
 				})
 				.catch((err) => {
@@ -183,18 +201,6 @@ async function exportReport(ctx: ExtensionContext, range: RangeId): Promise<void
 	const file = path.join(cacheDir(), `report-${ds.today}-${range}.md`);
 	await fs.writeFile(file, markdownReport(ds, summarize(ds, range), problems), { mode: 0o600 });
 	written(ctx, "stats report", file, problems);
-}
-
-async function exportWrapped(ctx: ExtensionContext, range: RangeId): Promise<void> {
-	tell(ctx, `Rendering wrapped (${range})…`);
-	const { ds, problems } = await load(ctx);
-	const file = path.join(cacheDir(), `wrapped-${ds.today}-${range}.png`);
-	try {
-		await writeWrappedPng(ds, range, planUsd(), file);
-	} catch (err) {
-		return tell(ctx, `wrapped PNG failed: ${err instanceof Error ? err.message : String(err)}`, "error");
-	}
-	written(ctx, "wrapped", file, problems);
 }
 
 /** The widget's line, or undefined while pi has no ledger: the widget never triggers a full read. */
@@ -286,39 +292,108 @@ function todayWidget(pi: ExtensionAPI): TodayWidget {
 	return { refresh };
 }
 
-async function setWidget(ctx: ExtensionContext, arg: string | undefined, widget: TodayWidget): Promise<void> {
+async function setWidget(ctx: ExtensionContext, on: boolean, widget: TodayWidget): Promise<void> {
 	const settings = await readSettings(cacheDir());
-	if (arg !== "on" && arg !== "off") return tell(ctx, `stats widget is ${settings.widget ? "on" : "off"} · /stats widget on|off`);
-	await writeSettings(cacheDir(), { ...settings, widget: arg === "on" });
+	await writeSettings(cacheDir(), { ...settings, widget: on });
 	widget.refresh(ctx);
-	tell(ctx, arg === "on" ? "stats widget on: today's pi spend under the editor, updated after each agent run (needs /stats to have run once)" : "stats widget off");
+	tell(
+		ctx,
+		on
+			? "Today's spend now shows under the prompt, updated after each agent run. It needs /stats to have run once. Remembered across sessions."
+			: "Today's spend is hidden. Remembered across sessions.",
+	);
 }
 
-async function setBudget(ctx: ExtensionContext, arg: string | undefined, widget: TodayWidget): Promise<void> {
+/** `off` clears the budget; a number, with or without a $, sets it. */
+export function parseBudget(text: string): { ok: true; usd: number | undefined } | { ok: false } {
+	if (text.toLowerCase() === "off") return { ok: true, usd: undefined };
+	const usd = Number(text.replace(/^\$/, ""));
+	return Number.isFinite(usd) && usd > 0 ? { ok: true, usd } : { ok: false };
+}
+
+async function setBudget(ctx: ExtensionContext, text: string, widget: TodayWidget): Promise<void> {
+	const parsed = parseBudget(text);
+	if (!parsed.ok) return tell(ctx, `"${text}" isn't a budget: give a number of US dollars, like /stats budget 500, or off.`, "error");
 	const settings = await readSettings(cacheDir());
-	if (!arg) return tell(ctx, settings.budget ? `monthly budget ${money(settings.budget)} (API-price spend, all harnesses) · /stats budget <usd>|off` : "no monthly budget · /stats budget <usd>");
-	const usd = Number(arg.replace(/^\$/, ""));
-	if (arg !== "off" && !(Number.isFinite(usd) && usd > 0)) return tell(ctx, `not a budget: ${arg} · /stats budget <usd>|off`, "error");
-	await writeSettings(cacheDir(), { ...settings, budget: arg === "off" ? undefined : usd });
+	await writeSettings(cacheDir(), { ...settings, budget: parsed.usd });
 	widget.refresh(ctx);
-	tell(ctx, arg === "off" ? "monthly budget cleared" : `monthly budget set to ${money(usd)} of API-price spend`);
+	tell(ctx, parsed.usd === undefined ? "Monthly budget cleared." : `Monthly budget set to ${money(parsed.usd)} of API-price spend, across every harness.`);
+}
+
+export function statsMenu(widgetOn: boolean, budget: number | undefined): MenuSpec {
+	return {
+		title: "Stats",
+		status: ["Spend, tokens, cache, models, tools and projects across pi, Claude Code, Codex and OpenCode."],
+		items: [
+			{ id: "open", label: "Open stats", note: SHORTCUT },
+			{ id: "export", label: "Write a report", description: "A Markdown file for a time range you pick." },
+			{
+				id: "widget",
+				label: widgetOn ? "Hide today's spend under the prompt" : "Show today's spend under the prompt",
+				note: widgetOn ? "shown now" : "hidden now",
+			},
+			{ id: "budget", label: "Set a monthly budget", note: budget ? `now ${money(budget)}` : "none now", description: "Shown as month-to-date spend against it." },
+		],
+	};
+}
+
+async function pickRange(ctx: ExtensionContext): Promise<RangeId | undefined> {
+	const choice = await showMenu(ctx, {
+		title: "Write a report for",
+		items: RANGES.map((r) => ({ id: r.id, label: RANGE_LABEL[r.id] })),
+		initial: "30d",
+	});
+	return choice ? rangeOf(choice.id) : undefined;
+}
+
+async function menu(ctx: ExtensionContext, widget: TodayWidget): Promise<void> {
+	const settings = await readSettings(cacheDir());
+	const spec = statsMenu(settings.widget, settings.budget);
+	if (!canShowMenu(ctx)) return tell(ctx, menuAsText(spec, USAGE));
+	const choice = await showMenu(ctx, spec);
+	if (choice?.id === "open") return open(ctx);
+	if (choice?.id === "widget") return setWidget(ctx, !settings.widget, widget);
+	if (choice?.id === "export") {
+		const range = await pickRange(ctx);
+		if (range) await exportReport(ctx, range);
+		return;
+	}
+	if (choice?.id === "budget") {
+		const text = (await askText(ctx, "Monthly budget in US dollars", settings.budget ? `now ${money(settings.budget)}; type off to clear it` : "a number, like 500"))?.trim();
+		if (text) await setBudget(ctx, text, widget);
+	}
 }
 
 export default function statsExtension(pi: ExtensionAPI): void {
 	const widget = todayWidget(pi);
 	pi.registerCommand("stats", {
-		description: "Usage across pi, Claude Code, Codex and OpenCode · /stats export|wrapped [7d|30d|90d|1y|all] · widget on|off · budget <usd>|off",
+		description: "Spend, tokens and cache across your coding agents, with a report and a budget",
+		getArgumentCompletions: (prefix) => completeWords(WORDS, prefix),
 		handler: async (args, ctx) => {
-			const [sub = "", arg] = (args ?? "").trim().split(/\s+/);
-			if (sub === "widget") return setWidget(ctx, arg, widget);
-			if (sub === "budget") return setBudget(ctx, arg, widget);
-			const exporting = sub === "export" || sub === "wrapped";
-			if (sub && !exporting) return tell(ctx, `unknown: ${sub} \u00b7 ${USAGE}`, "error");
-			const range = rangeArg(exporting ? arg : undefined);
-			if (!range) return tell(ctx, `unknown range: ${arg} \u00b7 ${USAGE}`, "error");
-			if (sub === "wrapped") return exportWrapped(ctx, range);
-			if (sub === "export" || !ctx.hasUI) return exportReport(ctx, range);
-			return open(ctx);
+			const { word, rest } = splitArgs(args);
+			if (!word) return menu(ctx, widget);
+			const found = findWord(WORDS, word);
+			if (!found) return tell(ctx, `/stats has no "${word}". Try: 7d, 30d, 90d, 1y, all, export, widget, budget, or /stats on its own for the menu.`, "error");
+			if (found.name === "widget") {
+				const on = rest.toLowerCase();
+				if (on !== "on" && on !== "off") {
+					const { widget: shown } = await readSettings(cacheDir());
+					return tell(ctx, `Today's spend is ${shown ? "shown" : "hidden"} under the prompt. /stats widget on or /stats widget off changes it.`);
+				}
+				return setWidget(ctx, on === "on", widget);
+			}
+			if (found.name === "budget") {
+				if (rest) return setBudget(ctx, rest, widget);
+				const { budget } = await readSettings(cacheDir());
+				return tell(ctx, budget ? `Monthly budget: ${money(budget)} of API-price spend. /stats budget off clears it.` : "No monthly budget. Set one with /stats budget 500.");
+			}
+			if (found.name === "export") {
+				const range = rest ? rangeOf(rest) : "30d";
+				if (!range) return tell(ctx, `"${rest}" isn't a range. Use 7d, 30d, 90d, 1y or all.`, "error");
+				return exportReport(ctx, range);
+			}
+			if (!canShowMenu(ctx)) return tell(ctx, `The stats view needs the interactive TUI. /stats export ${found.name} writes a report instead.`);
+			return open(ctx, rangeOf(found.name));
 		},
 	});
 	pi.registerShortcut(SHORTCUT, {
@@ -327,4 +402,5 @@ export default function statsExtension(pi: ExtensionAPI): void {
 			if (ctx.hasUI) await open(ctx);
 		},
 	});
+	contributeHelp(pi, (help) => help.shortcut({ command: "stats", key: SHORTCUT }));
 }

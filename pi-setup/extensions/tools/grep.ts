@@ -468,7 +468,7 @@ export function createGrepTool(): ToolDefinition {
 				}
 
 				const args = [
-					"--json", "--line-number", "--color=never", "--hidden",
+					"--no-config", "--json", "--line-number", "--color=never", "--hidden",
 					"--glob", "!.git", "--glob", "!.jj",
 					"--context", String(contextLines),
 				];

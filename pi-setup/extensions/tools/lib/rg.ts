@@ -31,10 +31,10 @@ export interface RgFiles {
 	error?: string;
 }
 
-/** `rg --files --hidden --glob '!.git' --glob '!.jj' [--glob G] .` run in `cwd`. */
+/** `rg --no-config --files --hidden --glob '!.git' --glob '!.jj' [--glob G] .` run in `cwd`. */
 export function rgFiles(cwd: string, glob: string | undefined, signal?: AbortSignal): Promise<RgFiles> {
 	return new Promise((resolve) => {
-		const args = ["--files", "--hidden", "--color=never", "--glob", "!.git", "--glob", "!.jj"];
+		const args = ["--no-config", "--files", "--hidden", "--color=never", "--glob", "!.git", "--glob", "!.jj"];
 		if (glob !== undefined) args.push("--glob", glob);
 		args.push(".");
 		const child = spawn("rg", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
