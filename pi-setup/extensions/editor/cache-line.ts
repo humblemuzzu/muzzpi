@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Styler } from "../tools/lib/agent-layout";
+import { CACHE_PING_ENTRY, type CachePing } from "../tools/lib/prompt-cache";
 import { type Alert, ink } from "./ink";
 
 const METER_CELLS = 12;
@@ -17,8 +18,10 @@ export interface CacheStats {
 	toolCalls: number;
 	/** pi's cache-hit figure: cacheRead / prompt, most recent assistant turn only. */
 	lastHitRate?: number;
-	/** Last request that touched the prompt cache, cache warms included. A read refreshes the TTL as much as a write. */
+	/** Last request that touched the prompt cache, keep-alive reads included. A read refreshes the TTL as much as a write. */
 	lastCacheAt?: number;
+	/** keep-alive reads: prompt-cache's, and pi's own warmer in older sessions */
+	warms: number;
 	/** Lifetime of the latest cache write, from the 1h share Anthropic reports. */
 	lastWriteTtlMs?: number;
 }
@@ -33,10 +36,18 @@ function touchCache(stats: CacheStats, usage: Usage, timestamp: string): void {
 
 /** `lastResponseAt`: start of the latest request that got a response, which may not be in `entries` yet. */
 export function collectCacheStats(entries: readonly SessionEntry[], lastResponseAt?: number): CacheStats {
-	const stats: CacheStats = { cacheRead: 0, cacheWrite: 0, toolCalls: 0 };
+	const stats: CacheStats = { cacheRead: 0, cacheWrite: 0, toolCalls: 0, warms: 0 };
 	for (const entry of entries) {
 		if (entry.type === "usage" && entry.kind === "cache_warm") {
+			stats.warms++;
 			touchCache(stats, entry.usage, entry.timestamp);
+			continue;
+		}
+		if (entry.type === "custom" && entry.customType === CACHE_PING_ENTRY) {
+			const ping = entry.data as CachePing | undefined;
+			if (!ping?.usage) continue;
+			stats.warms++;
+			touchCache(stats, ping.usage, entry.timestamp);
 			continue;
 		}
 		if (entry.type !== "message") continue;
@@ -136,6 +147,7 @@ export function fullCacheText(view: CacheView, now: number, paint: Styler): stri
 	}
 
 	parts.push(`read ${formatCompact(stats.cacheRead)}  write ${formatCompact(stats.cacheWrite)}`);
+	if (stats.warms > 0) parts.push(paint.fg("dim", `kept warm ${stats.warms}×`));
 	if (stats.toolCalls > 0) {
 		parts.push(paint.fg("dim", stats.toolCalls === 1 ? "1 call" : `${stats.toolCalls} calls`));
 	}

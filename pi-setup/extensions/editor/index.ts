@@ -22,6 +22,7 @@ import { hasToolCost } from "../tools/lib/tool-cost";
 import { clipboardImageModule } from "../tools/lib/pi-package-dir";
 import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/command-args";
 import { contributeHelp } from "../tools/lib/help-channel";
+import { CACHE_PING_CHANNEL } from "../tools/lib/prompt-cache";
 import {
 	SPINNER_INTERVAL_MS,
 	activityLabel,
@@ -559,6 +560,7 @@ export default function (pi: ExtensionAPI) {
 	let cwd = "";
 	let requestStartedAt: number | undefined;
 	let lastResponseAt: number | undefined;
+	let sessionCtx: ExtensionContext | undefined;
 	const activity = createActivityState();
 
 	const repaint = (): void => tuiRef?.requestRender();
@@ -837,6 +839,7 @@ export default function (pi: ExtensionAPI) {
 		requestStartedAt = undefined;
 		lastResponseAt = undefined;
 		if (!ctx.hasUI) return;
+		sessionCtx = ctx;
 		theme = ctx.ui.theme;
 		cwd = ctx.cwd;
 
@@ -937,8 +940,7 @@ export default function (pi: ExtensionAPI) {
 		repaint();
 	});
 
-	// A cache warm during a long tool touches the cache without a message, and its usage
-	// entry is saved only after the reply; the response is the earliest sign of it.
+	// A request renews the cache as soon as it is answered; its message is saved only when it ends.
 	pi.on("before_provider_request", () => {
 		requestStartedAt = Date.now();
 		return undefined;
@@ -948,6 +950,15 @@ export default function (pi: ExtensionAPI) {
 		if (event.status < 200 || event.status >= 300 || requestStartedAt === undefined) return;
 		lastResponseAt = requestStartedAt;
 		syncCache(ctx);
+	});
+
+	// prompt-cache's keep-alive reads bypass the provider hooks above; its entry is already saved.
+	pi.events.on(CACHE_PING_CHANNEL, () => {
+		try {
+			if (sessionCtx) syncCache(sessionCtx);
+		} catch {
+			sessionCtx = undefined;
+		}
 	});
 
 	pi.registerShortcut(HUD_SHORTCUT, {
@@ -982,5 +993,6 @@ export default function (pi: ExtensionAPI) {
 		changesGeneration++;
 		metaRow?.dispose();
 		metaRow = null;
+		sessionCtx = undefined;
 	});
 }

@@ -17,6 +17,9 @@ const turn = (timestamp: string, u: ReturnType<typeof usage>) =>
 const warm = (timestamp: string, u: ReturnType<typeof usage>, kind = "cache_warm") =>
 	({ type: "usage", id: timestamp, parentId: null, timestamp, kind, provider: "anthropic", model: "claude-opus-5-5", usage: u }) as any;
 
+const ping = (timestamp: string, u: ReturnType<typeof usage>) =>
+	({ type: "custom", id: timestamp, parentId: null, timestamp, customType: "cache-ping", data: { provider: "anthropic", model: "claude-opus-5-5", ttlMs: 3_600_000, usage: u } }) as any;
+
 const at = (iso: string) => Date.parse(iso);
 
 describe("collectCacheStats", () => {
@@ -41,6 +44,15 @@ describe("collectCacheStats", () => {
 		expect(stats.lastCacheAt).toBe(at("2026-10-20T10:54:00Z"));
 		expect(stats.cacheRead).toBe(0);
 		expect(stats.cacheWrite).toBe(5000);
+		expect(stats.lastWriteTtlMs).toBe(3_600_000);
+		expect(stats.warms).toBe(1);
+	});
+
+	test("a keep-alive read renews the time and counts as a warm, not a turn", () => {
+		const stats = collectCacheStats([turn("2026-10-20T10:00:00Z", usage(0, 5000, 5000)), ping("2026-10-20T10:54:00Z", usage(5000, 0))]);
+		expect(stats.lastCacheAt).toBe(at("2026-10-20T10:54:00Z"));
+		expect(stats.cacheRead).toBe(0);
+		expect(stats.warms).toBe(1);
 		expect(stats.lastWriteTtlMs).toBe(3_600_000);
 	});
 

@@ -14,6 +14,31 @@ const toolResult = (ms: number, toolName: string, extra: Record<string, unknown>
 
 const spec = piSpec("/sessions");
 
+describe("a keep-alive read", () => {
+	const cost = (total: number) => ({ input: 0, output: 0, cacheRead: total, cacheWrite: 0, total });
+	const rec = readLines(spec, "/sessions/k.jsonl", [
+		header("k1", T0),
+		assistant(T0, { input: 3, output: 50, cacheRead: 0, cacheWrite: 30_000, cacheWrite1h: 30_000, cost: { ...cost(0), cacheWrite: 0.24, total: 0.24 } }),
+		entry("custom", T0 + 54 * MIN, {
+			customType: "cache-ping",
+			data: { provider: "anthropic", model: "claude-opus-5", ttlMs: 3_600_000, usage: { input: 2, output: 1, cacheRead: 30_000, cacheWrite: 0, cost: cost(0.006) } },
+		}),
+		assistant(T0 + 100 * MIN, { input: 3, output: 50, cacheRead: 0, cacheWrite: 31_000, cacheWrite1h: 31_000, cost: { ...cost(0), cacheWrite: 0.25, total: 0.25 } }),
+	]);
+	const u = rec.usage[`${DAY}\tanthropic/claude-opus-5\tunknown`];
+
+	test("is spend, not a turn", () => {
+		expect(u[U.turns]).toBe(2);
+		expect(u[U.cacheRead]).toBe(30_000);
+		expect(u[U.cost]).toBeCloseTo(0.496, 10);
+	});
+
+	test("renews the cache, so a rebuild 46 minutes after it is a bust but not an idle one", () => {
+		expect(u[U.busts]).toBe(1);
+		expect(u[U.idleBusts]).toBe(0);
+	});
+});
+
 describe("a pi session", () => {
 	const rec = readLines(spec, "/sessions/a.jsonl", [
 		header("s1", T0),

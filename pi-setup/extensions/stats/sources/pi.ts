@@ -1,8 +1,10 @@
 import path from "node:path";
 import { AGENT_RESULT_TYPE } from "../../tools/lib/agent-channel";
+import { CACHE_PING_ENTRY } from "../../tools/lib/prompt-cache";
 import { estimate } from "../pricing";
 import {
 	addAgentRun,
+	addCacheRead,
 	addCompaction,
 	addPrompt,
 	addToolResult,
@@ -16,6 +18,7 @@ import {
 	type SessionRecord,
 	T,
 	T_LEN,
+	type Turn,
 	textOf,
 	toolName,
 	UNKNOWN_MODEL,
@@ -79,7 +82,7 @@ function walkChild(rec: SessionRecord, day: string, messages: unknown[], depth: 
 	}
 }
 
-function onAssistant(rec: SessionRecord, msg: any, ms: number, counted: boolean, env: Pick<LineEnv, "prices">): void {
+function turnOf(rec: SessionRecord, msg: any, ms: number, counted: boolean, env: Pick<LineEnv, "prices">): Turn {
 	const st = rec.state;
 	const model = msg.model ? `${msg.provider ?? st.model?.split("/")[0] ?? "unknown"}/${msg.model}` : (st.model ?? UNKNOWN_MODEL);
 	const u = msg.usage ?? {};
@@ -94,25 +97,21 @@ function onAssistant(rec: SessionRecord, msg: any, ms: number, counted: boolean,
 	if (rec.importOf && counted && tokens > 0) rec.dedup[`${ms}:${input}:${output}:${cacheRead}:${cacheWrite}`] = "";
 	const recorded = typeof cost === "object" && cost ? { input: num(cost.input), output: num(cost.output), cacheRead: num(cost.cacheRead), cacheWrite: num(cost.cacheWrite), total } : { ...ZERO_COST, total };
 	const priced = total === 0 && tokens > 0 ? estimate(env.prices, rec.rates, model, { input, output, cacheRead, cacheWrite, cacheWrite1h }) : { cost: recorded, estimated: false, unpriced: false };
-	addTurn(
-		rec,
-		{
-			ms,
-			model,
-			thinking: msg.thinkingLevel ?? st.thinking ?? "unknown",
-			input,
-			output,
-			cacheRead,
-			cacheWrite,
-			cacheWrite1h,
-			reasoning: num(u.reasoning),
-			...priced,
-			durationMs: num(msg.durationMs),
-			stop: msg.stopReason === "error" ? "error" : msg.stopReason === "aborted" ? "aborted" : undefined,
-			calls: Array.isArray(msg.content) ? msg.content.filter((c: any) => c?.type === "toolCall" && typeof c.name === "string").map((c: any) => ({ name: c.name, args: c.arguments })) : [],
-		},
-		counted,
-	);
+	return {
+		ms,
+		model,
+		thinking: msg.thinkingLevel ?? st.thinking ?? "unknown",
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		cacheWrite1h,
+		reasoning: num(u.reasoning),
+		...priced,
+		durationMs: num(msg.durationMs),
+		stop: msg.stopReason === "error" ? "error" : msg.stopReason === "aborted" ? "aborted" : undefined,
+		calls: Array.isArray(msg.content) ? msg.content.filter((c: any) => c?.type === "toolCall" && typeof c.name === "string").map((c: any) => ({ name: c.name, args: c.arguments })) : [],
+	};
 }
 
 function onToolResult(rec: SessionRecord, msg: any, ms: number): void {
@@ -175,6 +174,10 @@ export function piLine(rec: SessionRecord, line: string, env: Pick<LineEnv, "par
 			else st.afterCompaction = true;
 			return;
 		case "custom": {
+			if (entry.customType === CACHE_PING_ENTRY && entry.data?.usage) {
+				addCacheRead(rec, turnOf(rec, entry.data, ms, counted, env), counted);
+				return;
+			}
 			const goal = entry.customType === "pi-codex-goal" ? entry.data?.goal : undefined;
 			if (counted && goal?.goalId) rec.goals[goal.goalId] = [String(goal.status ?? "active"), num(goal.usage?.activeSeconds), ms];
 			return;
@@ -190,7 +193,7 @@ export function piLine(rec: SessionRecord, line: string, env: Pick<LineEnv, "par
 
 	const msg = entry.message;
 	if (!msg || typeof msg !== "object") return;
-	if (msg.role === "assistant") onAssistant(rec, msg, ms, counted, env);
+	if (msg.role === "assistant") addTurn(rec, turnOf(rec, msg, ms, counted, env), counted);
 	else if (!counted) return;
 	else if (msg.role === "toolResult") onToolResult(rec, msg, ms);
 	else if (msg.role === "user") addPrompt(rec, ms, textOf(msg.content));

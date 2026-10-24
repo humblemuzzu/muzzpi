@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import cacheCompaction from "../../cache-compaction";
+import promptCache from "../../prompt-cache";
 import * as piUtils from "../node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/utils.js";
 import { ANTHROPIC_TRIGGER_PHRASES, extendCacheTtl, scrubAnthropicPayload } from "./anthropic-sub";
 import {
 	buildSummaryPayload,
 	CACHE_COMPACTION_MAX_AGE_ENV,
-	type CapturedRequest,
 	cacheCompactionBlocker,
 	captureMaxAgeMs,
 	type CompactionCheck,
@@ -17,6 +16,7 @@ import {
 	summaryMaxTokens,
 	withPreviousExtensionFiles,
 } from "./cache-compaction";
+import type { CapturedRequest } from "./prompt-cache";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
 
 const HOUR = { type: "ephemeral", ttl: "1h" };
@@ -127,6 +127,7 @@ describe("cacheCompactionBlocker", () => {
 	};
 	const check = (overrides: Partial<CompactionCheck>): CompactionCheck => ({
 		capture,
+		ttlMs: 3_600_000,
 		now: capture.at + 60_000,
 		sessionId: "s1",
 		modelId: "claude-haiku-5-5",
@@ -156,12 +157,11 @@ describe("cacheCompactionBlocker", () => {
 		expect(cacheCompactionBlocker(check({ aborted: true }))).toBe("aborted");
 	});
 
-	test("the age limit follows the TTL the capture was written with, and the env var overrides it", () => {
-		const fiveMinute = structuredClone(capture.payload);
-		for (const block of fiveMinute.system as any[]) block.cache_control = { type: "ephemeral" };
-		expect(captureMaxAgeMs(capture.payload, {})).toBe(54 * 60_000);
-		expect(captureMaxAgeMs(fiveMinute, {})).toBe(270_000);
-		expect(captureMaxAgeMs(capture.payload, { [CACHE_COMPACTION_MAX_AGE_ENV]: "5" })).toBe(5000);
+	test("the age limit follows the capture's lifetime, and the env var overrides it", () => {
+		expect(captureMaxAgeMs(3_600_000, {})).toBe(54 * 60_000);
+		expect(captureMaxAgeMs(300_000, {})).toBe(270_000);
+		expect(captureMaxAgeMs(3_600_000, { [CACHE_COMPACTION_MAX_AGE_ENV]: "5" })).toBe(5000);
+		expect(cacheCompactionBlocker(check({ ttlMs: 300_000, now: capture.at + 280_000 }))).toBe("cache entry likely expired");
 		expect(cacheCompactionBlocker(check({ env: { [CACHE_COMPACTION_MAX_AGE_ENV]: "30" } }))).toBe(
 			"cache entry likely expired",
 		);
@@ -211,7 +211,11 @@ function loadExtension(reply: Record<string, unknown>, subAgentTools?: string) {
 	if (subAgentTools === undefined) delete process.env[SUB_AGENT_TOOLS_ENV];
 	else process.env[SUB_AGENT_TOOLS_ENV] = subAgentTools;
 	try {
-		cacheCompaction({ on: (name: string, handler: Handler) => handlers.set(name, handler) } as any);
+		promptCache({
+			on: (name: string, handler: Handler) => handlers.set(name, handler),
+			events: { on: () => () => undefined, emit: () => undefined },
+			appendEntry: () => undefined,
+		} as any);
 	} finally {
 		if (saved === undefined) delete process.env[SUB_AGENT_TOOLS_ENV];
 		else process.env[SUB_AGENT_TOOLS_ENV] = saved;
@@ -258,11 +262,13 @@ const compactEvent = (overrides: Record<string, unknown> = {}) => ({
 	...overrides,
 });
 
-describe("cache-compaction extension", () => {
+describe("prompt-cache extension: compaction", () => {
 	const ok = { role: "assistant", stopReason: "stop", content: [{ type: "thinking", thinking: "x" }, { type: "text", text: "## Goal\nship" }], usage };
 
-	test("does nothing in a sub-agent", () => {
-		expect(loadExtension(ok, "read").handlers.size).toBe(0);
+	test("a sub-agent keeps its cache warm but never compacts from it", () => {
+		const { handlers } = loadExtension(ok, "read");
+		expect(handlers.has("before_provider_request")).toBe(true);
+		expect(handlers.has("session_before_compact")).toBe(false);
 	});
 
 	test("its request hooks are read-only", async () => {
@@ -307,14 +313,6 @@ describe("cache-compaction extension", () => {
 		expect(await run({ ...ok, content: [{ type: "text", text: "bundled." }] })).toBeUndefined();
 	});
 
-	test("a cache-warmer replay keeps the capture and its messages", async () => {
-		const ext = loadExtension(ok);
-		await ext.call("context", { messages: [old, kept] });
-		await ext.call("before_provider_request", { payload: wirePayload() });
-		await ext.call("before_provider_request", { payload: { ...wirePayload(), max_tokens: 1 } });
-		expect(await ext.call("session_before_compact", compactEvent())).toBeDefined();
-	});
-
 	test("a capture made on another model is not replayed", async () => {
 		const ext = loadExtension(ok);
 		await ext.call("context", { messages: [old, kept] });
@@ -324,8 +322,8 @@ describe("cache-compaction extension", () => {
 		expect(ext.sent).toEqual([]);
 	});
 
-	test("a tree move, a new session or a finished compaction drops the capture", async () => {
-		for (const event of ["session_tree", "session_compact", "session_start"]) {
+	test("a tree move, a new session, a model switch or a finished compaction drops the capture", async () => {
+		for (const event of ["session_tree", "session_compact", "session_start", "model_select"]) {
 			const ext = loadExtension(ok);
 			await ext.call("context", { messages: [old, kept] });
 			await ext.call("before_provider_request", { payload: wirePayload() });

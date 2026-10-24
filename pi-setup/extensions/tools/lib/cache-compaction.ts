@@ -4,21 +4,12 @@
  * re-reading it at full price under a different prompt.
  */
 import { isPlainObject, scrubAnthropicPayload } from "./anthropic-sub";
+import { type CapturedRequest, refreshDelayMs } from "./prompt-cache";
 
 export const CACHE_COMPACTION_MAX_AGE_ENV = "PI_CACHE_COMPACTION_MAX_AGE_SEC";
 
 /** pi's request clamp keeps this much of the window free (pi-ai simple-options.js CONTEXT_SAFETY_TOKENS) */
 const CONTEXT_SAFETY_TOKENS = 4096;
-const HOUR_MS = 3_600_000;
-const FIVE_MINUTES_MS = 300_000;
-
-export interface CapturedRequest {
-	payload: Record<string, unknown>;
-	messages: readonly unknown[];
-	sessionId: string;
-	modelId: string;
-	at: number;
-}
 
 export interface FileOps {
 	read: Set<string>;
@@ -133,18 +124,11 @@ export function buildSummaryPayload(
 	return payload;
 }
 
-function usesHourTtl(payload: Record<string, unknown>): boolean {
-	const system = Array.isArray(payload.system) ? payload.system : [];
-	return system.some(
-		(block) => isPlainObject(block) && isPlainObject(block.cache_control) && block.cache_control.ttl === "1h",
-	);
-}
-
-/** How old a capture may be and still be read from cache: 90% of its TTL, as pi's warmer refreshes. */
-export function captureMaxAgeMs(payload: Record<string, unknown>, env: Record<string, string | undefined>): number {
+/** How old a capture may be and still be read from cache: no older than the keep-alive lets it get. */
+export function captureMaxAgeMs(ttlMs: number, env: Record<string, string | undefined>): number {
 	const override = Number(env[CACHE_COMPACTION_MAX_AGE_ENV]);
 	if (env[CACHE_COMPACTION_MAX_AGE_ENV] && Number.isFinite(override) && override >= 0) return override * 1000;
-	return 0.9 * (usesHourTtl(payload) ? HOUR_MS : FIVE_MINUTES_MS);
+	return refreshDelayMs(ttlMs);
 }
 
 /** pi's summary budget, cut to what the window leaves after the prompt; 0 when nothing fits */
@@ -167,6 +151,8 @@ export function missingFromCapture(captured: readonly unknown[], needed: readonl
 
 export interface CompactionCheck {
 	capture: CapturedRequest | undefined;
+	/** the capture's cache lifetime, as the keep-alive knows it */
+	ttlMs: number;
 	now: number;
 	sessionId: string;
 	modelId: string;
@@ -184,7 +170,7 @@ export function cacheCompactionBlocker(check: CompactionCheck): string | undefin
 	if (check.reason === "overflow") return "overflow recovery";
 	if (capture.sessionId !== check.sessionId) return "captured in another session";
 	if (capture.modelId !== check.modelId) return "captured for another model";
-	if (check.now - capture.at > captureMaxAgeMs(capture.payload, check.env)) return "cache entry likely expired";
+	if (check.now - capture.at > captureMaxAgeMs(check.ttlMs, check.env)) return "cache entry likely expired";
 	if (check.maxTokens <= 0) return "no room for a summary";
 	const missing = missingFromCapture(capture.messages, check.needed);
 	if (missing > 0) return `${missing} messages to summarize were not in the last request`;

@@ -314,8 +314,8 @@ function loadExtension(env: Record<string, string> = {}) {
 		}
 	}
 	const notes: string[] = [];
-	const ctx = (provider: string, oauth = true, hasUI = true, promptCache?: { short?: number }) => ({
-		model: { provider, id: "claude-opus-5-5", promptCache },
+	const ctx = (provider: string, oauth = true, hasUI = true) => ({
+		model: { provider, id: "claude-opus-5-5" },
 		modelRegistry: { isUsingOAuth: () => oauth },
 		hasUI,
 		ui: { notify: (message: string) => notes.push(message) },
@@ -376,41 +376,9 @@ describe("anthropic-sub extension", () => {
 		expect([...loadExtension().handlers.keys()].sort()).toEqual([
 			"after_provider_response",
 			"before_provider_request",
-			"cache_warming_decision",
 			"message_end",
-			"model_select",
 			"session_start",
 		]);
-	});
-
-	test("warns once per model when pi's warmer would refresh a 1h cache on a shorter lifetime", () => {
-		const { call, ctx, notes } = loadExtension();
-		const stale = ctx("anthropic", true, true, { short: 300 });
-		call("session_start", { reason: "reload" }, stale);
-		expect(notes).toHaveLength(1);
-		call("model_select", {}, stale);
-		expect(notes).toHaveLength(1);
-		const picked = loadExtension();
-		picked.call("model_select", {}, picked.ctx("anthropic", true, true, { short: 300 }));
-		expect(picked.notes).toHaveLength(1);
-		expect(notes[0]).toContain("300s");
-		expect(notes[0]).toContain("Restart pi");
-		expect(notes[0]).not.toMatch(/[\n\r]/);
-	});
-
-	test("no lifetime warning when it matches, has none, or the request is not a 1h plan request", () => {
-		const main = loadExtension();
-		main.call("session_start", {}, main.ctx("anthropic", true, true, { short: 3600 }));
-		main.call("session_start", {}, main.ctx("anthropic", true, true, {}));
-		main.call("session_start", {}, main.ctx("anthropic", false, true, { short: 300 }));
-		main.call("session_start", {}, main.ctx("anthropic", true, false, { short: 300 }));
-		main.call("model_select", {}, main.ctx("deepseek", true, true, { short: 300 }));
-		expect(main.notes).toHaveLength(0);
-		for (const env of [{ PI_SUBAGENT_TOOLS: "read" }, { PI_PROMPT_CACHE_TTL: "5m" }]) {
-			const other = loadExtension(env);
-			other.call("session_start", {}, other.ctx("anthropic", true, true, { short: 300 }));
-			expect(other.notes).toHaveLength(0);
-		}
 	});
 
 	test("scrubs only anthropic OAuth requests", () => {
@@ -454,18 +422,6 @@ describe("anthropic-sub extension", () => {
 		const { call, ctx } = loadExtension();
 		call("after_provider_response", { status: 200, headers: { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-overage-status": "allowed" } }, ctx("openrouter"));
 		expect(call("before_provider_request", { payload: wirePayload() }, ctx("anthropic"))).toBeDefined();
-	});
-
-	test("cache warming runs only where the request really wrote 1h", () => {
-		const event = { type: "cache_warming_decision", action: "warm" };
-		const main = loadExtension();
-		expect(main.call("cache_warming_decision", event, main.ctx("anthropic"))).toBeUndefined();
-		expect(main.call("cache_warming_decision", event, main.ctx("anthropic", false))).toEqual({ action: "stop" });
-		expect(main.call("cache_warming_decision", event, main.ctx("deepseek"))).toBeUndefined();
-		const child = loadExtension({ PI_SUBAGENT_TOOLS: "read" });
-		expect(child.call("cache_warming_decision", event, child.ctx("anthropic"))).toEqual({ action: "stop" });
-		main.call("after_provider_response", { status: 200, headers: { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-overage-status": "allowed" } }, main.ctx("anthropic"));
-		expect(main.call("cache_warming_decision", event, main.ctx("anthropic"))).toEqual({ action: "stop" });
 	});
 
 	test("leaves a clean anthropic request untouched", () => {

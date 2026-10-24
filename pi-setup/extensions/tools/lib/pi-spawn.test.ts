@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, newSessionId, piSpawn, readAgentPrompt, startChild, unresumableReason } from "./pi-spawn";
+import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, newSessionId, piSpawn, readAgentPrompt, startChild, unresumableReason, type UsageStats } from "./pi-spawn";
 
 let dir: string;
 let stub: string;
@@ -230,7 +230,7 @@ async function withChild(
 	bin: string,
 	stallSec: string,
 	config: Record<string, unknown> = {},
-): Promise<{ exitCode: number; stopReason?: string; errorMessage?: string; ms: number }> {
+): Promise<{ exitCode: number; stopReason?: string; errorMessage?: string; ms: number; usage: UsageStats }> {
 	const prevBin = process.env.PI_BIN;
 	const prevStall = process.env.PI_SPAWN_STALL_SEC;
 	process.env.PI_BIN = bin;
@@ -238,7 +238,7 @@ async function withChild(
 	const started = Date.now();
 	try {
 		const r = await piSpawn({ cwd: dir, task: "noop", ...(config as any) });
-		return { exitCode: r.exitCode, stopReason: r.stopReason, errorMessage: r.errorMessage, ms: Date.now() - started };
+		return { exitCode: r.exitCode, stopReason: r.stopReason, errorMessage: r.errorMessage, ms: Date.now() - started, usage: r.usage };
 	} finally {
 		if (prevBin === undefined) delete process.env.PI_BIN; else process.env.PI_BIN = prevBin;
 		if (prevStall === undefined) delete process.env.PI_SPAWN_STALL_SEC; else process.env.PI_SPAWN_STALL_SEC = prevStall;
@@ -311,6 +311,20 @@ describe("stall watchdog", () => {
 		const run = await withChild(bin, "1");
 		expect(run.stopReason).toBeUndefined();
 		expect(run.exitCode).toBe(0);
+	}, 30000);
+
+	const PING = '{"type":"entry_appended","entry":{"type":"custom","customType":"cache-ping","data":{"usage":{"input":2,"output":1,"cacheRead":14651,"cacheWrite":0,"cost":{"total":0.25}}},"id":"p1","parentId":null}}';
+
+	test("keep-alive reads are not liveness: a child that only reads its cache still stalls out", async () => {
+		const bin = writeStub("pinging.sh", [`for i in 1 2 3 4 5 6 7 8 9 10; do echo '${PING}'; sleep 0.4; done`]);
+		const run = await withChild(bin, "1");
+		expect(run.stopReason).toBe("stalled");
+	}, 30000);
+
+	test("a child's keep-alive reads count toward its usage, not its turns", async () => {
+		const bin = writeStub("pinged.sh", [`echo '${PING}'`, `echo '${PING}'`, `echo '${SETTLED}'`]);
+		const run = await withChild(bin, "60");
+		expect(run.usage).toMatchObject({ turns: 0, cacheRead: 29302, input: 4, output: 2, cost: 0.5 });
 	}, 30000);
 
 	test("a child that finishes quickly is untouched and leaks no timer", async () => {

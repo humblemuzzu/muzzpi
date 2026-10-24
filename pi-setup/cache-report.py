@@ -2,7 +2,7 @@
 """How pi's Claude sessions used the prompt cache: what was rebuilt after the cache
 expired, what the gap was, the 1h share of writes, cache warms and compactions.
 
-    python3 pi-setup/cache-report.py                 # the last 7 days
+    python3 pi-setup/cache-report.py                 # the last 7 days, main sessions and sub-agents
     python3 pi-setup/cache-report.py --since 2026-10-20
 """
 import argparse
@@ -26,9 +26,10 @@ def parse_time(value):
 def read_session(path, since):
     turns, warms, compactions = [], [], []
     previous = None
+    agent_result = False
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
-            if '"cacheWrite"' not in line and '"compaction"' not in line:
+            if '"cacheWrite"' not in line and '"compaction"' not in line and '"agent-result"' not in line:
                 continue
             try:
                 entry = json.loads(line)
@@ -40,8 +41,14 @@ def read_session(path, since):
             if entry.get("type") == "compaction":
                 compactions.append(entry.get("tokensBefore") or 0)
                 continue
+            if entry.get("type") == "custom_message" and entry.get("customType") == "agent-result":
+                agent_result = True
+                continue
             if entry.get("type") == "usage" and entry.get("kind") == "cache_warm":
                 warms.append(entry.get("usage") or {})
+                continue
+            if entry.get("type") == "custom" and entry.get("customType") == "cache-ping":
+                warms.append((entry.get("data") or {}).get("usage") or {})
                 continue
             message = entry.get("message") or {}
             usage = message.get("usage") or {}
@@ -55,12 +62,13 @@ def read_session(path, since):
                 "write": usage.get("cacheWrite", 0),
                 "write1h": usage.get("cacheWrite1h", 0) or 0,
                 "gap": None if previous is None else at - previous["at"],
-                "waited_on": None if previous is None else ("+".join(sorted(set(previous["tools"]))) if previous["stop"] == "toolUse" else "you"),
+                "waited_on": None if previous is None else ("+".join(sorted(set(previous["tools"]))) if previous["stop"] == "toolUse" else "a background agent" if agent_result else "you"),
                 "stop": message.get("stopReason"),
                 "tools": tools,
             }
             turns.append(turn)
             previous = turn
+            agent_result = False
     return turns, warms, compactions
 
 
@@ -75,7 +83,7 @@ def band(gap):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--since", help="ISO date, default 7 days ago")
-    parser.add_argument("--sessions", default=os.path.expanduser("~/.pi/agent/sessions"))
+    parser.add_argument("--sessions", nargs="+", default=[os.path.expanduser("~/.pi/agent/sessions"), os.path.expanduser("~/.pi/agent/sessions-sub")])
     args = parser.parse_args()
     if args.since:
         since = datetime.datetime.fromisoformat(args.since).replace(tzinfo=datetime.timezone.utc).timestamp()
@@ -83,7 +91,7 @@ def main():
         since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).timestamp()
 
     turns, warms, compactions, sessions = [], [], [], 0
-    for path in glob.glob(os.path.join(args.sessions, "**", "*.jsonl"), recursive=True):
+    for path in (p for root in args.sessions for p in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)):
         if os.path.getmtime(path) < since:
             continue
         t, w, c = read_session(path, since)
@@ -124,7 +132,7 @@ def main():
     breaks = [t for t in turns if t["gap"] is not None and t["gap"] < FIVE_MINUTES and t["prompt"] > 20000 and t["write"] > 0.5 * t["prompt"]]
     print(f"\nrebuilds with a gap under 5 min (the prefix changed, not the TTL): {len(breaks)} turns, {sum(t['write'] for t in breaks):,} tokens")
 
-    print(f"\ncache warms: {len(warms)}, {sum(u.get('cacheRead', 0) for u in warms):,} tokens read, {sum(u.get('cacheWrite', 0) for u in warms):,} written")
+    print(f"\nkeep-alive reads: {len(warms)}, {sum(u.get('cacheRead', 0) for u in warms):,} tokens read, {sum(u.get('cacheWrite', 0) for u in warms):,} written")
     print(f"compactions: {len(compactions)}" + (f", tokens before: {', '.join(f'{c:,}' for c in sorted(compactions))}" if compactions else ""))
 
 

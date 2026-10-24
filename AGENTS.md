@@ -50,7 +50,7 @@ pi CLI (v1.4.0) — @earendil-works/pi-coding-agent
 ```
 
 Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
-`cacheWarming: "streaming"`, `tuiMode: "fullscreen"`,
+`cacheWarming: "off"` (`prompt-cache` owns warming), `tuiMode: "fullscreen"`,
 `quietStartup: "header"` (`"regular"` restores normal scrollback).
 
 `/model` shows only `settings.json` `enabledModels`; the rest of the catalog
@@ -68,15 +68,15 @@ of the main session's plan requests `ttl: "1h"` (+ beta `extended-cache-ttl-2025
 sub-agents keep pi's 5m; a response served from extra usage drops it to 5m. Knobs:
 `PI_PROMPT_CACHE_TTL` / `PI_SUBAGENT_PROMPT_CACHE_TTL` (`5m`|`1h`), `PI_FORCE_PROMPT_CACHING_5M=1`.
 **Never set `PI_CACHE_RETENTION=long`**: it is process-wide and sends DeepSeek, River and OpenRouter
-`prompt_cache_retention: "24h"`. pi's warmer reads its TTL only from `models.json`
-`promptCache.short` (3600 for the Claude models) and refreshes at 90%; only a restart applies a
-changed value (`/reload` keeps the session's model object), and `anthropic-sub` warns when it is
-under 1h; `anthropic-sub` vetoes warming wherever a request wrote 5m. Claude compacts above 850k
-(`compaction.modelOverrides`). `cache-compaction` replays the last main-session request with a
-summary instruction appended, so compaction reads the cache; any doubt (no capture, other session or
-model, overflow, 90% of the TTL gone, a summarized message not in it) runs pi's own. It loads after
-`anthropic-sub`, so it replays that payload byte for byte. `cache-report.py` shows what was rebuilt
-after expiry; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter next to each request's tokens.
+`prompt_cache_retention: "24h"`. `prompt-cache` captures each conversation request after
+`anthropic-sub` and replays it byte for byte: while a turn runs or a background agent is live it
+re-reads the entry (`max_tokens: 1`) at 90% of its TTL (the payload's label or the reply's
+`cacheWrite1h` receipt, the shorter), never past 95%, never for an idle session, until the reads
+cost one rebuild. Reads are `cache-ping` entries: `/stats` and a child's run usage count them, the
+child stall watchdog does not. **Keep pi's `cacheWarming` off**: it would double the reads. Compaction
+(parent only) replays the capture plus a summary instruction; any doubt runs pi's own. Claude
+compacts above 850k (`compaction.modelOverrides`). `cache-report.py` shows what was rebuilt after
+expiry and what the gap waited on; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter per request.
 
 ### System prompt assembly
 
@@ -221,8 +221,8 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | Extension | Purpose |
 |---|---|
 | `system-prompt.ts` | parent template / sub-agent generated prompt |
-| `anthropic-sub.ts` | Claude-plan billing: scrubs the trigger phrases, the 1h/5m cache TTL and warming veto, warns on a refusal, `PI_ANTHROPIC_PAYLOAD_LOG` feeds `cache-diag.py`. Parent and children |
-| `cache-compaction.ts` | compaction read from the prompt cache (see Prompt cache). Parent only; `PI_CACHE_COMPACTION_MAX_AGE_SEC` overrides its age limit |
+| `anthropic-sub.ts` | Claude-plan billing: scrubs the trigger phrases, the 1h/5m cache TTL, warns on a refusal, `PI_ANTHROPIC_PAYLOAD_LOG` feeds `cache-diag.py`. Parent and children |
+| `prompt-cache.ts` | the cache keep-alive and compaction read from the cache (see Prompt cache). Keep-alive in parent and children, compaction parent only; `PI_CACHE_COMPACTION_MAX_AGE_SEC` overrides compaction's age limit |
 | `mentions.ts` | @mentions + agent directives |
 | `session-name.ts` | auto session naming (haiku, deliberately; a direct model call, not a sub-agent) |
 | `stats/` | `/stats`, Ctrl+Shift+S — analytics over pi, Claude Code, Codex and OpenCode sessions + git. Per-harness ledgers in `<agent dir>/cache/stats` keep sessions whose source is gone (Claude prunes after 30 days): never delete them casually. Bump `ledger.ts` `VERSION` when a parser's output changes. OpenCode is read via the `sqlite3` CLI, read-only. Nothing may reach the model: no tools, no `sendMessage`. The widget reads pi's ledger only, never a cold parse |
@@ -367,7 +367,7 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
   fork bomb) and no `oracle`/`finder`/`librarian` (it already has their tools).
 - **Don't use `--no-tools`** for sub-agents: it empties the registry and
   nothing can be re-activated.
-- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub) via
+- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub, prompt-cache) via
   `--no-extensions -e`, plus `-e builtin:codemode` when their tools include `codemode` (a script
   reaches only the child's tools; `--no-extensions` drops pi's built-ins too). An extension a child
   needs goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1` restores the full set; `verify-patches.sh`

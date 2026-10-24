@@ -417,6 +417,12 @@ export function addTurn(rec: SessionRecord, t: Turn, counted = true, extra = fal
 	touch(rec, t.ms);
 }
 
+/** A cache keep-alive read: spend, not a turn. It renews the cache, so a rebuild after it is not idle. */
+export function addCacheRead(rec: SessionRecord, t: Turn, counted = true): void {
+	if (rec.state.prevTurn) rec.state.prevTurn.ms = t.ms;
+	addTurn(rec, t, counted, true);
+}
+
 /** Shell commands and edited files; returns how many of the calls started a sub-agent. */
 function countCalls(rec: SessionRecord, day: string, provider: string, calls: ToolCall[]): number {
 	let agents = 0;

@@ -13,6 +13,7 @@ import { READ_ONLY_BASH_ENV } from "./read-only-bash";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./watchdog";
 import { loadAgentModels, modelViolation, type AgentModels } from "./agent-models";
 import { repairInterrupted, subAgentSessionFile } from "./session-repair";
+import { CACHE_PING_ENTRY } from "./prompt-cache";
 
 // --- stall watchdog ---
 
@@ -64,6 +65,19 @@ export interface UsageStats {
 	cost: number;
 	contextTokens: number;
 	turns: number;
+}
+
+function addSpend(stats: UsageStats, usage: any): void {
+	stats.input += usage.input || 0;
+	stats.output += usage.output || 0;
+	stats.cacheRead += usage.cacheRead || 0;
+	stats.cacheWrite += usage.cacheWrite || 0;
+	stats.cost += usage.cost?.total || 0;
+}
+
+/** A keep-alive read is not progress: a child hung mid-turn keeps reading its cache and must still stall out. */
+function isKeepAliveLine(line: string): boolean {
+	return line.startsWith('{"type":"entry_appended"') && line.includes(`"customType":"${CACHE_PING_ENTRY}"`);
 }
 
 /**
@@ -309,6 +323,7 @@ export const CHILD_EXTENSIONS: readonly string[] = [
 	path.join(PI_AGENT_DIR, "extensions", "system-prompt.js"),
 	path.join(PI_AGENT_DIR, "extensions", "guardrails"),
 	path.join(PI_AGENT_DIR, "extensions", "anthropic-sub.js"),
+	path.join(PI_AGENT_DIR, "extensions", "prompt-cache.js"),
 ];
 
 /** set to 1 to give children every extension again */
@@ -499,6 +514,12 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 			case "tool_execution_end":
 				config.onEvent?.(event);
 				return;
+			case "entry_appended":
+				if (event.entry?.type === "custom" && event.entry.customType === CACHE_PING_ENTRY && event.entry.data?.usage) {
+					addSpend(result.usage, event.entry.data.usage);
+					config.onUpdate?.({ ...result });
+				}
+				return;
 			case "message_start":
 			case "message_end":
 				break;
@@ -519,11 +540,7 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 			result.usage.turns++;
 			const usage = msg.usage;
 			if (usage) {
-				result.usage.input += usage.input || 0;
-				result.usage.output += usage.output || 0;
-				result.usage.cacheRead += usage.cacheRead || 0;
-				result.usage.cacheWrite += usage.cacheWrite || 0;
-				result.usage.cost += usage.cost?.total || 0;
+				addSpend(result.usage, usage);
 				result.usage.contextTokens = usage.totalTokens || 0;
 			}
 			if (msg.model) result.model = msg.provider ? `${msg.provider}/${msg.model}` : msg.model;
@@ -553,10 +570,10 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 	let buffer = "";
 	proc.stdout.on("data", (data: Buffer) => {
 		if (released) return;
-		lastActivity = Date.now();
 		buffer += data.toString();
 		const lines = buffer.split("\n");
 		buffer = lines.pop() || "";
+		if (buffer || lines.some((line) => line.trim() && !isKeepAliveLine(line))) lastActivity = Date.now();
 		for (const line of lines) if (line.trim()) processLine(line);
 	});
 	proc.stderr.on("data", (data: Buffer) => {
