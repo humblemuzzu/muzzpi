@@ -53,7 +53,9 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 		},
 	};
 	let dock: any;
+	let aborts = 0;
 	const ctx: any = {
+		abort: () => { aborts++; },
 		sessionManager: { getBranch: () => [] },
 		mode: "tui",
 		hasUI: true,
@@ -98,7 +100,7 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 		return false;
 	};
 	const broadcast = (runs: RunSnapshot[]) => bus.emit(AGENT_RUNS_CHANNEL, runs);
-	return { fire, bus, events, state, tui, editor, commands, shortcuts, start, stop, key, broadcast, ctx, dock: () => dock, focused: () => focused };
+	return { aborts: () => aborts, fire, bus, events, state, tui, editor, commands, shortcuts, start, stop, key, broadcast, ctx, dock: () => dock, focused: () => focused };
 }
 
 const live: Array<() => void> = [];
@@ -365,4 +367,23 @@ test("focus gives question dialogs the screen and stays closed while blocked", a
 	await h.shortcuts.get("ctrl+shift+f")!(h.ctx);
 	expect(h.state.customCalls).toHaveLength(2);
 	expect(h.state.customCalls.at(-1)).not.toBe(overlay);
+});
+
+
+test("Ctrl+C aborts and closes focus during work and after completion", async () => {
+	const h = started();
+	h.fire("message_start", { message: { role: "user", content: "Work on this" } });
+	h.fire("agent_start", {});
+	const activeView = h.state.customCalls.at(-1).component;
+	activeView.handleInput("\u0003");
+	expect(h.aborts()).toBe(1);
+	await h.shortcuts.get("ctrl+shift+f")!(h.ctx);
+	expect(h.state.customCalls).toHaveLength(2);
+	await Promise.resolve();
+	await Promise.resolve();
+	h.fire("agent_end", {});
+	h.state.customCalls.at(-1).component.handleInput("\u0003");
+	expect(h.aborts()).toBe(2);
+	await h.shortcuts.get("ctrl+shift+f")!(h.ctx);
+	expect(h.state.customCalls).toHaveLength(3);
 });

@@ -33,7 +33,7 @@ export function installFocusView(pi: ExtensionAPI): void {
 				invalidate() { cache = undefined; },
 				handleInput(data: string) {
 					if (matchesKey(data, "escape") || matchesKey(data, "enter")) return close?.();
-					if (matchesKey(data, "ctrl+c")) { ctx.abort(); return; }
+					if (matchesKey(data, "ctrl+c")) { close?.(); ctx.abort(); return; }
 					if (matchesKey(data, "tab") || matchesKey(data, "right")) tab = (tab + 1) % 3;
 					else if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) tab = (tab + 2) % 3;
 					else if (matchesKey(data, "up")) offsets[tab] = Math.max(0, offsets[tab] - 1);
