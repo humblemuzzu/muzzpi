@@ -43,3 +43,10 @@ export function repairInterrupted(file: string): number {
 	}
 	return open.length;
 }
+
+export function savedSessionModel(dir: string, id: string): string | undefined {
+	const file = subAgentSessionFile(dir, id);
+	if (!file) return undefined;
+	const model = SessionManager.open(file).buildSessionContext().model;
+	return model ? `${model.provider}/${model.modelId}` : undefined;
+}

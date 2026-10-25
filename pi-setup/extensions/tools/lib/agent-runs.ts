@@ -216,7 +216,7 @@ export class AgentRuns {
 			const refusal = unresumableReason(continueId, ctx.cwd, spec.agent, this.sessionDir);
 			if (refusal) return toolError(refusal);
 		}
-		const route = resolveRoute(spec.models, spec.agent, spec.params, ctx.modelRegistry, !!continueId);
+		const route = resolveRoute(spec.models, spec.agent, spec.params, ctx.modelRegistry, !!continueId, ctx.model);
 		if ("error" in route) return toolError(route.error);
 
 		const nested = toolCallId.includes("/");

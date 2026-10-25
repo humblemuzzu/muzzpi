@@ -314,7 +314,7 @@ export function createReadSessionTool(config: ReadSessionConfig = {}): ToolDefin
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const route = resolveRoute(models, "read_session", params, ctx.modelRegistry);
+			const route = resolveRoute(models, "read_session", params, ctx.modelRegistry, false, ctx.model);
 			if ("error" in route) return toolError(route.error);
 
 			const sessionFile = findSessionFile(params.session_id);

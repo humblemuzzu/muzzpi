@@ -177,7 +177,7 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 
 			let route: ModelRoute = {};
 			if (params.prompt || params.objective) {
-				const resolved = resolveRoute(models, "read_web_page", params, ctx.modelRegistry);
+				const resolved = resolveRoute(models, "read_web_page", params, ctx.modelRegistry, false, ctx.model);
 				if ("error" in resolved) return toolError(resolved.error);
 				route = resolved;
 			}

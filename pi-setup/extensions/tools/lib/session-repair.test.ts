@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { subAgentSessionFile, INTERRUPTED_RESULT, repairInterrupted } from "./session-repair";
+import { savedSessionModel, subAgentSessionFile, INTERRUPTED_RESULT, repairInterrupted } from "./session-repair";
 
 let dir: string;
 
@@ -70,4 +70,15 @@ describe("subAgentSessionFile", () => {
 		expect(subAgentSessionFile(dir, "delegate-find")).toBeUndefined();
 		expect(subAgentSessionFile(join(dir, "missing"), "x")).toBeUndefined();
 	});
+});
+
+
+test("saved model follows the session branch including later model changes", () => {
+	const manager = SessionManager.create(dir, dir, { id: "chad-model" });
+	manager.appendModelChange("openai", "gpt-6-luna");
+	manager.appendMessage(user("work") as any);
+	expect(savedSessionModel(dir, "chad-model")).toBe("openai/gpt-6-luna");
+	manager.appendModelChange("anthropic", "claude-sonnet-5-5");
+	expect(savedSessionModel(dir, "chad-model")).toBe("anthropic/claude-sonnet-5-5");
+	expect(savedSessionModel(dir, "missing")).toBeUndefined();
 });

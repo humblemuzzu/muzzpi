@@ -289,3 +289,33 @@ describe("modelViolation: the child must run on exactly what was asked for", () 
 		}
 	});
 });
+
+
+describe("dynamic main model", () => {
+ const config = parseAgentModels({
+  models: { main: { id: "$main" }, flash: { id: "deepseek/deepseek-flash" } },
+  agents: { delegate: { model: "main", thinking: "high" } },
+ });
+ test("parses and audits the variable without looking it up in the catalog", () => {
+  expect(config.problems).toEqual([]);
+  const cat = catalog();
+  expect(auditAgentModels(config, cat)).toEqual([]);
+  expect(cat.calls).toEqual(["deepseek|deepseek-flash"]);
+ });
+ test("follows parent model switches, including models outside the fixed list", () => {
+  for (const id of ["gpt-5.3-codex-spark", "another-model"]) {
+   const route = resolveRoute(config, "delegate", {}, catalog(), false, { provider: "openai", id });
+   expect(route).toEqual({ model: `openai/${id}`, thinking: "high" });
+   expect(modelViolation(`openai/${id}`, "model" in route ? route.model : undefined, config)).toBeUndefined();
+   expect(modelViolation("wrong/model", "model" in route ? route.model : undefined, config)).toContain("stopped");
+  }
+ });
+ test("explicit overrides win and resumes retain their own model", () => {
+  expect(resolveRoute(config, "delegate", { model: "flash" }, catalog(), false, { provider: "openai", id: "parent" })).toEqual({ model: "deepseek/deepseek-flash", thinking: "high" });
+  expect(resolveRoute(config, "delegate", {}, catalog(), true, { provider: "openai", id: "parent" })).toEqual({ thinking: undefined });
+  expect(resolveRoute(config, "delegate", { model: "main" }, catalog(), true, { provider: "openai", id: "parent" })).toEqual({ model: "openai/parent", thinking: undefined });
+ });
+ test("fails clearly when the parent model is unavailable", () => {
+  expect(resolveRoute(config, "delegate", {}, catalog())).toHaveProperty("error");
+ });
+});

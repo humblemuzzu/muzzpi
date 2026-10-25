@@ -496,6 +496,29 @@ describe("the RPC conversation with the child", () => {
 		expect(result.messages.at(-1)?.role).toBe("assistant");
 	}, 30000);
 
+
+	test("a resumed dynamic model is validated against its saved model", async () => {
+		const saved = session("rpc-dynamic-resume");
+		mkdirSync(saved.dir, { recursive: true });
+		const manager = SessionManager.create(dir, saved.dir, { id: saved.id });
+		manager.appendModelChange("fake", "fake-1");
+		manager.appendMessage({ role: "user", content: "previous task", timestamp: Date.now() });
+		const result = await withFake(() => piSpawn({
+			cwd: dir, task: "continue", session: saved,
+			agentModels: { models: { main: { id: "$main" } }, agents: {}, problems: [] },
+		}));
+		expect(result.exitCode).toBe(0);
+		expect(result.model).toBe(model);
+		expect(result.stderr).not.toContain("sub-agent stopped");
+		manager.appendModelChange("fake", "different-model");
+		const mismatch = await withFake(() => piSpawn({
+			cwd: dir, task: "continue", session: saved,
+			agentModels: { models: { main: { id: "$main" } }, agents: {}, problems: [] },
+		}));
+		expect(mismatch.exitCode).not.toBe(0);
+		expect(mismatch.errorMessage).toContain("fake/different-model was requested");
+	}, 30000);
+
 	test("a followUp is sent only after the task's run settles, and not after an error", async () => {
 		const ok = await withFake(() => piSpawn({ cwd: dir, model, task: "review", followUp: "write the report", session: session("rpc-follow") }));
 		expect(commands("rpc-follow").map((c) => c.message)).toEqual(["Task: review", "write the report"]);

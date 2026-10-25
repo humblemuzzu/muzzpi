@@ -54,6 +54,7 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 	};
 	let dock: any;
 	const ctx: any = {
+		sessionManager: { getBranch: () => [] },
 		mode: "tui",
 		hasUI: true,
 		isIdle: () => true,
@@ -97,7 +98,7 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 		return false;
 	};
 	const broadcast = (runs: RunSnapshot[]) => bus.emit(AGENT_RUNS_CHANNEL, runs);
-	return { bus, events, state, tui, editor, commands, shortcuts, start, stop, key, broadcast, ctx, dock: () => dock, focused: () => focused };
+	return { fire, bus, events, state, tui, editor, commands, shortcuts, start, stop, key, broadcast, ctx, dock: () => dock, focused: () => focused };
 }
 
 const live: Array<() => void> = [];
@@ -324,4 +325,44 @@ describe("/agents", () => {
 		expect(h.state.customCalls).toHaveLength(1);
 		h.state.customCalls[0].resolve({ closed: true });
 	});
+});
+
+
+test("focus pins the question, separates process and answer, and fits narrow terminals", async () => {
+	const h = started();
+	h.fire("message_start", { message: { role: "user", content: "Why does this happen?" } });
+	h.fire("agent_start", {});
+	const view = h.state.customCalls.at(-1).component;
+	expect(view.render(80).map(strip).join("\n")).toContain("Why does this happen?");
+	h.fire("message_start", { message: { role: "assistant", content: [{ type: "text", text: "Investigating" }] } });
+	h.fire("message_end", { message: { role: "assistant", content: [{ type: "text", text: "Investigating" }, { type: "toolCall", id: "t", name: "read", arguments: {} }] } });
+	expect(view.render(80).map(strip).join("\n")).not.toContain("Investigating");
+	view.handleInput("\t");
+	expect(view.render(80).map(strip).join("\n")).toContain("Investigating");
+	h.fire("message_end", { message: { role: "assistant", content: [{ type: "text", text: "Here is the answer" }] } });
+	h.fire("agent_end", {});
+	view.handleInput("\u001b[D");
+	expect(view.render(80).map(strip).join("\n")).toContain("Here is the answer");
+	expect(view.render(80)).toBe(view.render(80));
+	for (const width of [1, 12, 40, 80]) {
+		expect(view.render(width).length).toBeLessThanOrEqual(h.tui.terminal.rows);
+		for (const line of view.render(width)) expect(strip(line).length).toBeLessThanOrEqual(width);
+	}
+	view.handleInput(ESC);
+	await Promise.resolve();
+});
+
+test("focus gives question dialogs the screen and stays closed while blocked", async () => {
+	const h = started();
+	h.fire("message_start", { message: { role: "user", content: "Do the task" } });
+	const overlay = h.state.customCalls.at(-1);
+	h.bus.emit("herdr:blocked", { active: true, label: "Choose an option" });
+	await Promise.resolve();
+	await Promise.resolve();
+	await h.shortcuts.get("ctrl+shift+f")!(h.ctx);
+	expect(h.state.customCalls).toHaveLength(1);
+	h.bus.emit("herdr:blocked", { active: false });
+	await h.shortcuts.get("ctrl+shift+f")!(h.ctx);
+	expect(h.state.customCalls).toHaveLength(2);
+	expect(h.state.customCalls.at(-1)).not.toBe(overlay);
 });

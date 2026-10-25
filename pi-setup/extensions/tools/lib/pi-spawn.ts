@@ -12,7 +12,7 @@ import { HOLDER_ENV } from "./file-lock";
 import { READ_ONLY_BASH_ENV } from "./read-only-bash";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./watchdog";
 import { loadAgentModels, modelViolation, type AgentModels } from "./agent-models";
-import { repairInterrupted, subAgentSessionFile } from "./session-repair";
+import { repairInterrupted, savedSessionModel, subAgentSessionFile } from "./session-repair";
 import { CACHE_PING_ENTRY } from "./prompt-cache";
 
 // --- stall watchdog ---
@@ -366,6 +366,7 @@ function stallMessage(persisted: boolean): string {
  */
 export function startChild(config: PiSpawnConfig): ChildRun {
 	const routing = resolveSessionArgs(config.session);
+	const expectedModel = config.model ?? (config.session ? savedSessionModel(config.session.dir, config.session.id) : undefined);
 	const requestedTools = resolveAliases([...(config.builtinTools ?? []), ...(config.extensionTools ?? [])]);
 	const args = ["--mode", "rpc", ...routing.args, ...childExtensionArgs(requestedTools)];
 	if (config.model) args.push("--model", config.model);
@@ -528,7 +529,7 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		}
 		const msg = event.message;
 		if (msg?.role === "assistant" && !wrongModel && msg.provider && msg.model) {
-			const refusal = modelViolation(`${msg.provider}/${msg.model}`, config.model, agentModels);
+			const refusal = modelViolation(`${msg.provider}/${msg.model}`, expectedModel, agentModels);
 			if (refusal) {
 				wrongModel = refusal;
 				terminate("SIGKILL");

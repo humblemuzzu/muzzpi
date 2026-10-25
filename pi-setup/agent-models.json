@@ -1,5 +1,6 @@
 {
   "models": {
+    "main": { "id": "$main", "about": "follows the current main-session model" },
     "opus": { "id": "anthropic/claude-opus-5-5", "about": "Claude Opus 5.5 (Claude Max)" },
     "sonnet": { "id": "anthropic/claude-sonnet-5-5", "about": "Claude Sonnet 5.5 (Claude Max)" },
     "haiku": { "id": "anthropic/claude-haiku-5-5", "about": "Claude Haiku 5.5 (Claude Max)" },
@@ -10,11 +11,11 @@
   },
   "agents": {
     "chad": { "model": "deepseek-flash", "thinking": "high" },
-    "delegate": { "model": "sonnet", "thinking": "high" },
-    "oracle": { "model": "sonnet", "thinking": "high" },
+    "delegate": { "model": "main", "thinking": "high" },
+    "oracle": { "model": "main", "thinking": "high" },
     "finder": { "model": "deepseek-flash", "thinking": "high" },
     "librarian": { "model": "deepseek-flash", "thinking": "high" },
-    "code_review": { "model": "sonnet", "thinking": "high" },
+    "code_review": { "model": "main", "thinking": "high" },
     "read_session": { "model": "deepseek-flash", "thinking": "high" },
     "read_web_page": { "model": "deepseek-flash", "thinking": "high" }
   }

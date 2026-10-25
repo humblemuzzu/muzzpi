@@ -244,7 +244,7 @@ const listed = new Set(execFileSync("pi", ["--list-models"], { encoding: "utf-8"
   .split("\n").map((l) => l.trim().split(/\s+/)).filter((c) => c.length > 1).map(([p, m]) => `${p}/${m}`));
 const provider = (id) => id.split("/")[0];
 const providers = new Set([...listed].map(provider));
-const missing = Object.entries(config.models).filter(([, m]) => !listed.has(m.id));
+const missing = Object.entries(config.models).filter(([, m]) => m.id !== "$main" && !listed.has(m.id));
 const unknown = missing.filter(([, m]) => providers.has(provider(m.id))).map(([n, m]) => `${n} → ${m.id}: pi has no such model`);
 console.log(`problems:${[...config.problems, ...unknown].join("; ")}`);
 console.log(`login:${[...new Set(missing.map(([, m]) => provider(m.id)).filter((p) => !providers.has(p)))].join(", ")}`);

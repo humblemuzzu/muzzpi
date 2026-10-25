@@ -242,6 +242,7 @@ mentions a token stays readable.
 | `/theme` | `Ctrl+Shift+K` | live theme and Ghostty preview; `/theme <name>` switches straight away |
 | `/hud` | `Ctrl+Shift+I` | more detail under the prompt |
 | `/agents` | `Ctrl+Shift+A` | background agents: list, full-screen view of each, steer / stop / continue |
+| `/focus` | `Ctrl+Shift+F` | pinned question with Answer, Process and Question tabs; Tab switches, Esc returns to chat, `/focus off` disables automatic opening |
 | `/ysk` | `Ctrl+Shift+Y` | a side agent that flags what you missed; off until `/ysk on` |
 | `/idea` | | park an idea for this project (`pi:` in front files it under the harness); `/idea` alone lists them ([more](herdr/README.md#idea-park-a-thought-keep-working)) |
 | `/goal` | | a long-running goal, audited before it is marked done; `/goal strict <task>` has the agent write it |

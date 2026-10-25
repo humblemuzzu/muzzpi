@@ -115,7 +115,7 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 | **our bundle** | `dist/muzzpi-bundle/`, `pi` → its `cli.js` | what pi runs: the patched files, bundled; stale after any change to them |
 | extension bundles | `~/.pi/agent/extensions/` | `.js` only; a stray `.ts` shadows its bundle |
 | MCP config | `~/.pi/agent/mcp.json` | every server has a `description`; no `-builtin:mcp` in `settings.json` |
-| sub-agent models | `~/.pi/agent/agent-models.json` | valid, every id listed by `pi --list-models` |
+| sub-agent models | `~/.pi/agent/agent-models.json` | valid, every fixed id listed by `pi --list-models` |
 
 `install.sh` applies every patch, rebuilds our bundle and runs
 `verify-patches.sh` last; each FAIL there prints its own fix command. **Never
@@ -361,7 +361,7 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
 - **The six agent tools render with `renderShell: "self"`** (`lib/agent-inline.ts`): a background
   launch is one line, and its call header hides itself through the row's shared `state`.
   `install.sh` drops `RETIRED_EXTENSIONS` instead of carrying them over.
-- **Models come from `pi-setup/agent-models.json` only** — see Sub-agent models.
+- **Models come from `pi-setup/agent-models.json` only**; the `$main` id resolves to the current parent model at launch, while resumes keep their own model.
 - **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only agent→agent edge is
   `delegate → finder`, depth ≤ 2. chad has no `chad`/`delegate` (a swarm that spawns swarms is a
   fork bomb) and no `oracle`/`finder`/`librarian` (it already has their tools).
@@ -494,7 +494,7 @@ If it returns: `apply-pi-tui-width-patch.mjs --check` first, then
 ## Sub-agent models
 
 **`pi-setup/agent-models.json` is the only place a sub-agent model is named.**
-`models` maps a short name to a `provider/model` id; `agents` gives each
+`models` maps a short name to a `provider/model` id or `$main` (current parent model); `agents` gives each
 spawning tool a default `model` + `thinking`. Changing a default is a one-line
 edit there, deployed by `install.sh`, read at session start.
 
@@ -510,7 +510,7 @@ edit there, deployed by `install.sh`, read at session start.
 - **pi's `--model` resolver can fall back to another provider's look-alike**, so `pi-spawn.ts`
   SIGKILLs a child whose first assistant message names another provider/model than requested, or,
   with none requested, one not in `agent-models.json` (`modelViolation`). Keep every Claude id
-  `anthropic/`. Ids must be provider-qualified; a `continueId` resume keeps the child's model.
+  `anthropic/`. Fixed ids must be provider-qualified; a `continueId` resume keeps the child's model.
 
 ## Local models
 

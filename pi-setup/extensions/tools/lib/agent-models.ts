@@ -96,8 +96,8 @@ export function parseAgentModels(raw: unknown): AgentModels {
 		const id = isRecord(entry) ? entry.id : undefined;
 		if (!MODEL_NAME.test(name)) {
 			result.problems.push(`models."${rawName}": use lowercase letters, digits, '.', '-' or '_'`);
-		} else if (typeof id !== "string" || !QUALIFIED_ID.test(id.trim())) {
-			result.problems.push(`models.${name}.id must be "provider/model", got ${JSON.stringify(id)}`);
+		} else if (typeof id !== "string" || (id.trim() !== "$main" && !QUALIFIED_ID.test(id.trim()))) {
+			result.problems.push(`models.${name}.id must be "provider/model" or "$main", got ${JSON.stringify(id)}`);
 		} else {
 			const about = isRecord(entry) && typeof entry.about === "string" ? entry.about.trim() : "";
 			result.models[name] = about ? { id: id.trim(), about } : { id: id.trim() };
@@ -173,6 +173,7 @@ function present(value: unknown): boolean {
 /** a catalog or credential problem with one model, or undefined when it can run. */
 export function checkModel(config: AgentModels, name: string, catalog: ModelCatalog): string | undefined {
 	const { id } = config.models[name];
+	if (id === "$main") return undefined;
 	const [provider, modelId] = splitId(id);
 	const model = catalog.find(provider, modelId);
 	if (!model) return `\`${name}\` points at ${id}, which pi's model catalog does not have; fix it in ${AGENT_MODELS_FILE}`;
@@ -195,6 +196,7 @@ export function resolveRoute(
 	params: { model?: unknown; thinking?: unknown },
 	catalog?: ModelCatalog,
 	resuming = false,
+	mainModel?: { provider: string; id: string },
 ): Route {
 	const preset = resuming ? {} : (config.agents[agent] ?? {});
 	let name = preset.model;
@@ -224,6 +226,10 @@ export function resolveRoute(
 	}
 
 	if (!name) return { thinking };
+	if (config.models[name].id === "$main") {
+		if (!mainModel) return { error: "The main model is unavailable; select a model in pi before starting this helper." };
+		return { model: `${mainModel.provider}/${mainModel.id}`, thinking };
+	}
 	if (catalog) {
 		const problem = checkModel(config, name, catalog);
 		// a default the user cannot run (no DeepSeek key, say) must not take the agent down; the footer names the model that ran
@@ -303,7 +309,7 @@ export function describeAgentModels(config: AgentModels): string {
 		"",
 		...names.map((name) => {
 			const { id, about } = config.models[name];
-			return `- \`${name}\` — ${id}${about ? `, ${about}` : ""}`;
+			return `- \`${name}\` — ${id === "$main" ? "current main-session model" : id}${about ? `, ${about}` : ""}`;
 		}),
 		"",
 		"If the user names a model that is not in this list, do not substitute the nearest one: say it is not configured and name the closest choices.",

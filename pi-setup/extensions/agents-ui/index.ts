@@ -14,6 +14,7 @@ import { isKeyRelease, matchesKey, type Component, type TUI } from "@mariozechne
 import { AGENT_CONTROL_CHANNEL, AGENT_RUNS_CHANNEL, type ControlRequest, type RunSnapshot } from "../tools/lib/agent-channel";
 import { withoutTyped } from "../tools/lib/command-args";
 import { contributeHelp } from "../tools/lib/help-channel";
+import { installFocusView } from "./focus";
 import { AgentView, type ViewActions } from "./agent-view";
 import { Dock, type DockHost } from "./dock";
 import { ListView, type ListResult } from "./list-view";
@@ -32,6 +33,7 @@ interface Editorish extends Component {
 }
 
 export default function agentsUi(pi: ExtensionAPI): void {
+	installFocusView(pi);
 	const store = new RunStore();
 	const clock = systemClock();
 	const timers = new Set<ReturnType<typeof setTimeout>>();
