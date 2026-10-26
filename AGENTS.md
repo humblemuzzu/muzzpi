@@ -74,8 +74,8 @@ re-reads the entry (`max_tokens: 1`) at 90% of its TTL (the payload's label or t
 `cacheWrite1h` receipt, the shorter), never past 95%, never for an idle session, until the reads
 cost one rebuild. Reads are `cache-ping` entries: `/stats` and a child's run usage count them, the
 child stall watchdog does not. **Keep pi's `cacheWarming` off**: it would double the reads. Compaction
-(parent only) replays the capture plus a summary instruction; any doubt runs pi's own. Claude
-compacts above 850k (`compaction.modelOverrides`). `cache-report.py` shows what was rebuilt after
+(parent only) replays the capture plus a summary instruction; any doubt runs pi's own. Models
+compact above 970k (`compaction.modelOverrides`, reserve = window − 970k). `cache-report.py` shows what was rebuilt after
 expiry and what the gap waited on; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter per request.
 
 ### System prompt assembly

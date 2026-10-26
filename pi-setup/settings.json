@@ -27,9 +27,13 @@
   "compaction": {
     "enabled": true,
     "modelOverrides": {
-      "anthropic/claude-opus-5-5": { "reserveTokens": 150000 },
-      "anthropic/claude-sonnet-5-5": { "reserveTokens": 150000 },
-      "anthropic/claude-haiku-5-5": { "reserveTokens": 150000 }
+      "anthropic/claude-opus-5-5": { "reserveTokens": 30000 },
+      "anthropic/claude-sonnet-5-5": { "reserveTokens": 30000 },
+      "anthropic/claude-haiku-5-5": { "reserveTokens": 30000 },
+      "deepseek/deepseek-flash": { "reserveTokens": 30000 },
+      "deepseek/deepseek-v4-pro": { "reserveTokens": 30000 },
+      "river/deepseek-ai/DeepSeek-V4.1-Flash": { "reserveTokens": 78576 },
+      "openrouter/z-ai/glm-5.3-flash": { "reserveTokens": 78575 }
     }
   },
   "cacheWarming": "off",
