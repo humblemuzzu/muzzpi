@@ -5,7 +5,6 @@ import {
   resolveGitRoot,
   type CommitIndex,
 } from "./commit-index.js";
-import type { MentionableSession } from "./session-index.js";
 import {
   type MentionKind,
   type MentionToken,
@@ -14,15 +13,11 @@ import {
 
 const mentionKindDescriptions = new Map<MentionKind, string>([
   ["commit", "git commit"],
-  ["session", "previous pi session"],
-  ["handoff", "forked session with resumable context"],
 ]);
 
 export interface MentionSourceContext {
   cwd: string;
   commitIndex?: CommitIndex | null;
-  sessionsDir?: string;
-  sessions?: MentionableSession[] | null;
   gitEnabled?: boolean;
 }
 

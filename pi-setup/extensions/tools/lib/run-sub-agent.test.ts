@@ -3,7 +3,9 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { failureText } from "./agent-notice";
-import { runSubAgent } from "./run-sub-agent";
+import { zeroUsage } from "./pi-spawn";
+import { finishedResult, runSubAgent } from "./run-sub-agent";
+import { getDisplayItems, getFinalOutput, type SingleResult } from "./sub-agent-render";
 
 const WARNING = "Warning: No project session found with id 'chad-1234'; creating a new session with that id.";
 
@@ -37,6 +39,34 @@ function run(signal?: AbortSignal) {
 		spawn: { task: "noop", session: { id: "chad-1234", dir: join(dir, "sessions") } },
 	});
 }
+
+describe("the child conversation a parent keeps", () => {
+	const usage = { ...zeroUsage(), cost: 0.1 };
+	const conversation: any[] = [
+		{ role: "user", content: [{ type: "text", text: "find it" }, { type: "image", data: "AAAA", mimeType: "image/png" }] },
+		{ role: "assistant", content: [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "looking" }, { type: "toolCall", id: "c1", name: "write", arguments: { path: "/a.ts", content: "x\ny" } }], usage },
+		{ role: "toolResult", toolCallId: "c1", toolName: "write", content: [{ type: "text", text: "BIG OUTPUT" }], isError: false, durationMs: 12, details: { diff: "BIG DIFF" } },
+		{ role: "toolResult", toolCallId: "c2", toolName: "finder", content: [{ type: "text", text: "nested answer" }], isError: true, details: { agent: "finder", exitCode: 1, usage, model: "m", messages: [{ role: "toolResult", toolCallId: "n1", toolName: "grep", content: [{ type: "text", text: "NESTED OUTPUT" }], isError: false }] } },
+		{ role: "assistant", content: [{ type: "text", text: "the answer" }], usage },
+	];
+	const details = (continueId?: string): SingleResult => ({ agent: "chad", task: "t", exitCode: -1, messages: [], usage: zeroUsage(), ...(continueId ? { continueId } : {}) });
+	const spawned = { exitCode: 0, messages: conversation, stderr: "", usage } as any;
+
+	test("with its own session file, it keeps what rows and /stats read, and drops output, thinking and images", () => {
+		const kept = finishedResult(details("chad-1"), spawned).details;
+		const text = JSON.stringify(kept.messages);
+		for (const gone of ["BIG OUTPUT", "BIG DIFF", "hmm", "AAAA", "NESTED OUTPUT", "nested answer"]) expect(text).not.toContain(gone);
+		expect(getDisplayItems(kept.messages)).toEqual(getDisplayItems(conversation));
+		expect(getFinalOutput(kept.messages)).toBe("the answer");
+		expect(kept.messages[2]).toEqual({ role: "toolResult", toolCallId: "c1", toolName: "write", content: [], isError: false, durationMs: 12 });
+		expect(kept.messages[3].details).toMatchObject({ agent: "finder", exitCode: 1, model: "m", usage });
+		expect(kept.messages[3].details.messages[0]).toEqual({ role: "toolResult", toolCallId: "n1", toolName: "grep", content: [], isError: false });
+	});
+
+	test("without one (read_session, read_web_page), it is kept whole", () => {
+		expect(finishedResult(details(), spawned).details.messages).toBe(conversation);
+	});
+});
 
 describe("failureText", () => {
 	const base = { stopReason: undefined, errorMessage: undefined, stderr: "" };

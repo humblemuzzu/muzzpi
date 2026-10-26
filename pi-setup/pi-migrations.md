@@ -12,6 +12,21 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## 1.4.0, two more core patches: fast /resume
+
+`core/session-manager.js` and `modes/interactive/components/session-selector-search.js` joined
+`patches.sh`, both derived on stock 1.4.0 (checked byte-identical to the registry tarball first).
+- `session-manager.js`: `buildSessionInfo` reads bytes in 1 MiB chunks, counts a complete
+  tool-result line (prefix up to `"message":{"role":"toolResult"`, ending `}}`) without parsing it,
+  and caches each file's info by size+mtime. Proven equal to stock on 3,266 sessions **under Node**:
+  pi's activity time counts only user/assistant messages, and Bun's readline splits on U+2028.
+- `session-selector-search.js`: a session's search text is built and lowercased once (`WeakMap`),
+  matched by a copy of pi-tui's `fuzzyMatch` that takes lowercased text. Re-copy that function if
+  pi-tui's changes; 200,000 random queries agreed with the original.
+- `session-selector.js` (ours): pins are read once, not per keystroke, and real paths are memoised.
+
+On the next update, diff stock-old vs stock-new for these two as for the other four.
+
 ## 1.4.0 (2026-10-23) — from 1.3.0, no patch drift
 
 **Patch drift (stock 1.3.0 vs stock 1.4.0, registry tarballs):** none. All 4

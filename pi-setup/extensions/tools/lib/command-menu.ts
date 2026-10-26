@@ -6,7 +6,7 @@
  */
 
 import { decodeKittyPrintable, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import { normalizeForDisplay } from "./box-format";
+import { clean, oneLine } from "./choice-dialog";
 
 export interface MenuItem {
 	id: string;
@@ -54,14 +54,6 @@ export interface MenuContext {
 }
 
 const LABEL_COLUMN_MAX = 40;
-
-function clean(text: string): string {
-	return normalizeForDisplay(text.replace(/\t/g, "  ").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, ""));
-}
-
-function oneLine(text: string): string {
-	return clean(text.replace(/[\r\n\u2028\u2029\v\f]+/g, " ")).trim();
-}
 
 function pressedText(data: string): string | undefined {
 	const kitty = decodeKittyPrintable(data);

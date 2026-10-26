@@ -10,6 +10,7 @@ import {
 	applySpawnResult,
 	collectSubAgentImages,
 	getFinalOutput,
+	slimMessages,
 	subAgentResult,
 	type SingleResult,
 } from "./sub-agent-render";
@@ -40,9 +41,11 @@ export function sessionIdOf(ctx: SubAgentRun["ctx"]): string {
 	}
 }
 
+/** a child with a continueId has its own session file holding its whole conversation: the parent keeps it slimmed. */
 export function finishedResult(details: SingleResult, result: PiSpawnResult, returnImages = false): any {
 	details.exitCode = result.exitCode;
 	applySpawnResult(details, result);
+	if (details.continueId) details.messages = slimMessages(result.messages);
 	const output = getFinalOutput(result.messages) || "(no output)";
 	if (result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted") {
 		return subAgentResult(failureText(result, output), details, true);

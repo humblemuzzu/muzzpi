@@ -1,11 +1,7 @@
-import type { MentionableSession } from "./session-index.js";
-
 export type AgentMentionKind = "oracle" | "finder" | "codereview" | "task" | "chad";
 
 export type MentionKind =
   | "commit"
-  | "session"
-  | "handoff"
   | AgentMentionKind;
 
 export interface MentionToken {
@@ -33,16 +29,6 @@ export interface ResolvedCommitMention {
   committedAt: string;
 }
 
-export interface ResolvedSessionMention {
-  sessionId: string;
-  sessionName: string;
-  workspace: string;
-  startedAt: string;
-  updatedAt: string;
-  firstUserMessage: string;
-  parentSessionPath?: string;
-}
-
 export interface ResolvedAgentMention {
   tool: string;
   description: string;
@@ -53,13 +39,6 @@ export interface ResolvedCommitMentionResult {
   status: "resolved";
   kind: "commit";
   commit: ResolvedCommitMention;
-}
-
-export interface ResolvedSessionMentionResult {
-  token: MentionToken;
-  status: "resolved";
-  kind: "session" | "handoff";
-  session: ResolvedSessionMention;
 }
 
 export interface ResolvedAgentMentionResult {
@@ -77,20 +56,5 @@ export interface UnresolvedMentionResult {
 
 export type ResolvedMention =
   | ResolvedCommitMentionResult
-  | ResolvedSessionMentionResult
   | ResolvedAgentMentionResult
   | UnresolvedMentionResult;
-
-export function toResolvedSessionMention(
-  session: MentionableSession,
-): ResolvedSessionMention {
-  return {
-    sessionId: session.sessionId,
-    sessionName: session.sessionName,
-    workspace: session.workspace,
-    startedAt: session.startedAt,
-    updatedAt: session.updatedAt,
-    firstUserMessage: session.firstUserMessage,
-    parentSessionPath: session.parentSessionPath,
-  };
-}

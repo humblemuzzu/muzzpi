@@ -16,8 +16,8 @@ const ctx = {
 	tools: [read],
 	sessionManager: { getBranch: () => [] },
 	executeTool: async (_name: string, args: unknown, opts: { signal?: AbortSignal }) => {
-		const result = await read.execute("nested", args, opts?.signal, undefined, readCtx);
-		return { result, isError: result.isError === true, toolCall: { id: "nested" } };
+		const result = await read.execute("script/0", args, opts?.signal, undefined, readCtx);
+		return { result, isError: result.isError === true, toolCall: { id: "script/0" } };
 	},
 };
 

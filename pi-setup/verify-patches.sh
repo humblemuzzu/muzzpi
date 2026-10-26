@@ -61,6 +61,23 @@ else
          "cp pi-setup/pi-core-patches/session-selector.js $PI_DIST/modes/interactive/components/session-selector.js && cp pi-setup/pi-core-patches/keybindings.js $PI_DIST/core/keybindings.js"
 fi
 
+# ── pi core: fast /resume (stock decodes every tool result of every session, and lowercases all of it per keystroke) ──
+if grep -q "LOCAL PATCH: fast /resume" "$PI_DIST/core/session-manager.js" 2>/dev/null && \
+   grep -q "LOCAL PATCH: fast /resume search" "$PI_DIST/modes/interactive/components/session-selector-search.js" 2>/dev/null; then
+    pass "pi core: fast /resume"
+else
+    fail "pi core: fast /resume missing" \
+         "cp pi-setup/pi-core-patches/session-manager.js $PI_DIST/core/session-manager.js && cp pi-setup/pi-core-patches/session-selector-search.js $PI_DIST/modes/interactive/components/session-selector-search.js"
+fi
+# session-selector-search.js carries a copy of pi-tui's fuzzyMatch (fuzzyMatchLower) taking lowercased text
+FUZZY_SHA="$(shasum -a 256 "$PI_PKG/node_modules/@earendil-works/pi-tui/dist/fuzzy.js" 2>/dev/null | cut -d' ' -f1)"
+if [ "$FUZZY_SHA" = "f873c8e2d808d215e57942ac325b9e635bde9632526d25b56b4eef253362b91b" ]; then
+    pass "pi-tui: fuzzyMatch is the one fast /resume copied"
+else
+    fail "pi-tui: fuzzy.js changed since fast /resume copied fuzzyMatch" \
+         "re-copy fuzzyMatch into fuzzyMatchLower in pi-setup/pi-core-patches/session-selector-search.js, then update FUZZY_SHA here"
+fi
+
 # ── pi core: lazy MCP connect (stock connects every server at every session start) ──
 if grep -q "LOCAL PATCH: lazy MCP connect" "$PI_DIST/extensions/mcp/index.js" 2>/dev/null; then
     pass "pi core: lazy MCP connect"

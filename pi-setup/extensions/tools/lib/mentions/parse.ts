@@ -11,7 +11,7 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
-/** @kind/value pattern for data mentions (commit, session, handoff) */
+/** @kind/value pattern for data mentions (@commit/sha) */
 function getDataTokenRegex(): RegExp | null {
   const kinds = listMentionKinds().filter((k) => !isStandaloneKind(k));
   if (kinds.length === 0) return null;

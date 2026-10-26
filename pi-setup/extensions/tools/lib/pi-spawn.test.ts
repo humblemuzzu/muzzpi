@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, newSessionId, piSpawn, readAgentPrompt, startChild, unresumableReason, type UsageStats } from "./pi-spawn";
+import { ALL_EXTENSIONS_ENV, CHILD_EXTENSIONS, forceReleaseMs, newSessionId, piSpawn, readAgentPrompt, startChild, unresumableReason, type UsageStats } from "./pi-spawn";
 
 let dir: string;
 let stub: string;
@@ -245,7 +245,35 @@ async function withChild(
 	}
 }
 
+describe("the grace after a kill or a settle", () => {
+	test("is 10 s unless PI_SPAWN_RELEASE_MS names a positive number", () => {
+		const prev = process.env.PI_SPAWN_RELEASE_MS;
+		try {
+			for (const value of [undefined, "", "abc", "0", "-5"]) {
+				if (value === undefined) delete process.env.PI_SPAWN_RELEASE_MS;
+				else process.env.PI_SPAWN_RELEASE_MS = value;
+				expect(forceReleaseMs()).toBe(10_000);
+			}
+			process.env.PI_SPAWN_RELEASE_MS = "750";
+			expect(forceReleaseMs()).toBe(750);
+		} finally {
+			if (prev === undefined) delete process.env.PI_SPAWN_RELEASE_MS;
+			else process.env.PI_SPAWN_RELEASE_MS = prev;
+		}
+	});
+});
+
 describe("stall watchdog", () => {
+	// 1 s proves the same timer as production's 10 s
+	const prevRelease = process.env.PI_SPAWN_RELEASE_MS;
+	beforeAll(() => {
+		process.env.PI_SPAWN_RELEASE_MS = "1000";
+	});
+	afterAll(() => {
+		if (prevRelease === undefined) delete process.env.PI_SPAWN_RELEASE_MS;
+		else process.env.PI_SPAWN_RELEASE_MS = prevRelease;
+	});
+
 	test("kills a child that produces no output at all", async () => {
 		const bin = writeStub("silent.sh", ["sleep 60"]);
 		const run = await withChild(bin, "1");
@@ -261,10 +289,10 @@ describe("stall watchdog", () => {
 		// 60s (the sleep's own length) despite the watchdog firing correctly at 1s.
 		const bin = writeStub("silent-pipe.sh", ["sleep 60"]);
 		const run = await withChild(bin, "1");
-		// stall window 1s + 10s grace, and emphatically NOT the 60s the child wanted
-		expect(run.ms).toBeGreaterThanOrEqual(10_000);
+		// stall window 1s + 1s grace, and emphatically NOT the 60s the child wanted
+		expect(run.ms).toBeGreaterThanOrEqual(2_000);
 		// tight: the grace is its own timer, so it does not round up to a watchdog tick
-		expect(run.ms).toBeLessThan(14_000);
+		expect(run.ms).toBeLessThan(4_000);
 		expect(run.stopReason).toBe("stalled");
 	}, 40000);
 
@@ -272,15 +300,15 @@ describe("stall watchdog", () => {
 		// stall is 60s so a missing release would show as a >60s run
 		const bin = writeStub("rpc-done.sh", ["sleep 60 &", `echo '${SETTLED}'`, `echo '${SETTLED}'`, "wait"]);
 		const run = await withChild(bin, "60", { followUp: "second turn" });
-		expect(run.ms).toBeLessThan(14_000);
+		expect(run.ms).toBeLessThan(4_000);
 		expect(run.stopReason).not.toBe("stalled");
 	}, 60000);
 
 	test("the release backstop works even with the stall watchdog disabled", async () => {
 		const bin = writeStub("rpc-nostall.sh", ["sleep 60 &", `echo '${SETTLED}'`, `echo '${SETTLED}'`, "wait"]);
 		const run = await withChild(bin, "0", { followUp: "second turn" });
-		expect(run.ms).toBeGreaterThanOrEqual(10_000);
-		expect(run.ms).toBeLessThan(14_000);
+		expect(run.ms).toBeGreaterThanOrEqual(1_000);
+		expect(run.ms).toBeLessThan(4_000);
 	}, 40000);
 
 	test("a stalled child that saved its conversation can be continued; an ephemeral one is relaunched", async () => {

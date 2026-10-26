@@ -6,7 +6,8 @@
  * - file change tracking for undo_edit (disk-persisted, branch-aware)
  *
  * file changes persist to ~/.pi/file-changes/{sessionId}/ as JSON files
- * keyed by tool call ID. branch awareness comes from the conversation
+ * keyed by tool call ID, for 7 days after the session's last edit (pruned
+ * 30 s after start). branch awareness comes from the conversation
  * tree — tool call IDs in assistant messages are inherently branch-scoped.
  *
  * PI_READ_COMPACT=1 switches read/ls to tighter limits for sub-agents.
@@ -43,6 +44,7 @@ import { AGENT_CONTROL_CHANNEL, AGENT_RESULT_TYPE, AGENT_RUNS_CHANNEL, parseCont
 import { AGENT_RUN_ENTRY, AgentRuns } from "./lib/agent-runs";
 import { SUB_AGENT_TOOLS_ENV } from "./lib/sub-agent-prompt";
 import { readAgentPrompt } from "./lib/pi-spawn";
+import { pruneOldChanges } from "./lib/file-tracker";
 import { AGENT_MODELS_FILE, auditAgentModels, loadAgentModels } from "./lib/agent-models";
 import {
 	createReadGithubTool,
@@ -150,6 +152,7 @@ export default function (pi: ExtensionAPI) {
 
 	let stopDetachKey: (() => void) | undefined;
 	let stopControl: (() => void) | undefined;
+	let pruneTimer: ReturnType<typeof setTimeout> | undefined;
 	pi.on("session_start", (event, ctx) => {
 		stopControl?.();
 		stopControl = pi.events.on(AGENT_CONTROL_CHANNEL, (message) => {
@@ -164,6 +167,10 @@ export default function (pi: ExtensionAPI) {
 			stopDetachKey = ctx.ui.onTerminalInput((data) => (matchesKey(data, "ctrl+b") && runs.detachForeground() ? { consume: true } : undefined));
 		}
 		if (!ctx.hasUI || process.env[SUB_AGENT_TOOLS_ENV]?.trim()) return;
+		const sessionId = ctx.sessionManager.getSessionId();
+		clearTimeout(pruneTimer);
+		pruneTimer = setTimeout(() => void pruneOldChanges(sessionId).catch(() => {}), 30_000);
+		pruneTimer.unref?.();
 		try {
 			const problems = auditAgentModels(models, ctx.modelRegistry);
 			if (problems.length > 0) {
@@ -173,6 +180,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event) => {
+		clearTimeout(pruneTimer);
+		pruneTimer = undefined;
 		stopDetachKey?.();
 		stopDetachKey = undefined;
 		stopControl?.();

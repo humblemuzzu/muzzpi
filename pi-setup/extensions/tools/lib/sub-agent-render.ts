@@ -137,6 +137,35 @@ export function collectSubAgentImages(messages: Message[], limit = 2): ImageBloc
 	return found.reverse();
 }
 
+/**
+ * A child conversation as the parent session keeps it. The child's own session
+ * file holds the whole conversation; the parent keeps only what its rows,
+ * notifications and /stats read: prose, tool calls with their arguments, each
+ * result's outcome and timing, and a nested agent's usage. Tool output,
+ * thinking and images are dropped.
+ */
+export function slimMessages(messages: readonly Message[]): Message[] {
+	const slim: any[] = [];
+	for (const message of messages as any[]) {
+		if (message?.role === "assistant") {
+			const content = (Array.isArray(message.content) ? message.content : []).filter((part: any) => part?.type === "text" || part?.type === "toolCall");
+			slim.push({ role: "assistant", content });
+		} else if (message?.role === "user") {
+			const content = Array.isArray(message.content) ? message.content.filter((part: any) => part?.type === "text") : message.content;
+			slim.push({ role: "user", content });
+		} else if (message?.role === "toolResult") {
+			const kept: any = { role: "toolResult", toolCallId: message.toolCallId, toolName: message.toolName, content: [], isError: message.isError };
+			if (message.durationMs !== undefined) kept.durationMs = message.durationMs;
+			const details = message.details;
+			if (details && typeof details === "object" && details.usage && ("agent" in details || "exitCode" in details)) {
+				kept.details = { ...details, messages: Array.isArray(details.messages) ? slimMessages(details.messages) : details.messages };
+			}
+			slim.push(kept);
+		}
+	}
+	return slim;
+}
+
 export function getDisplayItems(messages: Message[]): DisplayItem[] {
 	const errorMap = new Map<string, boolean>();
 	for (const msg of messages) {

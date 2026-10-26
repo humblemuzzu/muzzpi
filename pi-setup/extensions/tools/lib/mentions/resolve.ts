@@ -1,14 +1,11 @@
 import type { CommitIndex } from "./commit-index.js";
 import { parseMentions } from "./parse.js";
 import { getMentionSource, type MentionSourceContext } from "./sources.js";
-import type { MentionableSession } from "./session-index.js";
 import type { MentionToken, ResolvedMention } from "./types.js";
 
 export interface ResolveMentionsOptions extends MentionSourceContext {
   cwd: string;
   commitIndex?: CommitIndex | null;
-  sessionsDir?: string;
-  sessions?: MentionableSession[] | null;
 }
 
 export async function resolveMention(

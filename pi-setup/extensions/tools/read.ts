@@ -115,19 +115,141 @@ export function listDirectory(dirPath: string, maxEntries: number): string {
 
 interface ReadResult {
 	text: string;
-	/** the same lines without numbers or truncation, for codemode scripts. */
-	raw: string;
+	/** the requested lines without numbers or truncation, byte for byte: only a codemode script gets them. */
+	raw?: string;
 	totalLines: number;
+	/** false when counting stopped after COUNT_LIMIT_BYTES: the file has more than `totalLines` lines. */
+	counted: boolean;
 	shownStart: number;
 	shownEnd: number;
 }
 
-/** a final "\n" ends the last line; it does not start an empty one. */
-export function splitFileLines(raw: string): string[] {
-	if (raw === "") return [];
-	const lines = raw.split("\n");
-	if (raw.endsWith("\n")) lines.pop();
-	return lines;
+const CHUNK_BYTES = 1 << 20;
+const COUNT_LIMIT_BYTES = 1 << 30;
+const BINARY_SNIFF_BYTES = 8192;
+const MAX_UTF16_BYTES = 16 << 20;
+/** a script gets the requested lines byte for byte or not at all: a shortened copy written back would cut the file. */
+const RAW_LIMIT_BYTES = 4 << 20;
+
+interface ScanOptions {
+	from: number;
+	to: number;
+	/** bytes kept from the start of each line, for display. */
+	headBytes: number;
+	/** heads are kept until they total this much: the display stops before then. */
+	headBudget: number;
+	/** keep the lines whole too, while they total at most RAW_LIMIT_BYTES. */
+	whole: boolean;
+}
+
+interface Scan {
+	heads: Buffer[];
+	/** the requested lines whole; undefined unless asked for and within RAW_LIMIT_BYTES. */
+	whole?: Buffer[];
+	totalLines: number;
+	counted: boolean;
+	endsWithNewline: boolean;
+	/** the requested lines' bytes, each with its newline. */
+	rangeBytes: number;
+	longest: { line: number; bytes: number };
+}
+
+/**
+ * Reads lines `from`..`to` and counts the rest. A final "\n" ends the last line;
+ * it does not start an empty one. Only what the caller asked for is copied.
+ */
+async function scanLines(chunks: AsyncIterable<Buffer>, o: ScanOptions): Promise<Scan> {
+	const heads: Buffer[] = [];
+	let whole: Buffer[] | undefined = o.whole ? [] : undefined;
+	let head: Buffer[] = [];
+	let headLength = 0;
+	let headTotal = 0;
+	let parts: Buffer[] = [];
+	let lineNo = 1;
+	let lineBytes = 0;
+	let rangeBytes = 0;
+	let longest = { line: 0, bytes: -1 };
+	let scanned = 0;
+	let lastByte = -1;
+	const inRange = () => lineNo >= o.from && lineNo <= o.to;
+	const take = (piece: Buffer) => {
+		lineBytes += piece.length;
+		if (headLength < o.headBytes && headTotal <= o.headBudget) {
+			const kept = Buffer.from(piece.subarray(0, o.headBytes - headLength));
+			head.push(kept);
+			headLength += kept.length;
+		}
+		if (whole && rangeBytes + lineBytes <= RAW_LIMIT_BYTES + 1) parts.push(Buffer.from(piece));
+	};
+	const endLine = () => {
+		if (inRange()) {
+			rangeBytes += lineBytes + 1;
+			if (lineBytes > longest.bytes) longest = { line: lineNo, bytes: lineBytes };
+			if (headTotal <= o.headBudget) {
+				heads.push(Buffer.concat(head));
+				headTotal += headLength + 1;
+			}
+			if (whole && rangeBytes <= RAW_LIMIT_BYTES + 1) whole.push(Buffer.concat(parts));
+			else whole = undefined;
+		}
+		head = [];
+		headLength = 0;
+		parts = [];
+		lineBytes = 0;
+	};
+	for await (const chunk of chunks) {
+		scanned += chunk.length;
+		lastByte = chunk[chunk.length - 1]!;
+		let start = 0;
+		for (let nl = chunk.indexOf(0x0a, start); nl !== -1; nl = chunk.indexOf(0x0a, start)) {
+			if (inRange()) take(chunk.subarray(start, nl));
+			endLine();
+			lineNo++;
+			start = nl + 1;
+		}
+		if (start < chunk.length && inRange()) take(chunk.subarray(start));
+		if (lineNo > o.to && scanned >= COUNT_LIMIT_BYTES) return { heads, whole, totalLines: lineNo - 1, counted: false, endsWithNewline: false, rangeBytes, longest };
+	}
+	const endsWithNewline = lastByte === 0x0a;
+	if (scanned > 0 && !endsWithNewline) endLine();
+	return { heads, whole, totalLines: scanned === 0 || endsWithNewline ? lineNo - 1 : lineNo, counted: true, endsWithNewline, rangeBytes, longest };
+}
+
+const size = (bytes: number) => (bytes < 1 << 20 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / (1 << 20)).toFixed(1)} MB`);
+
+async function* fileChunks(handle: fs.promises.FileHandle, signal?: AbortSignal): AsyncIterable<Buffer> {
+	const buf = Buffer.allocUnsafe(CHUNK_BYTES);
+	for (let position = 0; ; ) {
+		signal?.throwIfAborted();
+		const { bytesRead } = await handle.read(buf, 0, CHUNK_BYTES, position);
+		if (bytesRead === 0) return;
+		position += bytesRead;
+		yield buf.subarray(0, bytesRead);
+	}
+}
+
+/** The longest prefix of `line` within `maxBytes` that does not split a UTF-8 character. */
+function cutUtf8(line: Buffer, maxBytes: number): Buffer {
+	let end = maxBytes;
+	while (end > 0 && (line[end]! & 0xc0) === 0x80) end--;
+	return line.subarray(0, end);
+}
+
+/** a UTF-16 byte-order mark; UTF-32's `FF FE 00 00` is not one. */
+function utf16Order(bytes: Buffer): "le" | "be" | undefined {
+	if (bytes[0] === 0xff && bytes[1] === 0xfe && !(bytes[2] === 0 && bytes[3] === 0)) return "le";
+	if (bytes[0] === 0xfe && bytes[1] === 0xff) return "be";
+	return undefined;
+}
+
+/** UTF-16 text after its byte-order mark, re-encoded as UTF-8; a dangling odd byte is dropped. */
+function decodeUtf16(bytes: Buffer, order: "le" | "be"): Buffer {
+	const body = Buffer.from(bytes.subarray(2, 2 + ((bytes.length - 2) & ~1)));
+	return Buffer.from((order === "be" ? body.swap16() : body).toString("utf16le"), "utf8");
+}
+
+async function* once(bytes: Buffer): AsyncIterable<Buffer> {
+	if (bytes.length) yield bytes;
 }
 
 /** why `readRange` cannot be served from a file of `totalLines` lines, or undefined. */
@@ -142,57 +264,83 @@ export function rangeError(readRange: [number, number], totalLines: number): str
 	return undefined;
 }
 
-function readFileContent(
+/**
+ * The model sees whole lines up to `maxFileBytes`, each cut to `maxLineBytes`.
+ * A codemode script (`forScript`) also gets the requested lines byte for byte,
+ * or an error when they pass RAW_LIMIT_BYTES.
+ */
+async function readFileContent(
 	filePath: string,
 	limits: ReadLimits,
-	readRange?: [number, number],
-): ReadResult | { error: string } {
-	const content = fs.readFileSync(filePath, "utf-8");
-	const allLines = splitFileLines(content);
-	const totalLines = allLines.length;
-	if (totalLines === 0) return { text: "(empty file)", raw: "", totalLines: 0, shownStart: 0, shownEnd: 0 };
+	readRange: [number, number] | undefined,
+	forScript: boolean,
+	signal?: AbortSignal,
+): Promise<ReadResult | { error: string }> {
+	const start = Math.max(1, Math.floor(readRange?.[0] ?? 1));
+	const requestedEnd = Math.floor(readRange?.[1] ?? start + limits.maxLines - 1);
+	const options: ScanOptions = { from: start, to: requestedEnd, headBytes: limits.maxLineBytes + 1, headBudget: limits.maxFileBytes, whole: forScript };
+	const empty = { text: "(empty file)", raw: forScript ? "" : undefined, totalLines: 0, counted: true, shownStart: 0, shownEnd: 0 };
+
+	const handle = await fs.promises.open(filePath, "r");
+	let scan: Scan;
+	try {
+		if ((await handle.stat()).size === 0) return empty;
+		const invalid = readRange && rangeError(readRange, Number.POSITIVE_INFINITY);
+		if (invalid) return { error: invalid };
+		const sniff = Buffer.alloc(BINARY_SNIFF_BYTES);
+		const { bytesRead } = await handle.read(sniff, 0, sniff.length, 0);
+		const sniffed = sniff.subarray(0, bytesRead);
+		const order = utf16Order(sniffed);
+		if (order) {
+			if ((await handle.stat()).size > MAX_UTF16_BYTES) return { error: `a UTF-16 file over ${size(MAX_UTF16_BYTES)} is not read; search it with grep instead.` };
+			scan = await scanLines(once(decodeUtf16(await handle.readFile(), order)), options);
+		} else if (sniffed.includes(0)) {
+			return { error: `${path.basename(filePath)} is a binary file (it holds NUL bytes); inspect it with bash (file, xxd, strings) instead.` };
+		} else {
+			scan = await scanLines(fileChunks(handle, signal), options);
+		}
+	} finally {
+		await handle.close();
+	}
+
+	const { totalLines, counted } = scan;
+	if (totalLines === 0) return empty;
 
 	if (readRange) {
 		const error = rangeError(readRange, totalLines);
 		if (error) return { error };
 	}
-	const start = Math.max(1, Math.floor(readRange?.[0] ?? 1));
-	const end = Math.min(totalLines, Math.floor(readRange?.[1] ?? start + limits.maxLines - 1));
-	const raw = allLines.slice(start - 1, end).join("\n") + (end === totalLines && content.endsWith("\n") ? "\n" : "");
+	const end = Math.min(totalLines, requestedEnd);
+	const trailingNewline = end === totalLines && scan.endsWithNewline;
 
-	// number lines and truncate long lines
-	const numbered: string[] = [];
-	for (let i = start - 1; i < end; i++) {
-		let line = allLines[i];
-		const lineBytes = Buffer.byteLength(line, "utf-8");
-
-		if (lineBytes > limits.maxLineBytes) {
-			while (Buffer.byteLength(line, "utf-8") > limits.maxLineBytes) {
-				line = line.slice(0, Math.max(1, line.length - 100));
-			}
-			line += "... (line truncated)";
+	let raw: string | undefined;
+	if (forScript) {
+		const rawBytes = scan.rangeBytes - 1 + (trailingNewline ? 1 : 0);
+		if (rawBytes > RAW_LIMIT_BYTES || !scan.whole) {
+			const { line, bytes } = scan.longest;
+			return {
+				error: bytes > RAW_LIMIT_BYTES
+					? `line ${line} alone is ${size(bytes)}, more than a script's read returns (${size(RAW_LIMIT_BYTES)}): no range fits it. Search the file with grep instead.`
+					: `lines ${start}-${end} hold ${size(rawBytes)} (the longest, line ${line}, is ${size(bytes)}), more than a script's read returns (${size(RAW_LIMIT_BYTES)}). Read a smaller read_range, or search the file with grep.`,
+			};
 		}
-
-		numbered.push(`${i + 1}: ${line}`);
+		raw = scan.whole.map((line) => line.toString("utf8")).join("\n") + (trailingNewline ? "\n" : "");
 	}
 
-	// if numbered output fits in byte limit, return as-is
-	const totalBytes = numbered.reduce((sum, l) => sum + Buffer.byteLength(l, "utf-8") + 1, 0);
-	if (totalBytes <= limits.maxFileBytes) {
-		return { text: numbered.join("\n"), raw, totalLines, shownStart: start, shownEnd: end };
+	// whole lines from `start` until the byte limit; the first line always shows
+	const numbered: string[] = [];
+	let bytes = 0;
+	for (const [i, head] of scan.heads.entries()) {
+		const text = head.length > limits.maxLineBytes
+			? `${cutUtf8(head, limits.maxLineBytes).toString("utf8")}... (line truncated)`
+			: head.toString("utf8");
+		const entry = `${start + i}: ${text}`;
+		const entryBytes = Buffer.byteLength(entry, "utf-8") + 1;
+		if (numbered.length > 0 && bytes + entryBytes > limits.maxFileBytes) break;
+		numbered.push(entry);
+		bytes += entryBytes;
 	}
-
-	// otherwise apply head+tail truncation on the numbered lines
-	const formatted = formatHeadTail(numbered, limits.maxLines, (n) =>
-		`... [${n} lines truncated, ${limits.maxFileBytes / 1024}KB limit reached] ...`);
-
-	return {
-		text: formatted,
-		raw,
-		totalLines,
-		shownStart: start,
-		shownEnd: end,
-	};
+	return { text: numbered.join("\n"), raw, totalLines, counted, shownStart: start, shownEnd: start + numbered.length - 1 };
 }
 
 // --- tool factory ---
@@ -259,7 +407,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 			return text;
 		},
 
-		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			const resolved = resolveWithVariants(params.path, ctx.cwd);
 
 			if (isSecretFile(resolved)) {
@@ -344,20 +492,21 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 					const end = params.limit !== undefined ? start + params.limit - 1 : start + limits.maxLines - 1;
 					readRange = [start, end];
 				}
-				const read = readFileContent(resolved, limits, readRange);
+				// pi gives a call a codemode script makes the id `<script call id>/<n>`
+				const read = await readFileContent(resolved, limits, readRange, toolCallId.includes("/"), signal);
 				if ("error" in read) {
 					return {
 						content: [{ type: "text" as const, text: `${read.error} (${resolved})` }],
 						isError: true,
 					} as any;
 				}
-				const { text, raw, totalLines, shownStart, shownEnd } = read;
+				const { text, raw, totalLines, counted, shownStart, shownEnd } = read;
 
 				let output = text;
 				let notice: string | undefined;
 
-				if (shownEnd < totalLines) {
-					notice = `showing lines ${shownStart}-${shownEnd} of ${totalLines}`;
+				if (shownEnd < totalLines || !counted) {
+					notice = `showing lines ${shownStart}-${shownEnd} of ${counted ? totalLines : `more than ${totalLines}`}`;
 					output += `\n\n(${notice}. use read_range to see more.)`;
 				}
 				markSeen(ctx.sessionManager.getSessionId(), resolved);
@@ -365,7 +514,7 @@ export function createReadTool(limits: ReadLimits): ToolDefinition {
 				return {
 					content: [{ type: "text" as const, text: output }],
 					details: { filePath: resolved, notice },
-					structuredContent: raw,
+					...(raw !== undefined ? { structuredContent: raw } : {}),
 				} as any;
 			} catch (err: any) {
 				return {

@@ -453,7 +453,7 @@ if [ -d "$SCRIPT_DIR/pi-core-patches" ]; then
     # every npm package bundles its own pi-tui, and one unpatched copy still smears
     run node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs" || \
         warn "pi-tui width patch failed on some copies — TUI may smear on exotic unicode (see AGENTS.md)"
-    ok "pi core patches applied (resource-loader + session pinning + lazy MCP + pi-tui widths)"
+    ok "pi core patches applied (resource-loader + session pinning + fast /resume + lazy MCP + pi-tui widths)"
 else
     warn "pi-core-patches/ missing — apply them by hand"
 fi

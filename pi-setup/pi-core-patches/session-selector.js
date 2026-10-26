@@ -112,10 +112,20 @@ function formatSessionDate(date) {
         return `${Math.floor(diffDays / 30)}mo`;
     return `${Math.floor(diffDays / 365)}y`;
 }
+// LOCAL PATCH: fast /resume. A session file's real path is resolved once, not
+// for every session each time the tree is rebuilt.
+const canonicalPaths = new Map();
 function canonicalizePath(path) {
     if (!path)
         return path;
-    return _canonicalizePath(path);
+    let canonical = canonicalPaths.get(path);
+    if (canonical === undefined) {
+        canonical = _canonicalizePath(path);
+        // a path that does not resolve yet (a session file not written) is resolved again next time
+        if (canonical !== path || existsSync(path))
+            canonicalPaths.set(path, canonical);
+    }
+    return canonical;
 }
 class SessionSelectorHeader {
     scope;
@@ -308,7 +318,7 @@ class SessionList {
     }
     allSessions = [];
     filteredSessions = [];
-    pinnedSet = new Set();
+    pinnedSet = readPinnedPaths();
     selectedIndex = 0;
     selectionTouched = false;
     searchInput;
@@ -402,7 +412,6 @@ class SessionList {
             }));
         }
         // LOCAL PATCH: float pinned sessions to the top of the list.
-        this.pinnedSet = readPinnedPaths();
         this.filteredSessions = applyPinning(this.filteredSessions, this.pinnedSet);
         this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1));
     }
@@ -583,7 +592,7 @@ class SessionList {
         if (kb.matches(keyData, "app.session.pin")) {
             const selected = this.filteredSessions[this.selectedIndex];
             if (selected) {
-                togglePinnedPath(selected.session.path);
+                this.pinnedSet = togglePinnedPath(selected.session.path);
                 this.filterSessions(this.searchInput.getValue());
                 this.onTogglePin?.();
             }

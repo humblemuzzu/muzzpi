@@ -60,7 +60,8 @@ export function oneLine(text: string): string {
 	return clean(text.replace(/[\r\n\u2028\u2029\v\f]+/g, " ")).trim();
 }
 
-function clean(text: string): string {
+/** display-safe text: tabs as spaces, control characters other than newline dropped. */
+export function clean(text: string): string {
 	return normalizeForDisplay(text.replace(/\t/g, "  ").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, ""));
 }
 

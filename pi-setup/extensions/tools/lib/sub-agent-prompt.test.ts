@@ -11,9 +11,8 @@
  * (correctly), but if the prompt ever stops reflecting the allowlist it fails.
  */
 
-import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
-import { buildSubAgentPrompt, parseToolList, SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
+import { buildSubAgentPrompt, parseToolList } from "./sub-agent-prompt";
 import { oracleAllowlist } from "../oracle";
 import { delegateAllowlist } from "../delegate";
 import { finderAllowlist } from "../finder";
@@ -142,20 +141,5 @@ describe("every sub-agent's prompt matches its real allowlist", () => {
 		expect(oracleAllowlist()).not.toContain("edit");
 		expect(oracleAllowlist()).not.toContain("write");
 		expect(finderAllowlist()).not.toContain("bash");
-	});
-});
-
-describe("the writer side stays wired to the reader side", () => {
-	test("the env var name is the agreed constant", () => {
-		expect(SUB_AGENT_TOOLS_ENV).toBe("PI_SUBAGENT_TOOLS");
-	});
-
-	test("pi-spawn exports the allowlist to the child under that constant", () => {
-		// a source check, because proving it end-to-end needs a real spawn. if
-		// this drifts, children silently fall back to the parent prompt — the
-		// exact bug this module exists to fix, and a silent one.
-		const source = readFileSync(new URL("./pi-spawn.ts", import.meta.url), "utf-8");
-		expect(source).toContain("SUB_AGENT_TOOLS_ENV");
-		expect(source).toContain('requestedTools.join(",")');
 	});
 });

@@ -17,14 +17,12 @@ import type { MentionKind } from "./types.js";
 export interface MentionAwareProviderOptions {
   baseProvider: AutocompleteProvider;
   cwd: string;
-  sessionsDir?: string;
   maxItems?: number;
 }
 
 export class MentionAwareProvider implements AutocompleteProvider {
   private readonly baseProvider: AutocompleteProvider;
   private readonly cwd: string;
-  private readonly sessionsDir?: string;
   private readonly maxItems: number;
   private readonly specialItems = new WeakSet<AutocompleteItem>();
   private readonly gitEnabled: boolean;
@@ -32,7 +30,6 @@ export class MentionAwareProvider implements AutocompleteProvider {
   constructor(options: MentionAwareProviderOptions) {
     this.baseProvider = options.baseProvider;
     this.cwd = options.cwd;
-    this.sessionsDir = options.sessionsDir;
     this.maxItems = options.maxItems ?? 25;
     this.gitEnabled = resolveGitRoot(this.cwd) !== null;
   }
@@ -154,7 +151,6 @@ export class MentionAwareProvider implements AutocompleteProvider {
   private getSourceContext(): MentionSourceContext {
     return {
       cwd: this.cwd,
-      sessionsDir: this.sessionsDir,
       gitEnabled: this.gitEnabled,
     };
   }

@@ -4,7 +4,7 @@
  * execute, the order pi's agent loop uses, against a real temp directory.
  */
 
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -20,7 +20,9 @@ const undoTool = createUndoEditTool() as any;
 const redoTool = createRedoEditTool() as any;
 
 const DIR = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "edit-write-")));
-process.env.PI_TRASH_DIR = path.join(DIR, ".trash");
+const ENV = { PI_TRASH_DIR: path.join(DIR, ".trash"), PI_FILE_CHANGES_DIR: path.join(DIR, ".changes") };
+const previousEnv = Object.fromEntries(Object.keys(ENV).map((key) => [key, process.env[key]]));
+beforeAll(() => Object.assign(process.env, ENV));
 const SESSION = `edit-write-${Date.now()}`;
 const ctx = { cwd: DIR, sessionManager: { getSessionId: () => SESSION } };
 
@@ -54,8 +56,11 @@ async function refusal(run: Promise<unknown>): Promise<string> {
 }
 
 afterAll(() => {
+	for (const [key, value] of Object.entries(previousEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
 	fs.rmSync(DIR, { recursive: true, force: true });
-	fs.rmSync(path.join(os.homedir(), ".pi", "file-changes", SESSION), { recursive: true, force: true });
 });
 
 describe("edit", () => {

@@ -642,41 +642,45 @@ async function runCommand(
 		// CPU liveness state. `child.pid` is the process-GROUP id because the child
 		// is spawned `detached` (the same fact `killGracefully(-pid)` relies on).
 		const cpuOn = cpuLivenessEnabled() && idleMs > 0;
-		let lastCpuSecs = cpuOn && child.pid ? sampleGroupCpuSeconds(child.pid) : undefined;
+		let lastCpuSecs: number | undefined;
 		let lastCpuSampleAt = Date.now();
+		let sampling: Promise<void> | undefined;
+		/* CPU can only bump lastOutputAt; undefined (ps failed) is no signal. */
+		const readCpu = async (pid: number) => {
+			const cpuNow = await sampleGroupCpuSeconds(pid);
+			const now = Date.now();
+			// a failed `ps` keeps the old baseline, so the next reading measures across the gap
+			if (cpuNow === undefined) return;
+			if (lastCpuSecs !== undefined) {
+				// scaled by elapsed time; abs() because a child exiting drops the group's total, which is activity too
+				const threshold = Math.max((now - lastCpuSampleAt) / 1000, 0) * CPU_ALIVE_CORE_FRACTION;
+				if (Math.abs(cpuNow - lastCpuSecs) > threshold) lastOutputAt = now;
+			}
+			lastCpuSecs = cpuNow;
+			lastCpuSampleAt = now;
+		};
+		/** a tick that finds a reading in flight waits for that one rather than starting another */
+		const sampleCpu = (): Promise<void> => {
+			if (!cpuOn || !child.pid) return Promise.resolve();
+			sampling ??= readCpu(child.pid).finally(() => {
+				sampling = undefined;
+			});
+			return sampling;
+		};
+		void sampleCpu();
 		let idleHandle: ReturnType<typeof setInterval> | undefined;
 		if (idleMs > 0) {
 			// wrapped for the same reason as the elapsed ticker. on a throw, stop the
 			// watchdog rather than kill: the declared timeout still bounds the run.
-			const idleTick = () => {
+			const idleTick = async () => {
 				// one kill only. after the first tick fires, `lastOutputAt` can never
 				// advance again (the process is dying and producing nothing), so every
 				// later tick would re-issue SIGTERM and queue another 3s SIGKILL timer
 				// against a process that is already on its way out.
 				if (idledOut) return;
+				await sampleCpu();
+				if (idledOut || settled) return;
 				const now = Date.now();
-				/* CPU can only bump lastOutputAt; undefined (ps failed) is no signal. */
-				if (cpuOn && child.pid) {
-					const cpuNow = sampleGroupCpuSeconds(child.pid);
-					// only advance the sample state on a REAL reading: a failed `ps`
-					// (undefined) leaves last{CpuSecs,SampleAt} untouched, so the next
-					// success measures the true rate across the gap rather than a
-					// short interval against a stale baseline.
-					if (cpuNow !== undefined) {
-						if (lastCpuSecs !== undefined) {
-							const elapsedSec = (now - lastCpuSampleAt) / 1000;
-							// threshold scales with elapsed wall time, so it is identical at
-							// a 10s production tick and a sub-second test tick. abs(): a
-							// child exiting drops the group total, and that drop is activity
-							// too. this only ever BUMPS lastOutputAt (keeps the command
-							// alive) — it can never cause a kill.
-							const threshold = Math.max(elapsedSec, 0) * CPU_ALIVE_CORE_FRACTION;
-							if (Math.abs(cpuNow - lastCpuSecs) > threshold) lastOutputAt = now;
-						}
-						lastCpuSecs = cpuNow;
-						lastCpuSampleAt = now;
-					}
-				}
 				const verdict = watchdogVerdict(now, lastIdleTickAt, lastOutputAt, idleMs, SLEEP_JUMP_MS);
 				lastIdleTickAt = now;
 				// machine slept: forgive the gap rather than kill a process that was
@@ -687,12 +691,10 @@ async function runCommand(
 				if (child.pid) killGracefully(child.pid);
 			};
 			idleHandle = setInterval(() => {
-				try {
-					idleTick();
-				} catch {
+				idleTick().catch(() => {
 					if (idleHandle) clearInterval(idleHandle);
 					idleHandle = undefined;
-				}
+				});
 			}, watchdogTickMs(idleMs, IDLE_TICK_MS));
 			idleHandle.unref?.();
 		}

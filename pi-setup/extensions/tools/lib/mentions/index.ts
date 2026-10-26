@@ -4,7 +4,6 @@ export * from "./render.js";
 export * from "./cache.js";
 export * from "./commit-index.js";
 export * from "./resolve.js";
-export * from "./session-index.js";
 export * from "./sources.js";
 export * from "./provider.js";
 export * from "./agent-source.js";

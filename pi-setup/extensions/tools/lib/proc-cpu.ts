@@ -4,7 +4,7 @@
  * alive, never kill it. the child is spawned detached so pgid === child.pid.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 /**
  * parse a `ps` cputime string (`[DD-]H:MM:SS.ss`, leading fields dropped when
@@ -55,18 +55,13 @@ export function parseGroupCpuSeconds(psStdout: string, pgid: number): number | u
 
 /**
  * sample total CPU seconds of a process group, or undefined if it cannot be
- * measured. sync on purpose (watchdog setInterval); 2s timeout so ps cannot wedge it.
+ * measured. 2s timeout so ps cannot wedge the watchdog.
  */
-export function sampleGroupCpuSeconds(pgid: number): number | undefined {
-	if (!Number.isInteger(pgid) || pgid <= 0) return undefined;
-	try {
-		const out = execFileSync("ps", ["-o", "pgid=,cputime=", "-ax"], {
-			encoding: "utf-8",
-			timeout: 2000,
-			maxBuffer: 8 * 1024 * 1024,
+export function sampleGroupCpuSeconds(pgid: number): Promise<number | undefined> {
+	if (!Number.isInteger(pgid) || pgid <= 0) return Promise.resolve(undefined);
+	return new Promise((resolve) => {
+		execFile("ps", ["-o", "pgid=,cputime=", "-ax"], { encoding: "utf-8", timeout: 2000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => {
+			resolve(error ? undefined : parseGroupCpuSeconds(out, pgid));
 		});
-		return parseGroupCpuSeconds(out, pgid);
-	} catch {
-		return undefined;
-	}
+	});
 }

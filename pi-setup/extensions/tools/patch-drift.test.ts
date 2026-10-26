@@ -6,12 +6,17 @@ import { join } from "node:path";
 
 const PI_SETUP = join(import.meta.dir, "..", "..");
 const PATCHES = join(PI_SETUP, "pi-core-patches");
-const FILES: [dist: string, patch: string][] = [
-	["core/resource-loader.js", "resource-loader.js"],
-	["modes/interactive/components/session-selector.js", "session-selector.js"],
-	["core/keybindings.js", "keybindings.js"],
-	["extensions/mcp/index.js", "mcp-index.js"],
-];
+/** [dist path, patch file] for every entry of patches.sh, read from it so the two cannot drift */
+const FILES = spawnSync("bash", ["-c", `source '${join(PATCHES, "patches.sh")}' && for e in "\${PI_CORE_PATCHES[@]}"; do echo "$(patch_dist_path "$e") $(patch_source "$e")"; done`], { encoding: "utf8" })
+	.stdout.trim().split("\n").map((line) => line.split(" ") as [dist: string, patch: string]);
+
+test("patches.sh lists its patches and each patch file exists", () => {
+	expect(FILES.length).toBeGreaterThanOrEqual(6);
+	for (const [dist, patch] of FILES) {
+		expect(dist).toEndWith(".js");
+		expect(existsSync(join(PATCHES, patch))).toBe(true);
+	}
+});
 const dirs: string[] = [];
 afterEach(() => {
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });

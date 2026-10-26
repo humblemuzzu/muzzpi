@@ -1,13 +1,17 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFormatFileTool } from "./format-file";
 
 const ROOT = realpathSync.native(mkdtempSync(join(tmpdir(), "format-file-")));
 const SESSION = `format-file-test-${Date.now()}`;
-const CHANGES = join(homedir(), ".pi", "file-changes", SESSION);
+const previousChanges = process.env.PI_FILE_CHANGES_DIR;
+beforeAll(() => {
+	process.env.PI_FILE_CHANGES_DIR = join(ROOT, ".changes");
+});
+const CHANGES = join(ROOT, ".changes", SESSION);
 const tool = createFormatFileTool() as any;
 
 /** answers --file-info like prettier 3, and "formats" by rewriting the file. */
@@ -64,8 +68,9 @@ function formatInChild(file: string, env: Record<string, string> = {}) {
 }
 
 afterAll(() => {
+	if (previousChanges === undefined) delete process.env.PI_FILE_CHANGES_DIR;
+	else process.env.PI_FILE_CHANGES_DIR = previousChanges;
 	rmSync(ROOT, { recursive: true, force: true });
-	rmSync(CHANGES, { recursive: true, force: true });
 });
 
 describe("format_file", () => {

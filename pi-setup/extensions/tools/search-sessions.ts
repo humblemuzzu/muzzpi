@@ -2,172 +2,21 @@
  * search_sessions — find session branches by keyword, file, or date.
  *
  * a pi session is a tree, so the unit is a branch (one root-to-leaf path), not
- * a whole file. glob → optional ripgrep pre-filter → parse JSONL → enumerate
- * branches → filter → sort. the rg pre-filter is required: the sessions dir is
- * too large to parse every file per query. never writes.
+ * a whole file. the sessions are read through lib/session-index, which keeps a
+ * summary per file and re-reads only files that changed. never writes a session.
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { withPromptPatch } from "./lib/prompt-patch";
-// clearConfigCache / setGlobalSettingsPath were only used by his extension
-// wrapper and its inline tests, both of which we dropped.
-import {
-  getEnabledExtensionConfig,
-  type ExtensionConfigSchema,
-} from "./lib/config";
-import { type BoxSection, type Excerpt, boxRendererWindowed } from "./lib/box-format";
-import { PI_SESSIONS_DIR, SUB_AGENT_SESSION_DIR } from "./lib/pi-spawn";
 import { Type } from "@sinclair/typebox";
-import {
-  enumerateBranches,
-  listSessionFiles,
-  parseSessionFile,
-  type BranchResult,
-  type MentionableSession,
-} from "./lib/mentions";
+import { type BoxSection, type Excerpt, boxRendererWindowed } from "./lib/box-format";
+import { type BranchResult, branchesOf, createSlicer, defaultSessionIndex, type SessionIndex } from "./lib/session-index";
 
+const MAX_RESULTS = 50;
+const PROGRESS_EVERY_MS = 250;
 
-type SearchSessionsExtConfig = {
-  maxResults: number;
-  sessionsDir?: string;
-  sessionsDirs?: string[];
-  rgTimeoutMs: number;
-};
-
-type SearchSessionsExtensionDeps = {
-  getEnabledExtensionConfig: typeof getEnabledExtensionConfig;
-  withPromptPatch: typeof withPromptPatch;
-};
-
-const MAX_SESSION_PROJECTIONS = 2_000;
-const MAX_SESSION_PROJECTION_BYTES = 64 * 1024;
-const MAX_SESSION_PROJECTION_TOTAL_BYTES = 64 * 1024 * 1024;
-
-function sessionProjectionDir(): string {
-  const data =
-    process.env.PI_MEMORY_DATA_DIR ??
-    path.join(os.homedir(), ".local", "share", "pi-memory");
-  return path.join(data, "pi-sessions");
-}
-
-async function loadProjectedSessionMentions(): Promise<MentionableSession[]> {
-  const root = sessionProjectionDir();
-  let entries: fs.Dirent[];
-  try {
-    entries = await fs.promises.readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const sessions: MentionableSession[] = [];
-  let totalBytes = 0;
-  for (const entry of entries.slice(0, MAX_SESSION_PROJECTIONS)) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    const filePath = path.join(root, entry.name);
-    try {
-      const stat = await fs.promises.stat(filePath);
-      if (
-        stat.size > MAX_SESSION_PROJECTION_BYTES ||
-        totalBytes + stat.size > MAX_SESSION_PROJECTION_TOTAL_BYTES
-      )
-        continue;
-      totalBytes += stat.size;
-      const text = await fs.promises.readFile(filePath, "utf8");
-      const sessionId = entry.name.slice(0, -3);
-      const workspace = text.match(/^workspace:\s*(.+)$/mu)?.[1]?.trim() ?? "";
-      const sessionName =
-        text.match(/^## branch [^\n]*? — (.+)$/mu)?.[1]?.trim() ?? "";
-      const firstUserMessage =
-        text
-          .match(/^### user\s*\n+([^\n]+)/mu)?.[1]
-          ?.trim()
-          .slice(0, 500) ?? "";
-      sessions.push({
-        sessionId,
-        sessionName,
-        workspace,
-        filePath,
-        startedAt: stat.birthtime.toISOString(),
-        updatedAt: stat.mtime.toISOString(),
-        firstUserMessage,
-        searchableText: [
-          sessionId,
-          sessionName,
-          workspace,
-          firstUserMessage,
-        ].join("\n"),
-        branchCount: text.match(/^## branch /gmu)?.length ?? 1,
-      });
-    } catch {}
-  }
-  return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
-const CONFIG_DEFAULTS: SearchSessionsExtConfig = {
-  maxResults: 50,
-  /*
-   * both roots: your own sessions, and the sub-agent sessions that delegate
-   * keeps out of `/resume`. searching is a targeted act (you asked for a
-   * keyword), unlike browsing, so covering delegate work here is useful
-   * rather than noisy — and it is the only way to find what a sub-agent did.
-   */
-  sessionsDirs: [
-    PI_SESSIONS_DIR,
-    SUB_AGENT_SESSION_DIR,
-  ],
-  rgTimeoutMs: 10000,
-};
-
-function isSearchSessionsConfig(
-  value: Record<string, unknown>,
-): value is SearchSessionsExtConfig {
-  return (
-    typeof value.maxResults === "number" &&
-    Number.isInteger(value.maxResults) &&
-    value.maxResults >= 1 &&
-    (value.sessionsDir === undefined ||
-      (typeof value.sessionsDir === "string" &&
-        value.sessionsDir.trim().length > 0)) &&
-    (value.sessionsDirs === undefined ||
-      (Array.isArray(value.sessionsDirs) &&
-        value.sessionsDirs.length > 0 &&
-        value.sessionsDirs.every(
-          (sessionsDir) =>
-            typeof sessionsDir === "string" && sessionsDir.trim().length > 0,
-        ))) &&
-    (value.sessionsDir !== undefined || value.sessionsDirs !== undefined) &&
-    typeof value.rgTimeoutMs === "number" &&
-    Number.isInteger(value.rgTimeoutMs) &&
-    value.rgTimeoutMs >= 1
-  );
-}
-
-const SEARCH_SESSIONS_CONFIG_SCHEMA: ExtensionConfigSchema<SearchSessionsExtConfig> =
-  {
-    validate: isSearchSessionsConfig,
-  };
-
-const DEFAULT_EXTENSION_DEPS: SearchSessionsExtensionDeps = {
-  getEnabledExtensionConfig,
-  withPromptPatch,
-};
-
-function resolveSessionsDirs(config: SearchSessionsExtConfig): string[] {
-  const configured = config.sessionsDir
-    ? [config.sessionsDir]
-    : (config.sessionsDirs ?? CONFIG_DEFAULTS.sessionsDirs!);
-  return [
-    ...new Set(
-      configured.map((sessionsDir) =>
-        path.resolve(sessionsDir.replace(/^~(?=$|\/)/, os.homedir())),
-      ),
-    ),
-  ];
-}
+const COLLAPSED_EXCERPTS: Excerpt[] = [{ focus: "head" as const, context: 5 }];
 
 function uniqueBy<T>(values: T[], key: (value: T) => string): T[] {
   const claimed = new Set<string>();
@@ -178,34 +27,6 @@ function uniqueBy<T>(values: T[], key: (value: T) => string): T[] {
     return true;
   });
 }
-
-function claimCanonicalSessionFiles(sessionFiles: string[]): string[] {
-  const claimed = new Set<string>();
-  return sessionFiles.filter((sessionFile) => {
-    try {
-      const fd = fs.openSync(sessionFile, "r");
-      const buffer = Buffer.alloc(64 * 1024);
-      let bytesRead: number;
-      try {
-        bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      } finally {
-        fs.closeSync(fd);
-      }
-      const firstLine = buffer.subarray(0, bytesRead).toString().split("\n")[0];
-      if (!firstLine) return true;
-      const header = JSON.parse(firstLine);
-      if (header.type !== "session" || typeof header.id !== "string")
-        return true;
-      if (claimed.has(header.id)) return false;
-      claimed.add(header.id);
-    } catch {
-      return true;
-    }
-    return true;
-  });
-}
-
-const COLLAPSED_EXCERPTS: Excerpt[] = [{ focus: "head" as const, context: 5 }];
 
 // --- search filtering ---
 
@@ -224,7 +45,6 @@ function matchesFile(branch: BranchResult, fileQuery: string): boolean {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
 function parseDate(dateStr: string): Date | null {
-  // support ISO dates and relative (7d, 2w)
   const relMatch = dateStr.trim().match(/^(\d+)([dw])$/);
   if (relMatch && relMatch[1] && relMatch[2]) {
     const n = parseInt(relMatch[1], 10);
@@ -249,42 +69,15 @@ function matchesDateRange(
   return true;
 }
 
-// --- rg pre-filter ---
-
-function rgFilterFiles(
-  keyword: string,
-  sessionsDir: string,
-  timeoutMs: number,
-): Set<string> | null {
-  try {
-    const result = execSync(
-      `rg -l -i ${JSON.stringify(keyword)} ${JSON.stringify(sessionsDir)}`,
-      { stdio: ["ignore", "pipe", "ignore"], timeout: timeoutMs },
-    )
-      .toString()
-      .trim();
-    if (!result) return new Set();
-    return new Set(result.split("\n").filter(Boolean));
-  } catch {
-    // rg not found or no matches — fall back to no filtering
-    return null;
-  }
-}
-
 // --- format results ---
 
 function formatBranchResults(
   branches: BranchResult[],
   total = branches.length,
-): {
-  text: string;
-  headerLineIndices: number[];
-} {
-  if (branches.length === 0)
-    return { text: "(no matching sessions found)", headerLineIndices: [] };
+): string {
+  if (branches.length === 0) return "(no matching sessions found)";
 
   const lines: string[] = [];
-  const headerLineIndices: number[] = [];
 
   const half = Math.floor(branches.length / 2);
   lines.push(
@@ -309,19 +102,9 @@ function formatBranchResults(
       minute: "2-digit",
     });
 
-    headerLineIndices.push(lines.length);
     lines.push(`### ${i + 1}. ${b.sessionName || "(unnamed)"}`);
     lines.push(`session: ${b.sessionId} / branch: ${b.leafId}`);
-    if (b.parentSessionPath) {
-      // extract session id from path (filename without extension)
-      const parentId =
-        b.parentSessionPath
-          .split("/")
-          .pop()
-          ?.replace(/\.jsonl$/, "")
-          ?.split("_")[1] || b.parentSessionPath;
-      lines.push(`forked from: ${parentId}`);
-    }
+    if (b.parentSessionPath) lines.push(`forked from: ${parentIdOf(b.parentSessionPath)}`);
     lines.push(`${dateStr} ${timeStr} — ${b.messageCount} messages`);
     if (b.models.length > 0) lines.push(`models: ${b.models.join(", ")}`);
     if (b.filesTouched.length > 0) {
@@ -341,10 +124,14 @@ function formatBranchResults(
     if (i < branches.length - 1) lines.push("");
   }
 
-  return { text: lines.join("\n"), headerLineIndices };
+  return lines.join("\n");
 }
 
-/** convert branch results to BoxSections for box-format rendering */
+/** format: 2026-02-20T14-50-17-926Z_<id>.jsonl */
+function parentIdOf(parentSessionPath: string): string {
+  return path.basename(parentSessionPath).replace(/\.jsonl$/, "").split("_")[1] || parentSessionPath;
+}
+
 function branchesToSections(branches: BranchResult[]): BoxSection[] {
   return branches.map((b, i) => {
     const dateStr = new Date(b.timestampEnd).toLocaleDateString("en-US", {
@@ -363,15 +150,7 @@ function branchesToSections(branches: BranchResult[]): BoxSection[] {
       text: `session: ${b.sessionId} / branch: ${b.leafId}`,
       highlight: true,
     });
-    if (b.parentSessionPath) {
-      const parentId =
-        b.parentSessionPath
-          .split("/")
-          .pop()
-          ?.replace(/\.jsonl$/, "")
-          ?.split("_")[1] || b.parentSessionPath;
-      lines.push({ text: `forked from: ${parentId}`, highlight: true });
-    }
+    if (b.parentSessionPath) lines.push({ text: `forked from: ${parentIdOf(b.parentSessionPath)}`, highlight: true });
     lines.push({
       text: `${dateStr} ${timeStr} — ${b.messageCount} messages`,
       highlight: true,
@@ -411,10 +190,9 @@ interface SearchSessionsParams {
   all_workspaces?: boolean;
 }
 
-export function createSearchSessionsTool(
-  config: SearchSessionsExtConfig = CONFIG_DEFAULTS,
-): ToolDefinition<any> {
-  const sessionsDirs = resolveSessionsDirs(config);
+const text = (value: string, isError = false) => ({ content: [{ type: "text" as const, text: value }], ...(isError ? { isError: true } : {}) }) as any;
+
+export function createSearchSessionsTool(index: SessionIndex = defaultSessionIndex()): ToolDefinition<any> {
   return {
     name: "search_sessions",
     label: "Search Sessions",
@@ -472,7 +250,7 @@ export function createSearchSessionsTool(
       ),
     }),
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const p = params as SearchSessionsParams;
       const dates: Record<"after" | "before", Date | null> = { after: null, before: null };
       for (const key of ["after", "before"] as const) {
@@ -480,155 +258,69 @@ export function createSearchSessionsTool(
         if (!raw) continue;
         dates[key] = parseDate(raw);
         if (!dates[key]) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: `invalid ${key} date ${JSON.stringify(raw)}: use an ISO date (2026-02-20, 2026-02-20T14:30) or a relative age (7d, 2w).`,
-            }],
-            isError: true,
-          } as any;
+          return text(`invalid ${key} date ${JSON.stringify(raw)}: use an ISO date (2026-02-20, 2026-02-20T14:30) or a relative age (7d, 2w).`, true);
         }
       }
-      const existingDirs = sessionsDirs.filter((sessionsDir) =>
-        fs.existsSync(sessionsDir),
-      );
-      if (existingDirs.length === 0) {
-        return {
-          content: [
-            { type: "text" as const, text: "(no sessions directory found)" },
-          ],
-        } as any;
-      }
 
-      // 1. glob all session files
-      let sessionFiles: string[] = [];
+      let reported = 0;
       try {
-        sessionFiles = [
-          ...new Set(
-            existingDirs.flatMap((sessionsDir) =>
-              listSessionFiles(sessionsDir),
-            ),
-          ),
-        ];
-        sessionFiles = claimCanonicalSessionFiles(sessionFiles);
-      } catch {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "(could not read sessions directory)",
-            },
-          ],
-          isError: true,
-        } as any;
+        await index.refresh(signal, ({ done, total }) => {
+          const now = Date.now();
+          if (now - reported < PROGRESS_EVERY_MS) return;
+          reported = now;
+          onUpdate?.({ content: [{ type: "text", text: `(indexing past sessions: ${done} of ${total})` }] } as any);
+        });
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return text(`(could not read the sessions: ${(error as Error).message})`, true);
       }
 
-      if (sessionFiles.length === 0) {
-        return {
-          content: [{ type: "text" as const, text: "(no sessions found)" }],
-        } as any;
-      }
+      // the first file holding a session id is that session; a copy is not a second one
+      let rows = uniqueBy(index.rows().filter((row) => row.id), (row) => row.id);
+      if (rows.length === 0) return text("(no sessions found)");
 
-      // 2. rg pre-filter if keyword set
-      if (p.keyword) {
-        const matchesByDir = existingDirs.map((sessionsDir) =>
-          rgFilterFiles(p.keyword!, sessionsDir, config.rgTimeoutMs),
-        );
-        if (matchesByDir.every((matches) => matches !== null)) {
-          const matches = new Set(
-            matchesByDir.flatMap((result) => [...result!]),
-          );
-          sessionFiles = sessionFiles.filter((f) => matches.has(f));
-        }
-      }
+      const workspaceFilter = (p.all_workspaces ? undefined : p.workspace || ctx.cwd)?.toLowerCase();
+      if (workspaceFilter) rows = rows.filter((row) => row.cwd.toLowerCase().includes(workspaceFilter));
 
-      // 3. cheap date pre-filter. `after` is about the LAST activity, which the
-      // filename (session start) cannot tell, so it uses the file's mtime.
-      if (dates.after || dates.before) {
-        sessionFiles = sessionFiles.filter((f) => {
-          if (dates.after) {
-            try {
-              if (fs.statSync(f).mtimeMs < dates.after.getTime()) return false;
-            } catch {}
-          }
-          if (dates.before) {
-            // format: 2026-02-20T14-50-17-926Z_uuid.jsonl
-            const tsMatch = path.basename(f).match(/^(\d{4}-\d{2}-\d{2})T/);
-            if (tsMatch?.[1] && new Date(tsMatch[1]) > dates.before) return false;
-          }
-          return true;
+      // `after` is about the LAST activity, which the filename (session start) cannot tell
+      if (dates.after) rows = rows.filter((row) => row.mtimeMs >= dates.after!.getTime());
+      if (dates.before) {
+        rows = rows.filter((row) => {
+          const started = path.basename(row.path).match(/^(\d{4}-\d{2}-\d{2})T/)?.[1];
+          return !started || new Date(started) <= dates.before!;
         });
       }
 
-      // 4. parse and enumerate branches
-      const allBranches: BranchResult[] = [];
-
-      // workspace filter: default to current cwd unless all_workspaces is set
-      const workspaceFilter = p.all_workspaces
-        ? undefined
-        : p.workspace || ctx.cwd;
-
-      for (const file of sessionFiles) {
-        const { header, entries, sessionName } = parseSessionFile(file);
-        if (!header) continue;
-
-        // workspace filter
-        if (
-          workspaceFilter &&
-          !header.cwd.toLowerCase().includes(workspaceFilter.toLowerCase())
-        ) {
-          continue;
-        }
-
-        const branches = enumerateBranches(header, entries, sessionName, file);
-        allBranches.push(...branches);
-      }
-      const uniqueBranches = uniqueBy(
-        allBranches,
-        (branch) => `${branch.sessionId}\0${branch.leafId}`,
-      );
-
-      // 5. filter branches
-      let filtered = uniqueBranches;
-
       if (p.keyword) {
-        filtered = filtered.filter((b) => matchesKeyword(b, p.keyword!));
-      }
-      if (p.file) {
-        filtered = filtered.filter((b) => matchesFile(b, p.file!));
-      }
-      if (p.after || p.before) {
-        filtered = filtered.filter((b) =>
-          matchesDateRange(b, dates.after, dates.before),
-        );
+        const keys = await index.keysContaining(p.keyword, signal);
+        if (keys) rows = rows.filter((row) => keys.has(row.key));
       }
 
-      // 6. sort by most recent leaf timestamp
-      filtered.sort(
-        (a, b) =>
-          new Date(b.timestampEnd).getTime() -
-          new Date(a.timestampEnd).getTime(),
-      );
+      const slice = createSlicer();
+      const allBranches: BranchResult[] = [];
+      for (const row of rows) {
+        signal?.throwIfAborted();
+        const summary = await index.summary(row, signal);
+        if (summary) allBranches.push(...branchesOf(summary, row.path));
+        await slice();
+      }
 
-      // 7. format with head+tail truncation
+      let filtered = uniqueBy(allBranches, (branch) => `${branch.sessionId}\0${branch.leafId}`);
+      if (p.keyword) filtered = filtered.filter((b) => matchesKeyword(b, p.keyword!));
+      if (p.file) filtered = filtered.filter((b) => matchesFile(b, p.file!));
+      if (p.after || p.before) filtered = filtered.filter((b) => matchesDateRange(b, dates.after, dates.before));
+
+      filtered.sort((a, b) => new Date(b.timestampEnd).getTime() - new Date(a.timestampEnd).getTime());
+
       const shown =
-        filtered.length > config.maxResults
-          ? [
-              ...filtered.slice(0, Math.floor(config.maxResults / 2)),
-              ...filtered.slice(-Math.floor(config.maxResults / 2)),
-            ]
+        filtered.length > MAX_RESULTS
+          ? [...filtered.slice(0, MAX_RESULTS / 2), ...filtered.slice(-MAX_RESULTS / 2)]
           : filtered;
-      const truncated =
-        filtered.length > config.maxResults
-          ? filtered.length - shown.length
-          : 0;
-
-      const { text: output } = formatBranchResults(shown, filtered.length);
-      const resultSections = branchesToSections(shown);
+      const truncated = filtered.length - shown.length;
 
       return {
-        content: [{ type: "text" as const, text: output }],
-        details: { resultSections, truncated },
+        content: [{ type: "text" as const, text: formatBranchResults(shown, filtered.length) }],
+        details: { resultSections: branchesToSections(shown), truncated },
       } as any;
     },
 
@@ -673,4 +365,3 @@ export function createSearchSessionsTool(
     },
   };
 }
-

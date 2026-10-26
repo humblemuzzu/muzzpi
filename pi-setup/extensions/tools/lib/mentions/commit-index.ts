@@ -13,9 +13,12 @@ export type CommitLookupResult =
   | { status: "not_found" };
 
 const commitIndexCache = createCache<string, CommitIndex>();
+/** autocomplete asks on every keystroke of an @commit mention; git is run once per cwd. */
+const gitRoots = new Map<string, string | null>();
 
 export function clearCommitIndexCache(): void {
   commitIndexCache.clear();
+  gitRoots.clear();
 }
 
 function runGit(cwd: string, args: string[]): string {
@@ -26,11 +29,16 @@ function runGit(cwd: string, args: string[]): string {
 }
 
 export function resolveGitRoot(cwd: string): string | null {
+  const known = gitRoots.get(cwd);
+  if (known !== undefined) return known;
+  let root: string | null;
   try {
-    return runGit(cwd, ["rev-parse", "--show-toplevel"]);
+    root = runGit(cwd, ["rev-parse", "--show-toplevel"]);
   } catch {
-    return null;
+    root = null;
   }
+  gitRoots.set(cwd, root);
+  return root;
 }
 
 export function parseCommitLog(stdout: string): ResolvedCommitMention[] {

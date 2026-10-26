@@ -110,6 +110,7 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 |---|---|---|
 | `resource-loader.js` | pi core `dist/core/` | suppresses extension tool-conflict boot errors |
 | `session-selector.js` + `keybindings.js` | pi core | session pinning, `Ctrl+B` in `/resume`; pins in `~/.pi/agent/pinned-sessions.json` (user data) |
+| `session-manager.js` + `session-selector-search.js` | pi core | fast `/resume`: a tool result is counted without being decoded, each file's info cached by size+mtime, a session's search text lowercased once; the list and its order stay stock's |
 | `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect; stock connects every enabled server at every session start |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
 | **our bundle** | `dist/muzzpi-bundle/`, `pi` → its `cli.js` | what pi runs: the patched files, bundled; stale after any change to them |
@@ -308,6 +309,14 @@ Never make Grok retype posts by default: it streams ~94 tok/s on grok-4.6, so tw
 90 s. X's citations are the ground truth and arrive however little Grok writes. Grok's copy stays
 for `users` and as the fallback when no source loads. A retired model is replaced from `/v1/models`.
 
+### Nothing heavy on pi's main thread
+
+- **One thread draws, reads keys and runs tools**: read big files in chunks and yield (`createSlicer`).
+  Measure under Node, never Bun (its readline splits on U+2028); `port-harness/frame-timer.ts` logs freezes.
+- **`search_sessions` / `read_session` read `lib/session-index.ts` summaries**, never the history.
+- **`read`'s script copy is byte-exact or refused over 4 MB**: a shortened copy written back cuts the file.
+- **`slim-sessions.ts` rewrites user sessions**: `--dry` first; `--images` is run by hand.
+
 ### searchd — the index behind find and grep
 
 `pi-setup/searchd` (Rust, ripgrep's `ignore`/`grep-*` crates) answers both tools over
@@ -362,6 +371,8 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
 - **The six agent tools render with `renderShell: "self"`** (`lib/agent-inline.ts`): a background
   launch is one line, and its call header hides itself through the row's shared `state`.
   `install.sh` drops `RETIRED_EXTENSIONS` instead of carrying them over.
+- **A parent keeps a child's conversation slimmed** (`slimMessages`) when the child has its own
+  session (`continueId`): never put full transcripts back in `details`.
 - **Models come from `pi-setup/agent-models.json` only** — see Sub-agent models.
 - **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only agent→agent edge is
   `delegate → finder`, depth ≤ 2. chad has no `chad`/`delegate` (a swarm that spawns swarms is a
@@ -425,6 +436,7 @@ back; drop the override only once pi stops sending Claude strict.
   (one lock file per realpath in `~/.pi/agent/locks`, holding pid and time; stale when the pid is
   dead or after 60 s; 10 s wait, then an error naming the holder, `PI_SUBAGENT_ID` for a child).
   Only edit/write take it: bash, format_file and undo_edit can still race a sub-agent.
+- Undo records live 7 days after a session's last edit (`pruneOldChanges`); tests set `PI_FILE_CHANGES_DIR`.
 
 ### bash — nothing runs unbounded
 
@@ -434,8 +446,8 @@ back; drop the override only once pi stops sending Claude strict.
 | L2 | idle kill: no output **and** no CPU for 300s | a hung command |
 | L3 | `startChild` stall watchdog: no child output for 900s | sub-agent children |
 
-Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables),
-`PI_SPAWN_STALL_SEC`, `PI_BASH_CPU_LIVENESS`.
+Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables), `PI_SPAWN_STALL_SEC`,
+`PI_SPAWN_RELEASE_MS` (the 10 s grace, for tests), `PI_BASH_CPU_LIVENESS`.
 
 - **CPU liveness can only keep a command alive, never kill it**; `proc-cpu.ts`
   returns `undefined` on failure, degrading to output-only.
@@ -542,7 +554,7 @@ machinery mapped to pi tools or cut; every subagent they spawn is read-only.
 ## Agent mention directives
 
 `@oracle @finder @codereview @task @chad` → hidden `display: false` directive to call that tool
-(`codereview` → `code_review`, `task` → `delegate`); data mentions add context the same way,
+(`codereview` → `code_review`, `task` → `delegate`); `@commit/<sha>` adds context the same way,
 stored once after the user's message (`before_agent_start`), never re-injected from `context`.
 **Keep the explicit `import "./tools/lib/mentions/agent-source.js"`** in `mentions.ts` (the
 barrel `export *` may not evaluate it). Don't add `/value` to agent mentions.
@@ -559,11 +571,11 @@ barrel `export *` may not evaluate it). Don't add `/value` to agent mentions.
    records it uses (`prompt`+`streamingBehavior`, `abort`, `agent_settled`, dialog requests); pi
    0.84's #7327 silently killed every sub-agent that way. When a release touches model resolution,
    tool filtering, CLI arguments or RPC, call one real sub-agent before declaring it clean.
-3. **pi core update** → re-derive the 4 core patches against the new stock files (never blind-copy;
+3. **pi core update** → re-derive the 6 core patches against the new stock files (never blind-copy;
    see `pi-migrations.md`) + the width patch, then rebuild (`update-pi.sh` does). The
    `@mariozechner/*` compat aliases will eventually go — then rename imports.
 4. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
-   there; `npm ci` (node_modules is gitignored), then `bun test` before deploying.
+   there; `npm ci` (node_modules is gitignored), then `bun test --parallel` before deploying.
 5. **After any pi update, make one real `edit` and `write`**: the wrapper rides
    on pi's `operations` and error strings.
 

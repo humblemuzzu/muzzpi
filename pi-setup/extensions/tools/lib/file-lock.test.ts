@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -7,10 +7,17 @@ import { FILE_LOCK_DIR_ENV, lockFileFor, withProcessLock } from "./file-lock";
 
 const ROOT = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "file-lock-")));
 const LOCKS = path.join(ROOT, "locks");
-process.env[FILE_LOCK_DIR_ENV] = LOCKS;
+const previousLocks = process.env[FILE_LOCK_DIR_ENV];
 const WORKER = path.join(import.meta.dir, "file-lock.test-worker.ts");
 
-afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
+beforeAll(() => {
+	process.env[FILE_LOCK_DIR_ENV] = LOCKS;
+});
+afterAll(() => {
+	if (previousLocks === undefined) delete process.env[FILE_LOCK_DIR_ENV];
+	else process.env[FILE_LOCK_DIR_ENV] = previousLocks;
+	fs.rmSync(ROOT, { recursive: true, force: true });
+});
 beforeEach(() => fs.rmSync(LOCKS, { recursive: true, force: true }));
 
 const leftovers = () => (fs.existsSync(LOCKS) ? fs.readdirSync(LOCKS) : []);
@@ -113,7 +120,7 @@ describe("withProcessLock", () => {
 function run(mode: string, file: string, name: string, count: number): Promise<number> {
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, [WORKER, mode, file, name, String(count)], {
-			env: { ...process.env, [FILE_LOCK_DIR_ENV]: LOCKS, PI_SUBAGENT_ID: `worker-${name}`, PI_TRASH_DIR: path.join(ROOT, ".trash") },
+			env: { ...process.env, [FILE_LOCK_DIR_ENV]: LOCKS, PI_SUBAGENT_ID: `worker-${name}`, PI_TRASH_DIR: path.join(ROOT, ".trash"), PI_FILE_CHANGES_DIR: path.join(ROOT, ".changes") },
 			cwd: ROOT,
 			stdio: "ignore",
 		});

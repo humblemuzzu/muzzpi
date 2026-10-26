@@ -1,11 +1,11 @@
 /**
- * mentions extension — @mention resolution for sessions, commits, handoffs,
- * and agent directives (@oracle, @finder, @codereview, @task).
+ * mentions extension — @mention resolution for commits and agent directives
+ * (@oracle, @finder, @codereview, @task, @chad).
  *
- * data mentions (@session/id, @commit/sha, @handoff/id) add a hidden
- * context message. agent mentions (@oracle, @finder, etc.) add a directive
- * telling the model to call the specified subagent tool. the message is
- * stored in the session once, next to the user's message, and never edited.
+ * a data mention (@commit/sha) adds a hidden context message. agent mentions
+ * (@oracle, @finder, etc.) add a directive telling the model to call the
+ * specified subagent tool. the message is stored in the session once, next to
+ * the user's message, and never edited.
  *
  * ported from bdsqqq/dots mentions extension, adapted for flat-file setup.
  */
@@ -14,14 +14,12 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { contributeHelp } from "./tools/lib/help-channel";
 import {
 	clearCommitIndexCache,
-	clearSessionMentionCache,
 	listMentionSources,
 	MentionAwareProvider,
 	renderResolvedMentionsText,
 	resolveMentions,
 	type ResolvedMention,
 } from "./tools/lib/mentions/index.js";
-import { PI_SESSIONS_DIR } from "./tools/lib/pi-spawn";
 // side-effect import — registers @oracle, @finder, @codereview, @task sources
 import "./tools/lib/mentions/agent-source.js";
 
@@ -71,7 +69,6 @@ export default function mentionsExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		clearPending();
-		clearSessionMentionCache();
 		clearCommitIndexCache();
 
 		if (!ctx.hasUI) return;
@@ -81,7 +78,6 @@ export default function mentionsExtension(pi: ExtensionAPI): void {
 				new MentionAwareProvider({
 					baseProvider: current,
 					cwd: ctx.cwd,
-					sessionsDir: PI_SESSIONS_DIR,
 				}),
 		);
 	});

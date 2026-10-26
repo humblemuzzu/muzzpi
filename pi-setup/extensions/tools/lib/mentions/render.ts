@@ -31,26 +31,6 @@ function summarizeDataMention(
     ].join("\t");
   }
 
-  if ("session" in mention) {
-    const parent = mention.session.parentSessionPath
-      ? `\t${quote(mention.session.parentSessionPath)}`
-      : "";
-
-    return (
-      [
-        mention.token.raw,
-        mention.kind,
-        mention.session.sessionId,
-        mention.session.updatedAt,
-        quote(
-          mention.session.sessionName || mention.session.firstUserMessage,
-        ),
-        quote(mention.session.workspace),
-        quote(mention.session.firstUserMessage),
-      ].join("\t") + parent
-    );
-  }
-
   return "";
 }
 

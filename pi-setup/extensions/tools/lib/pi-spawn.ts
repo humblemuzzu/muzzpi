@@ -26,7 +26,13 @@ import { CACHE_PING_ENTRY } from "./prompt-cache";
 const DEFAULT_STALL_SEC = 900;
 const STALL_TICK_MS = 30_000;
 
-const FORCE_RELEASE_MS = 10_000;
+const DEFAULT_FORCE_RELEASE_MS = 10_000;
+
+/** PI_SPAWN_RELEASE_MS shortens the grace after a kill or a settle (tests use it). */
+export function forceReleaseMs(): number {
+	const parsed = Number(process.env.PI_SPAWN_RELEASE_MS);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_FORCE_RELEASE_MS;
+}
 
 function stallSec(): number {
 	const raw = process.env.PI_SPAWN_STALL_SEC;
@@ -205,15 +211,31 @@ function resolveSessionArgs(session: SpawnSessionConfig | undefined): {
 	return { args: ["--session-dir", session.dir, "--session-id", session.id], meta: { continueId: session.id, sessionDir: session.dir } };
 }
 
-function readSessionHeader(file: string): { id?: unknown; cwd?: unknown; timestamp?: unknown } | undefined {
+export interface SessionHeader {
+	type: "session";
+	id: string;
+	timestamp: string;
+	cwd: string;
+	parentSession?: string;
+}
+
+/** A session file's header from its first bytes: the first line, when it is one. */
+export function parseSessionHeader(bytes: Buffer): SessionHeader | undefined {
+	const end = bytes.indexOf(0x0a);
+	try {
+		const header = JSON.parse(bytes.subarray(0, end === -1 ? bytes.length : end).toString("utf8"));
+		return header?.type === "session" && typeof header.id === "string" ? header : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readSessionHeader(file: string): SessionHeader | undefined {
 	let fd: number | undefined;
 	try {
 		fd = fs.openSync(file, "r");
 		const buf = Buffer.alloc(4096);
-		const n = fs.readSync(fd, buf, 0, buf.length, 0);
-		const firstLine = buf.subarray(0, n).toString("utf-8").split("\n")[0] ?? "";
-		const header = JSON.parse(firstLine);
-		return header?.type === "session" ? header : undefined;
+		return parseSessionHeader(buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)));
 	} catch {
 		return undefined;
 	} finally {
@@ -450,7 +472,7 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 	const scheduleRelease = () => {
 		if (releaseScheduled) return;
 		releaseScheduled = true;
-		later(FORCE_RELEASE_MS, () => release(1));
+		later(forceReleaseMs(), () => release(1));
 	};
 	const terminate = (signal: NodeJS.Signals) => {
 		scheduleRelease();

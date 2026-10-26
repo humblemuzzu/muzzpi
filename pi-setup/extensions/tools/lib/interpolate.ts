@@ -26,13 +26,19 @@ export function findGitRoot(dir: string): string {
 	}
 }
 
-/** try to get the git remote origin URL for a directory. */
+const remoteUrls = new Map<string, string>();
+
+/** the git remote origin URL of a directory, read once: the prompt is built every turn and must not change mid-session. */
 export function getGitRemoteUrl(dir: string): string {
+	let url = remoteUrls.get(dir);
+	if (url !== undefined) return url;
 	try {
-		return execSync("git remote get-url origin", { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+		url = execSync("git remote get-url origin", { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
 	} catch {
-		return "";
+		url = "";
 	}
+	remoteUrls.set(dir, url);
+	return url;
 }
 
 /** extra context from the parent pi session — fields are empty when the API doesn't expose them. */

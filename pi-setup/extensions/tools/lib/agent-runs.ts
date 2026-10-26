@@ -23,7 +23,7 @@ import {
 import { finishedResult, progressUpdate, sessionIdOf, toolError } from "./run-sub-agent";
 import { repairInterrupted, subAgentSessionFile } from "./session-repair";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
-import { clip, getFinalOutput, toolArgSummary, type SingleResult } from "./sub-agent-render";
+import { clip, getFinalOutput, slimMessages, toolArgSummary, type SingleResult } from "./sub-agent-render";
 import { resolveParam } from "./params";
 
 export const AGENT_RUN_ENTRY = "agent-run";
@@ -581,7 +581,7 @@ export class AgentRuns {
 			usage: r.usage,
 			stopReason: r.stopReason,
 			errorMessage: run.failure,
-			messages: r.messages,
+			messages: slimMessages(r.messages),
 		};
 	}
 

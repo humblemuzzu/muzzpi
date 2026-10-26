@@ -92,6 +92,19 @@ export function recordReturnedImages(ctx: any, toolCallId: string, bytes: number
   pending.set(key, calls);
 }
 
+/** A persisted message never changes, so its JSON size is measured once. */
+const messageBytes = new WeakMap<object, number>();
+
+function jsonBytes(message: unknown): number {
+  if (!message || typeof message !== "object") return Buffer.byteLength(JSON.stringify(message) ?? "null");
+  let bytes = messageBytes.get(message);
+  if (bytes === undefined) {
+    bytes = Buffer.byteLength(JSON.stringify(message));
+    messageBytes.set(message, bytes);
+  }
+  return bytes;
+}
+
 /** What the next request will carry. Undefined when the session cannot be read. */
 export function measureSession(ctx: any): SessionImageUsage | undefined {
   let messages: any[];
@@ -112,7 +125,8 @@ export function measureSession(ctx: any): SessionImageUsage | undefined {
     for (const block of message.content) if (block?.type === "image") images += 1;
   }
 
-  let requestBytes = Buffer.byteLength(JSON.stringify(messages));
+  // the bytes of JSON.stringify(messages): the elements plus brackets and commas
+  let requestBytes = messages.reduce((sum: number, message: unknown) => sum + jsonBytes(message), 2 + Math.max(0, messages.length - 1));
   try {
     requestBytes += Buffer.byteLength(String(ctx.getSystemPrompt?.() ?? ""));
   } catch {

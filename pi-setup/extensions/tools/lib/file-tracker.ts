@@ -18,7 +18,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { moveToTrash } from "./trash";
 
-const FILE_CHANGES_DIR = path.join(os.homedir(), ".pi", "file-changes");
+/** PI_FILE_CHANGES_DIR moves the records: tests keep theirs out of the real ones with it. */
+export function fileChangesDir(): string {
+	return process.env.PI_FILE_CHANGES_DIR || path.join(os.homedir(), ".pi", "file-changes");
+}
+
+/** a session's records are kept this long after its last edit. */
+export const CHANGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface FileChange {
 	/** unique id for this change record */
@@ -75,7 +81,39 @@ export interface FileChange {
 }
 
 function sessionDir(sessionId: string): string {
-	return path.join(FILE_CHANGES_DIR, sessionId);
+	return path.join(fileChangesDir(), sessionId);
+}
+
+/** `<owner id>.<uuid>`, as changePath names a record */
+const RECORD_NAME = /^.+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Drops the records of every session whose last edit is older than `maxAgeMs`,
+ * except `keepSessionId`'s. A session folder's mtime moves with each record it
+ * gains; a folder holding anything but records is never touched. Returns how
+ * many sessions were dropped.
+ */
+export async function pruneOldChanges(keepSessionId: string, maxAgeMs = CHANGE_RETENTION_MS, now = Date.now()): Promise<number> {
+	const root = fileChangesDir();
+	let entries: fs.Dirent[];
+	try {
+		entries = await fs.promises.readdir(root, { withFileTypes: true });
+	} catch {
+		return 0;
+	}
+	let dropped = 0;
+	for (const entry of entries) {
+		if (!entry.isDirectory() || entry.name === keepSessionId) continue;
+		const dir = path.join(root, entry.name);
+		try {
+			if ((await fs.promises.stat(dir)).mtimeMs >= now - maxAgeMs) continue;
+			const names = await fs.promises.readdir(dir);
+			if (names.length === 0 || !names.every((name) => RECORD_NAME.test(name))) continue;
+			await fs.promises.rm(dir, { recursive: true, force: true });
+			dropped++;
+		} catch {}
+	}
+	return dropped;
 }
 
 /**
@@ -124,7 +162,7 @@ export function saveChange(
 		reverted: false,
 		seq: seq++,
 	};
-	fs.writeFileSync(changePath(sessionId, toolCallId, id), JSON.stringify(record, null, 2), "utf-8");
+	fs.writeFileSync(changePath(sessionId, toolCallId, id), JSON.stringify(record), "utf-8");
 	return id;
 }
 
@@ -237,7 +275,7 @@ export function revertChange(sessionId: string, toolCallId: string, changeId: st
 
 	// mark as reverted on disk
 	change.reverted = true;
-	fs.writeFileSync(p, JSON.stringify(change, null, 2), "utf-8");
+	fs.writeFileSync(p, JSON.stringify(change), "utf-8");
 
 	return change;
 }
@@ -359,7 +397,7 @@ export function reapplyChange(
 	}
 
 	change.reverted = false;
-	fs.writeFileSync(p, JSON.stringify(change, null, 2));
+	fs.writeFileSync(p, JSON.stringify(change));
 	return change;
 }
 

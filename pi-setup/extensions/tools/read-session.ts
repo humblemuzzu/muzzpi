@@ -10,19 +10,16 @@
  * in the rendered output so the agent knows which path to focus on.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { PI_SESSIONS_DIR, SUB_AGENT_SESSION_DIR } from "./lib/pi-spawn";
 import { emptyAgentModels, mainRoute, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
 import { runSubAgent, toolError } from "./lib/run-sub-agent";
 import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
 import { headTailChars } from "./lib/output-buffer";
+import { createSlicer, forEachLine, listSessionFiles, readSessionHeader, sessionRoots } from "./lib/session-index";
 
-/** sub-agent sessions are included so a continueId from a delegate result is readable. */
-const ALL_SESSION_DIRS = [PI_SESSIONS_DIR, SUB_AGENT_SESSION_DIR];
 const MAX_CHARS = 120_000;
 
 const DEFAULT_SYSTEM_PROMPT = `You are analyzing a pi coding agent session transcript. Extract information relevant to the user's goal. Be specific — cite file paths, decisions made, code patterns discussed. If a specific branch is marked as the target, focus on that branch but use other branches for context about what was tried and abandoned.`;
@@ -60,81 +57,52 @@ interface MessageContent {
 
 // --- session rendering ---
 
-function findSessionFile(sessionId: string): string | null {
-	const roots = ALL_SESSION_DIRS.filter((dir) => fs.existsSync(dir));
-	if (roots.length === 0) return null;
-
-	const walkDir = (dir: string): string | null => {
-		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-			const full = path.join(dir, entry.name);
-			if (entry.isDirectory()) {
-				const found = walkDir(full);
-				if (found) return found;
-			} else if (entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
-				return full;
-			}
-		}
-		return null;
-	};
-
-	// fast path: check filename contains session id
-	for (const root of roots) {
-		const found = walkDir(root);
-		if (found) return found;
-	}
-
-	// slow path: parse headers
-	const walkAndParse = (dir: string): string | null => {
-		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-			const full = path.join(dir, entry.name);
-			if (entry.isDirectory()) {
-				const f = walkAndParse(full);
-				if (f) return f;
-			} else if (entry.name.endsWith(".jsonl")) {
-				try {
-					const firstLine = fs.readFileSync(full, "utf-8").split("\n")[0];
-					const header = JSON.parse(firstLine);
-					if (header.type === "session" && header.id === sessionId) return full;
-				} catch { /* skip */ }
-			}
-		}
-		return null;
-	};
-
-	for (const root of roots) {
-		const found = walkAndParse(root);
-		if (found) return found;
+/** A file named with the id wins (main sessions first); otherwise the file whose header carries it. */
+/** sub-agent sessions are searched too, so a continueId from a delegate result is readable. */
+export async function findSessionFile(sessionId: string, signal?: AbortSignal, roots = sessionRoots()): Promise<string | null> {
+	const files = await listSessionFiles(roots);
+	const named = files.find((file) => path.basename(file).includes(sessionId));
+	if (named) return named;
+	const slice = createSlicer();
+	for (const file of files) {
+		signal?.throwIfAborted();
+		if ((await readSessionHeader(file))?.id === sessionId) return file;
+		await slice();
 	}
 	return null;
 }
 
-function renderSessionTree(
+export async function renderSessionTree(
 	filePath: string,
 	targetLeafId?: string,
-): { markdown: string; sessionName: string; sessionId: string } {
-	const raw = fs.readFileSync(filePath, "utf-8");
-	const lines = raw.split("\n").filter((l) => l.trim());
-
+	signal?: AbortSignal,
+): Promise<{ markdown: string; sessionName: string; sessionId: string }> {
 	const entries: SessionEntry[] = [];
 	let sessionId = "";
 	let sessionName = "";
 	let cwd = "";
 	let timestamp = "";
 
-	for (const line of lines) {
+	const slice = createSlicer();
+	await forEachLine(filePath, async (line) => {
+		await slice();
+		let entry: any;
 		try {
-			const entry = JSON.parse(line);
-			if (entry.type === "session") {
-				sessionId = entry.id;
-				cwd = entry.cwd || "";
-				timestamp = entry.timestamp || "";
-			}
-			if (entry.type === "session_info" && entry.name) {
-				sessionName = entry.name;
-			}
-			if (entry.id) entries.push(entry);
-		} catch { /* skip */ }
-	}
+			entry = JSON.parse(line.toString("utf8"));
+		} catch {
+			return;
+		}
+		if (!entry || typeof entry !== "object") return;
+		if (entry.type === "session") {
+			sessionId = entry.id;
+			cwd = entry.cwd || "";
+			timestamp = entry.timestamp || "";
+		}
+		if (entry.type === "session_info" && entry.name) {
+			sessionName = entry.name;
+		}
+		if (entry.id) entries.push(entry);
+	}, signal);
 
 	// build tree
 	const byId = new Map<string, SessionEntry>();
@@ -317,10 +285,10 @@ export function createReadSessionTool(config: ReadSessionConfig = {}): ToolDefin
 			const route = resolveRoute(models, "read_session", params, ctx.modelRegistry, false, mainRoute(ctx.model));
 			if ("error" in route) return toolError(route.error);
 
-			const sessionFile = findSessionFile(params.session_id);
+			const sessionFile = await findSessionFile(params.session_id, signal);
 			if (!sessionFile) return toolError(`session not found: ${params.session_id}`);
 
-			const { markdown } = renderSessionTree(sessionFile, params.leaf_id);
+			const { markdown } = await renderSessionTree(sessionFile, params.leaf_id, signal);
 			if (!markdown.trim()) {
 				return { content: [{ type: "text" as const, text: "(session is empty)" }] } as any;
 			}
