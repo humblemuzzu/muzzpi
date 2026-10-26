@@ -16,7 +16,7 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { PI_SESSIONS_DIR, SUB_AGENT_SESSION_DIR } from "./lib/pi-spawn";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
+import { emptyAgentModels, mainRoute, modelParams, resolveRoute, type AgentModels } from "./lib/agent-models";
 import { runSubAgent, toolError } from "./lib/run-sub-agent";
 import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
 import { headTailChars } from "./lib/output-buffer";
@@ -314,7 +314,7 @@ export function createReadSessionTool(config: ReadSessionConfig = {}): ToolDefin
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const route = resolveRoute(models, "read_session", params, ctx.modelRegistry);
+			const route = resolveRoute(models, "read_session", params, ctx.modelRegistry, false, mainRoute(ctx.model));
 			if ("error" in route) return toolError(route.error);
 
 			const sessionFile = findSessionFile(params.session_id);

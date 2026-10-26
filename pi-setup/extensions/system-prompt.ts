@@ -13,6 +13,7 @@ import { readAgentPrompt } from "./tools/lib/pi-spawn";
 import { piPackageDir } from "./tools/lib/pi-package-dir";
 import { interpolatePromptVars } from "./tools/lib/interpolate";
 import { describeAgentModels, loadAgentModels } from "./tools/lib/agent-models";
+import { isLocalProvider } from "./tools/lib/local-providers";
 import {
 	buildSubAgentPrompt,
 	parseToolList,
@@ -74,7 +75,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		if (ctx.model?.provider === "llama-local" || ctx.model?.provider === "llama.cpp") return;
+		if (isLocalProvider(ctx.model?.provider)) return;
 
 		options.customPrompt = interpolatePromptVars(body, ctx.cwd, {
 			sessionId: ctx.sessionManager.getSessionId(),

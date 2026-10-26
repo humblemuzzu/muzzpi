@@ -24,6 +24,7 @@ import { createBashTool } from "./bash";
 import { createRedoEditTool, createUndoEditTool } from "./undo-edit";
 import { createFormatFileTool } from "./format-file";
 import { createSkillTool } from "./skill";
+import { isLocalProvider } from "./lib/local-providers";
 import { createScreenshotTool } from "./screenshot";
 import { createFinderTool } from "./finder";
 import { createOracleTool } from "./oracle";
@@ -209,7 +210,7 @@ export default function (pi: ExtensionAPI) {
 	);
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (ctx.model?.provider === "llama-local" || ctx.model?.provider === "llama.cpp") return;
+		if (isLocalProvider(ctx.model?.provider)) return;
 
 		const secrets = await loadSecrets();
 		if (secrets.length === 0) return;

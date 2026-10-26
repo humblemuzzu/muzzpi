@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { subAgentSessionFile, INTERRUPTED_RESULT, repairInterrupted } from "./session-repair";
+import { savedSessionModel, subAgentSessionFile, INTERRUPTED_RESULT, repairInterrupted } from "./session-repair";
 
 let dir: string;
 
@@ -69,5 +69,18 @@ describe("subAgentSessionFile", () => {
 		expect(subAgentSessionFile(dir, "delegate-find-1")).toBe(file);
 		expect(subAgentSessionFile(dir, "delegate-find")).toBeUndefined();
 		expect(subAgentSessionFile(join(dir, "missing"), "x")).toBeUndefined();
+	});
+});
+
+describe("savedSessionModel", () => {
+	test("is what the branch last ran on or switched to, and nothing for a conversation never saved", () => {
+		const manager = SessionManager.create(dir, dir, { id: "oracle-model" });
+		manager.appendModelChange("openai-codex", "gpt-6-astra");
+		manager.appendMessage(user("go") as any);
+		manager.appendMessage(assistant([{ type: "text", text: "hi" }], "stop") as any);
+		expect(savedSessionModel(dir, "oracle-model")).toBe("deepseek/deepseek-flash");
+		manager.appendModelChange("anthropic", "claude-opus-5-5");
+		expect(savedSessionModel(dir, "oracle-model")).toBe("anthropic/claude-opus-5-5");
+		expect(savedSessionModel(dir, "oracle-never")).toBeUndefined();
 	});
 });

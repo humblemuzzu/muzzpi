@@ -6,13 +6,16 @@ import {
 	auditAgentModels,
 	describeAgentModels,
 	emptyAgentModels,
+	followingAgents,
 	loadAgentModels,
 	modelParams,
 	modelViolation,
 	normalizeThinking,
 	parseAgentModels,
+	readModelSource,
 	resolveRoute,
 	SUB_AGENTS,
+	writeModelSource,
 	type ModelCatalog,
 	type Route,
 } from "./agent-models";
@@ -287,5 +290,78 @@ describe("modelViolation: the child must run on exactly what was asked for", () 
 		for (const { id } of Object.values(shipped.models)) {
 			if (/claude|sonnet|opus|haiku/i.test(id)) expect(id.startsWith("anthropic/")).toBe(true);
 		}
+	});
+
+	test("a resume may run on the model its conversation was saved on, even one outside the list", () => {
+		expect(modelViolation("openai-codex/gpt-6-astra", undefined, shipped, "openai-codex/gpt-6-astra")).toBeUndefined();
+		expect(modelViolation("openai-codex/gpt-6-astra", undefined, shipped, "openai-codex/gpt-5.6-sol")).toContain("not one of the models");
+		expect(modelViolation("openai-codex/gpt-6-astra", "anthropic/claude-opus-5-5", shipped, "openai-codex/gpt-6-astra")).toContain("stopped");
+	});
+});
+
+describe("following the main session's model", () => {
+	const config = parseAgentModels({
+		models: { sonnet: { id: "anthropic/claude-sonnet-5-5" }, flash: { id: "deepseek/deepseek-flash" }, main: { id: "$main" } },
+		agents: {
+			oracle: { model: "sonnet", thinking: "high", followMain: true },
+			chad: { model: "flash", thinking: "high" },
+		},
+	});
+	const opus = { provider: "anthropic", id: "claude-opus-5-5" };
+	const onMain = { model: opus, source: "main" as const };
+	const onList = { model: opus, source: "list" as const };
+
+	test("$main and followMain parse, and the catalog is never asked about $main", () => {
+		expect(config.problems).toEqual([]);
+		expect(followingAgents(config)).toEqual(["oracle"]);
+		const cat = catalog();
+		expect(auditAgentModels(config, cat)).toEqual([]);
+		expect(cat.calls).toEqual(["anthropic|claude-sonnet-5-5", "deepseek|deepseek-flash"]);
+		expect(parseAgentModels({ models: {}, agents: { oracle: { followMain: "yes" } } }).problems[0]).toContain("followMain");
+	});
+
+	test("the list source keeps every agent on its own model", () => {
+		expect(resolveRoute(config, "oracle", {}, catalog(), false, onList)).toEqual({ model: "anthropic/claude-sonnet-5-5", thinking: "high" });
+	});
+
+	test("the main source moves only followMain agents, keeping their thinking level", () => {
+		expect(resolveRoute(config, "oracle", {}, catalog(), false, onMain)).toEqual({ model: "anthropic/claude-opus-5-5", thinking: "high" });
+		expect(resolveRoute(config, "chad", {}, catalog(), false, onMain)).toEqual({ model: "deepseek/deepseek-flash", thinking: "high" });
+	});
+
+	test("an explicit model beats following, and `main` can be named whatever the source", () => {
+		expect(resolveRoute(config, "oracle", { model: "flash" }, catalog(), false, onMain)).toEqual({ model: "deepseek/deepseek-flash", thinking: "high" });
+		expect(resolveRoute(config, "chad", { model: "main" }, catalog(), false, onList)).toEqual({ model: "anthropic/claude-opus-5-5", thinking: "high" });
+	});
+
+	test("a resume keeps its own model unless one is named", () => {
+		expect(resolveRoute(config, "oracle", {}, catalog(), true, onMain)).toEqual({ thinking: undefined });
+		expect(resolveRoute(config, "oracle", { model: "main" }, catalog(), true, onMain)).toEqual({ model: "anthropic/claude-opus-5-5", thinking: undefined });
+	});
+
+	test("a local main model is not followed, and `main` without one is refused only when named", () => {
+		const local = { model: { provider: "llama-local", id: "LFM2.5-2.6B" }, source: "main" as const };
+		expect(resolveRoute(config, "oracle", {}, catalog(), false, local)).toEqual({ model: "anthropic/claude-sonnet-5-5", thinking: "high" });
+		const none = { model: undefined, source: "main" as const };
+		expect(resolveRoute(config, "oracle", {}, catalog(), false, none)).toEqual({ model: "anthropic/claude-sonnet-5-5", thinking: "high" });
+		expect("error" in resolveRoute(config, "chad", { model: "main" }, catalog(), false, none)).toBe(true);
+	});
+
+	test("the prompt and schema say what main is and which agents can follow it", () => {
+		const text = describeAgentModels(config);
+		expect(text).toContain("`main` — the model the main session is on");
+		expect(text).toContain("oracle → sonnet · high, or the main session's model");
+		expect(text).toContain("chad → flash · high;");
+		expect((modelParams(config, "oracle") as any).model.description).toContain("or the main session's model");
+		expect((modelParams(config, "chad") as any).model.description).not.toContain("main session");
+	});
+
+	test("the source is saved as a pref and anything but main reads as list", () => {
+		const file = join(mkdtempSync(join(tmpdir(), "model-source-")), "cache", "agent-models.json");
+		expect(readModelSource(file)).toBe("list");
+		writeModelSource("main", file);
+		expect(readModelSource(file)).toBe("main");
+		writeFileSync(file, JSON.stringify({ source: "opus" }));
+		expect(readModelSource(file)).toBe("list");
 	});
 });

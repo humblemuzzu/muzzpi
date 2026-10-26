@@ -91,7 +91,7 @@ export class TranscriptRenderer {
 			const shown = options.full ? all : all.slice(0, RESULT_PREVIEW_LINES);
 			const color = (message as { isError?: unknown }).isError === true ? "error" : "dim";
 			for (const line of shown) lines.push(...wrapTextWithAnsi(theme.fg(color, `    ${line}`), width));
-			if (all.length > shown.length) lines.push(theme.fg("muted", `    … ${all.length - shown.length} more lines (f to show all)`));
+			if (all.length > shown.length) lines.push(theme.fg("muted", `    … ${all.length - shown.length} more lines (ctrl+o shows all)`));
 			return lines;
 		}
 		for (const block of blocksOf(message)) {

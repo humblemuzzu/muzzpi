@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/command-args";
 import { canShowMenu, type MenuItem, menuAsText, showMenu } from "../tools/lib/command-menu";
 import { contributeHelp } from "../tools/lib/help-channel";
+import { YSK_PROMPT_PREFIX } from "../tools/lib/injected-prompts";
 import {
 	CHECK_EVERY_TURNS,
 	FREE_IGNORES,
@@ -288,7 +289,7 @@ export default function (pi: ExtensionAPI) {
 			.flatMap((line) => line.split("\n"))
 			.map((line) => `> ${line}`)
 			.join("\n");
-		pi.sendUserMessage(`A side agent flagged this while you were working:\n\n${quoted}`, { deliverAs: "followUp" });
+		pi.sendUserMessage(`${YSK_PROMPT_PREFIX}\n\n${quoted}`, { deliverAs: "followUp" });
 	};
 
 	const NOTE_ANSWERS: MenuItem[] = [

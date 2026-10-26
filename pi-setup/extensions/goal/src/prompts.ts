@@ -1,7 +1,6 @@
 import { formatDuration, formatTokenValue } from "./format.ts";
 import type { ThreadGoal } from "./types.ts";
-
-const CONTINUATION_MARKER_PREFIX = "<pi_goal_continuation goal_id=\"";
+import { GOAL_CONTINUATION_PREFIX as CONTINUATION_MARKER_PREFIX } from "../../tools/lib/injected-prompts.ts";
 
 const COMPLETION_AUDIT_CHECKLIST_LINES = [
   "- Restate the objective as concrete deliverables or success criteria.",

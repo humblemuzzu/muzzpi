@@ -15,6 +15,7 @@ import { closeSync, openSync, readSync, statSync } from "fs";
 import * as os from "os";
 import { completeWords, findWord, splitArgs, type Word } from "./tools/lib/command-args";
 import { canShowMenu, type MenuItem, menuAsText, showMenu } from "./tools/lib/command-menu";
+import { isLocalProvider } from "./tools/lib/local-providers";
 import { SUB_AGENT_TOOLS_ENV } from "./tools/lib/sub-agent-prompt";
 
 const PROVIDER_ID = "llama-local";
@@ -390,7 +391,7 @@ export default function localModelExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (_event: any, ctx: any) => {
-		if (ctx.model?.provider !== PROVIDER_ID && ctx.model?.provider !== "llama.cpp") return;
+		if (!isLocalProvider(ctx.model?.provider)) return;
 		if (process.env[SUB_AGENT_TOOLS_ENV]?.trim()) return;
 		return { systemPrompt: BARE_SYSTEM_PROMPT };
 	});

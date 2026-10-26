@@ -51,7 +51,7 @@ describe("the transcript", () => {
 		expect(text).toContain("✕ Bash grep -rn refresh src");
 		expect(text).toContain("    line 6\n");
 		expect(text).not.toContain("line 7\n");
-		expect(text).toContain("… 14 more lines (f to show all)");
+		expect(text).toContain("… 14 more lines (ctrl+o shows all)");
 		expect(text).toContain("Result");
 		expect(text).not.toContain("**");
 	});

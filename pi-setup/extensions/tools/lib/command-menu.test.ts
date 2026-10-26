@@ -88,6 +88,16 @@ describe("keys", () => {
 		expect(result()).toEqual({ id: "add", values: { tools: "off" } });
 	});
 
+	test("onChange hears every setting change as it happens, so esc keeps it", () => {
+		const changes: Array<[string, string]> = [];
+		const { menu, result } = open({ ...spec, onChange: (id, value) => changes.push([id, value]) });
+		menu.handleInput("3");
+		menu.handleInput("\x1b[C");
+		menu.handleInput("\x1b");
+		expect(changes).toEqual([["tools", "on"], ["tools", "off"]]);
+		expect(result()).toBeUndefined();
+	});
+
 	test("esc and ctrl+c close without a choice", () => {
 		for (const key of ["\x1b", "\x03"]) {
 			const { menu, result } = open();

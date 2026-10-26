@@ -237,6 +237,7 @@ holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
 | `ideas/` | `/idea <text>` parks an idea per project, `pi:` in front (or any idea in the repo holding `pi-setup/extensions/ideas`) files it under the harness; `/idea` lists. `<agent dir>/ideas/*.jsonl` is append-only user data, never rewritten; the `.md` views are regenerated. `cli.js` is herdr's ⌘I popup. Parent only |
+| `focus/` | `/focus`, Ctrl+Shift+H: covers only pi's fullscreen chat rows (`viewport.ts` reads pi-tui's private chat height; `verify-patches.sh` checks it) with the session as prompts and answers. It holds the keyboard so pi does not scroll the hidden chat and **forwards every key it does not own to pi's editor**. Goal and /ysk prompts are recognised by `tools/lib/injected-prompts.ts`: their senders must build them from it. Parent only |
 | `goal/` | `/goal` (`/goal strict <task>` sends `create-goal.md`) and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it. A continuation delivered after its goal stopped is rewritten once and stored as a `context_edit`; ones that ran are never rewritten |
 | `tools/` | custom tools |
 
@@ -510,7 +511,9 @@ edit there, deployed by `install.sh`, read at session start.
 - **pi's `--model` resolver can fall back to another provider's look-alike**, so `pi-spawn.ts`
   SIGKILLs a child whose first assistant message names another provider/model than requested, or,
   with none requested, one not in `agent-models.json` (`modelViolation`). Keep every Claude id
-  `anthropic/`. Ids must be provider-qualified; a `continueId` resume keeps the child's model.
+  `anthropic/`. Ids must be provider-qualified; a `continueId` resume keeps the child's model, listed or not.
+- **`"$main"` is the main session's model at launch.** `followMain` agents default to it only while
+  `/agents models main` is set (a pref read per launch, default `list`): **never put it in the prompt or a schema**.
 
 ## Local models
 

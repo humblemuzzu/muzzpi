@@ -232,19 +232,29 @@ else
          "bash pi-setup/install.sh, then trash $PI_AGENT/extensions/subagent-inspector if it remains"
 fi
 
+# focus mode covers exactly pi's fullscreen chat rows, read from pi-tui's private getPrimaryScrollView()
+PI_TUI_DIST="$PI_PKG/node_modules/@earendil-works/pi-tui/dist"
+if grep -q "getPrimaryScrollView() {" "$PI_TUI_DIST/tui-alt-screen.js" 2>/dev/null && \
+   grep -q "get viewportHeight()" "$PI_TUI_DIST/components/scroll-view.js" 2>/dev/null; then
+    pass "focus: pi-tui still exposes the fullscreen chat height focus mode sizes itself to"
+else
+    fail "focus: pi-tui no longer has getPrimaryScrollView()/viewportHeight, so focus mode cannot size itself" \
+         "re-derive extensions/focus/viewport.ts against the new pi-tui (cd pi-setup/extensions && bun test focus/viewport.test.ts)"
+fi
+
 # ── sub-agents: agent-models.json loads cleanly and every model is in pi's catalog ──
 # Parsed by the loader the tools bundle is built from, so this cannot drift from
 # what the tools read. `pi --list-models` lists only providers you are logged in
 # to: a provider with nothing listed is a login still to do, not a broken model.
 AM_REPORT=$(cd "$SCRIPT_DIR/extensions/tools" 2>/dev/null && bun -e '
-const { loadAgentModels } = await import("./lib/agent-models.ts");
+const { loadAgentModels, MAIN_MODEL_ID } = await import("./lib/agent-models.ts");
 const { execFileSync } = await import("node:child_process");
 const config = loadAgentModels();
 const listed = new Set(execFileSync("pi", ["--list-models"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
   .split("\n").map((l) => l.trim().split(/\s+/)).filter((c) => c.length > 1).map(([p, m]) => `${p}/${m}`));
 const provider = (id) => id.split("/")[0];
 const providers = new Set([...listed].map(provider));
-const missing = Object.entries(config.models).filter(([, m]) => !listed.has(m.id));
+const missing = Object.entries(config.models).filter(([, m]) => m.id !== MAIN_MODEL_ID && !listed.has(m.id));
 const unknown = missing.filter(([, m]) => providers.has(provider(m.id))).map(([n, m]) => `${n} → ${m.id}: pi has no such model`);
 console.log(`problems:${[...config.problems, ...unknown].join("; ")}`);
 console.log(`login:${[...new Set(missing.map(([, m]) => provider(m.id)).filter((p) => !providers.has(p)))].join(", ")}`);

@@ -26,6 +26,8 @@ export interface MenuSpec {
 	items: readonly MenuItem[];
 	/** id of the row the cursor starts on */
 	initial?: string;
+	/** called as a setting row changes, so the change holds even when the menu is closed with esc */
+	onChange?(id: string, value: string): void;
 }
 
 export interface MenuChoice {
@@ -124,7 +126,9 @@ export class CommandMenu {
 	private step(delta: number): void {
 		const options = this.spec.items[this.row]!.values!;
 		const at = Math.max(0, options.indexOf(this.values[this.row]!));
-		this.values[this.row] = options[(at + delta + options.length) % options.length]!;
+		const value = options[(at + delta + options.length) % options.length]!;
+		this.values[this.row] = value;
+		this.spec.onChange?.(this.spec.items[this.row]!.id, value);
 		this.changed();
 	}
 

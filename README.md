@@ -143,7 +143,9 @@ Pick by what you need back:
   parallel"* runs exactly that. Models live in one file,
   [`agent-models.json`](pi-setup/agent-models.json); a name not on it is refused,
   never swapped for the nearest one. Every result ends with the model and
-  thinking level that actually ran.
+  thinking level that actually ran. `/agents models main` moves delegate, oracle
+  and code_review onto whatever model your main session is on; `/agents models list`
+  (the default) puts them back.
 - **chad cannot write.** No `edit` or `write`, and its bash runs under an
   allowlist that refuses redirection, `sed -i`, interpreters and every git
   command that mutates. Finding out is chad; doing is delegate.
@@ -241,7 +243,8 @@ mentions a token stays readable.
 | `/stats` | `Ctrl+Shift+S` | usage dashboard, reports, a monthly budget |
 | `/theme` | `Ctrl+Shift+K` | live theme and Ghostty preview; `/theme <name>` switches straight away |
 | `/hud` | `Ctrl+Shift+I` | more detail under the prompt |
-| `/agents` | `Ctrl+Shift+A` | background agents: list, full-screen view of each, steer / stop / continue |
+| `/focus` | `Ctrl+Shift+H` | focus mode: the chat area shows your prompts and the agent's answers, the work one tab away, every prompt of the session searchable (before compactions, on every `/tree` branch); pi's own prompt stays below, so everything still works; `/focus on` starts every session in it |
+| `/agents` | `Ctrl+Shift+A` | background agents: list, full-screen view of each, steer / stop / continue; `/agents models` picks their models |
 | `/ysk` | `Ctrl+Shift+Y` | a side agent that flags what you missed; off until `/ysk on` |
 | `/idea` | | park an idea for this project (`pi:` in front files it under the harness); `/idea` alone lists them ([more](herdr/README.md#idea-park-a-thought-keep-working)) |
 | `/goal` | | a long-running goal, audited before it is marked done; `/goal strict <task>` has the agent write it |

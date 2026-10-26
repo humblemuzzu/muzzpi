@@ -11,8 +11,45 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "@sinclair/typebox";
+import { isLocalProvider } from "./local-providers";
+import { prefsFile, readPrefs, writePrefs } from "./prefs";
 
 export const AGENT_MODELS_FILE = path.join(os.homedir(), ".pi", "agent", "agent-models.json");
+
+/** the `id` that stands for the model the main session is on when the agent starts */
+export const MAIN_MODEL_ID = "$main";
+
+/**
+ * Where agents marked `followMain` get their default: `list` is their own preset,
+ * `main` the main session's model. Read on every launch, so a change applies to
+ * the next agent without touching the prompt or the tool schemas.
+ */
+export type ModelSource = "list" | "main";
+
+const SOURCE_PREFS = "agent-models";
+
+export function readModelSource(file: string = prefsFile(SOURCE_PREFS)): ModelSource {
+	return readPrefs(file).source === "main" ? "main" : "list";
+}
+
+export function writeModelSource(source: ModelSource, file: string = prefsFile(SOURCE_PREFS)): void {
+	writePrefs(file, { source });
+}
+
+export interface MainModel {
+	provider: string;
+	id: string;
+}
+
+export interface MainRoute {
+	model: MainModel | undefined;
+	source: ModelSource;
+}
+
+/** what `resolveRoute` needs to know about the main session at launch */
+export function mainRoute(model: MainModel | undefined): MainRoute {
+	return { model, source: readModelSource() };
+}
 
 export const SUB_AGENTS = [
 	"chad",
@@ -50,6 +87,8 @@ export interface ModelChoice {
 export interface AgentDefault {
 	model?: string;
 	thinking?: ThinkingLevel;
+	/** runs on the main session's model instead of `model` while the source is `main` */
+	followMain?: boolean;
 }
 
 export interface AgentModels {
@@ -96,8 +135,8 @@ export function parseAgentModels(raw: unknown): AgentModels {
 		const id = isRecord(entry) ? entry.id : undefined;
 		if (!MODEL_NAME.test(name)) {
 			result.problems.push(`models."${rawName}": use lowercase letters, digits, '.', '-' or '_'`);
-		} else if (typeof id !== "string" || !QUALIFIED_ID.test(id.trim())) {
-			result.problems.push(`models.${name}.id must be "provider/model", got ${JSON.stringify(id)}`);
+		} else if (typeof id !== "string" || (id.trim() !== MAIN_MODEL_ID && !QUALIFIED_ID.test(id.trim()))) {
+			result.problems.push(`models.${name}.id must be "provider/model" or "${MAIN_MODEL_ID}", got ${JSON.stringify(id)}`);
 		} else {
 			const about = isRecord(entry) && typeof entry.about === "string" ? entry.about.trim() : "";
 			result.models[name] = about ? { id: id.trim(), about } : { id: id.trim() };
@@ -123,6 +162,10 @@ export function parseAgentModels(raw: unknown): AgentModels {
 			const level = normalizeThinking(entry.thinking);
 			if (level) preset.thinking = level;
 			else result.problems.push(`agents.${agent}.thinking "${entry.thinking}" is not one of ${THINKING_LEVELS.join(", ")}`);
+		}
+		if (entry.followMain !== undefined) {
+			if (typeof entry.followMain === "boolean") preset.followMain = entry.followMain;
+			else result.problems.push(`agents.${agent}.followMain must be true or false`);
 		}
 		result.agents[agent as SubAgent] = preset;
 	}
@@ -160,10 +203,18 @@ function findName(config: AgentModels, value: string): string | undefined {
 	return Object.keys(config.models).find((name) => config.models[name].id.toLowerCase() === wanted);
 }
 
+const FOLLOWS_MAIN = "or the main session's model when the user switched these agents to it";
+
 function defaultLabel(config: AgentModels, agent: SubAgent): string {
 	const preset = config.agents[agent];
 	const model = preset?.model ?? "pi's default model";
-	return preset?.thinking ? `${model} · ${preset.thinking}` : model;
+	const label = preset?.thinking ? `${model} · ${preset.thinking}` : model;
+	return preset?.followMain ? `${label}, ${FOLLOWS_MAIN}` : label;
+}
+
+/** the agents that move to the main session's model when the source is `main` */
+export function followingAgents(config: AgentModels): SubAgent[] {
+	return SUB_AGENTS.filter((agent) => config.agents[agent]?.followMain === true);
 }
 
 function present(value: unknown): boolean {
@@ -173,6 +224,7 @@ function present(value: unknown): boolean {
 /** a catalog or credential problem with one model, or undefined when it can run. */
 export function checkModel(config: AgentModels, name: string, catalog: ModelCatalog): string | undefined {
 	const { id } = config.models[name];
+	if (id === MAIN_MODEL_ID) return undefined;
 	const [provider, modelId] = splitId(id);
 	const model = catalog.find(provider, modelId);
 	if (!model) return `\`${name}\` points at ${id}, which pi's model catalog does not have; fix it in ${AGENT_MODELS_FILE}`;
@@ -188,6 +240,9 @@ export function checkModel(config: AgentModels, name: string, catalog: ModelCata
  * `resuming` skips the defaults: pi restores a resumed child's own model and
  * thinking level when no flag is passed, and a default would silently move a
  * child started on another model back onto the default.
+ *
+ * `main` is the model the main session is on and the saved source; without
+ * it the name `main` cannot run and nothing follows it.
  */
 export function resolveRoute(
 	config: AgentModels,
@@ -195,10 +250,13 @@ export function resolveRoute(
 	params: { model?: unknown; thinking?: unknown },
 	catalog?: ModelCatalog,
 	resuming = false,
+	main?: MainRoute,
 ): Route {
-	const preset = resuming ? {} : (config.agents[agent] ?? {});
+	const preset: AgentDefault = resuming ? {} : (config.agents[agent] ?? {});
+	const mainId = main?.model ? `${main.model.provider}/${main.model.id}` : undefined;
 	let name = preset.model;
 	let thinking = preset.thinking;
+	let followMain = preset.followMain === true && main?.source === "main" && !!mainId && !isLocalProvider(main.model!.provider);
 
 	if (present(params.model)) {
 		const found = typeof params.model === "string" ? findName(config, params.model) : undefined;
@@ -211,6 +269,7 @@ export function resolveRoute(
 			};
 		}
 		name = found;
+		followMain = false;
 	}
 
 	if (present(params.thinking)) {
@@ -223,7 +282,13 @@ export function resolveRoute(
 		thinking = level;
 	}
 
+	if (followMain) return { model: mainId, thinking };
 	if (!name) return { thinking };
+	if (config.models[name].id === MAIN_MODEL_ID) {
+		if (mainId) return { model: mainId, thinking };
+		if (present(params.model)) return { error: "The main session has no model selected, so `main` cannot run. Pick another `model`." };
+		return { thinking };
+	}
 	if (catalog) {
 		const problem = checkModel(config, name, catalog);
 		// a default the user cannot run (no DeepSeek key, say) must not take the agent down; the footer names the model that ran
@@ -236,11 +301,12 @@ export function resolveRoute(
 /**
  * Why a child that answered on `actual` ("provider/model") must be stopped, or
  * undefined when it may run. With a requested id only that id passes; without
- * one (a resume, or a default that could not run) only a configured id does.
+ * one (a resume, or a default that could not run) only a configured id or the
+ * model the resumed conversation was saved on does.
  * pi's --model resolver can fall back to another provider's look-alike id, so
  * what the child reports is checked, not what was asked for.
  */
-export function modelViolation(actual: string, requested: string | undefined, config: AgentModels): string | undefined {
+export function modelViolation(actual: string, requested: string | undefined, config: AgentModels, savedOn?: string): string | undefined {
 	const got = actual.toLowerCase();
 	if (requested) {
 		return got === requested.toLowerCase()
@@ -248,7 +314,7 @@ export function modelViolation(actual: string, requested: string | undefined, co
 			: `sub-agent stopped: it started on ${actual}, but ${requested} was requested. Nothing else was run.`;
 	}
 	const allowed = Object.values(config.models).map((model) => model.id.toLowerCase());
-	if (allowed.length === 0 || allowed.includes(got)) return undefined;
+	if (allowed.length === 0 || allowed.includes(got) || savedOn?.toLowerCase() === got) return undefined;
 	return `sub-agent stopped: it started on ${actual}, which is not one of the models in ${AGENT_MODELS_FILE}. Nothing else was run.`;
 }
 
@@ -280,7 +346,7 @@ export function modelParams(config: AgentModels, agent: SubAgent) {
 			Type.Unsafe<string>({
 				type: "string",
 				enum: names,
-				description: `Omit unless the user names a model. Default: ${preset.model ?? "pi's default model"}.${onResume}`,
+				description: `Omit unless the user names a model. Default: ${preset.model ?? "pi's default model"}${preset.followMain ? `, ${FOLLOWS_MAIN}` : ""}.${onResume}`,
 			}),
 		),
 		thinking,
@@ -303,7 +369,7 @@ export function describeAgentModels(config: AgentModels): string {
 		"",
 		...names.map((name) => {
 			const { id, about } = config.models[name];
-			return `- \`${name}\` — ${id}${about ? `, ${about}` : ""}`;
+			return `- \`${name}\` — ${id === MAIN_MODEL_ID ? "the model the main session is on" : id}${about ? `, ${about}` : ""}`;
 		}),
 		"",
 		"If the user names a model that is not in this list, do not substitute the nearest one: say it is not configured and name the closest choices.",

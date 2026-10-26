@@ -8,7 +8,7 @@
 import { resolve as resolvePath } from "node:path";
 import { Type } from "@sinclair/typebox";
 import { SUB_AGENT_SESSION_DIR, newSessionId, startChild, unresumableReason, zeroUsage, type ChildRun, type PiSpawnConfig, type PiSpawnResult } from "./pi-spawn";
-import { resolveRoute, type AgentModels, type SubAgent } from "./agent-models";
+import { mainRoute, resolveRoute, type AgentModels, type MainModel, type SubAgent } from "./agent-models";
 import type { ControlOutcome, ControlRequest, RunSnapshot, RunStatus } from "./agent-channel";
 import {
 	backgroundStub,
@@ -67,6 +67,7 @@ export interface LaunchContext {
 	cwd: string;
 	mode?: string;
 	modelRegistry?: any;
+	model?: MainModel;
 	sessionManager?: { getSessionId?(): string };
 }
 
@@ -216,7 +217,7 @@ export class AgentRuns {
 			const refusal = unresumableReason(continueId, ctx.cwd, spec.agent, this.sessionDir);
 			if (refusal) return toolError(refusal);
 		}
-		const route = resolveRoute(spec.models, spec.agent, spec.params, ctx.modelRegistry, !!continueId);
+		const route = resolveRoute(spec.models, spec.agent, spec.params, ctx.modelRegistry, !!continueId, mainRoute(ctx.model));
 		if ("error" in route) return toolError(route.error);
 
 		const nested = toolCallId.includes("/");

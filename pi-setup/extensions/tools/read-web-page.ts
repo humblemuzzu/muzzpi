@@ -17,7 +17,7 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { htmlToMarkdown } from "./lib/html-to-md";
-import { emptyAgentModels, modelParams, resolveRoute, type AgentModels, type ModelRoute } from "./lib/agent-models";
+import { emptyAgentModels, mainRoute, modelParams, resolveRoute, type AgentModels, type ModelRoute } from "./lib/agent-models";
 import { runSubAgent, toolError } from "./lib/run-sub-agent";
 import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
 import { headTailChars } from "./lib/output-buffer";
@@ -177,7 +177,7 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 
 			let route: ModelRoute = {};
 			if (params.prompt || params.objective) {
-				const resolved = resolveRoute(models, "read_web_page", params, ctx.modelRegistry);
+				const resolved = resolveRoute(models, "read_web_page", params, ctx.modelRegistry, false, mainRoute(ctx.model));
 				if ("error" in resolved) return toolError(resolved.error);
 				route = resolved;
 			}

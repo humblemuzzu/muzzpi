@@ -496,6 +496,25 @@ describe("the RPC conversation with the child", () => {
 		expect(result.messages.at(-1)?.role).toBe("assistant");
 	}, 30000);
 
+	test("a resume may run on the model its conversation was saved on, even one outside agent-models.json", async () => {
+		const listed = { models: { sonnet: { id: "anthropic/claude-sonnet-5-5" } }, agents: {}, problems: [] };
+		const resume = async (id: string, savedOn: string) => {
+			const saved = session(id);
+			mkdirSync(saved.dir, { recursive: true });
+			const [provider, modelId] = savedOn.split("/");
+			const manager = SessionManager.create(dir, saved.dir, { id });
+			manager.appendModelChange(provider!, modelId!);
+			manager.appendMessage({ role: "user", content: "earlier task", timestamp: Date.now() });
+			return withFake(() => piSpawn({ cwd: dir, task: "continue", session: saved, agentModels: listed }));
+		};
+		const same = await resume("rpc-resume-same", model);
+		expect(same.exitCode).toBe(0);
+		expect(same.model).toBe(model);
+		const moved = await resume("rpc-resume-moved", "fake/fake-2");
+		expect(moved.exitCode).not.toBe(0);
+		expect(moved.errorMessage).toContain("not one of the models");
+	}, 30000);
+
 	test("a followUp is sent only after the task's run settles, and not after an error", async () => {
 		const ok = await withFake(() => piSpawn({ cwd: dir, model, task: "review", followUp: "write the report", session: session("rpc-follow") }));
 		expect(commands("rpc-follow").map((c) => c.message)).toEqual(["Task: review", "write the report"]);
