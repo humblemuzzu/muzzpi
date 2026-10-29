@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # muzzpi · herdr (optional): Ghostty's ⌘ keys drive herdr, plus ⌘O project
-# picker, ⌘I idea popup and ⌘W close. Read herdr/README.md first.
-#   ./install.sh herdr                install, or update after a git pull
-#   ./install.sh herdr --no-ghostty   herdr bindings and scripts, Ghostty untouched
-#   ./install.sh herdr --uninstall    take it all back out
+# picker, ⌘I idea popup and ⌘W close. Read herdr/in-ghostty/README.md first.
+#   ./install.sh herdr-ghostty                install, or update after a git pull
+#   ./install.sh herdr-ghostty --no-ghostty   herdr bindings and scripts, Ghostty untouched
+#   ./install.sh herdr-ghostty --uninstall    take it all back out
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -120,7 +120,7 @@ merge_herdr_config() {
 
     if [ -n "$conflicts" ]; then
         printf '  ! your herdr config (%s) clashes with the bindings the ⌘ keys need:\n%s' "$CONFIG" "$conflicts"
-        printf '    change those lines, or the matching ones in herdr/herdr-keys.toml and herdr/ghostty-keys.\n'
+        printf '    change those lines, or the matching ones in herdr/in-ghostty/herdr-keys.toml and ghostty-keys.\n'
         printf '    nothing was changed.\n'
         rm -f "$staged"
         exit 1
@@ -221,6 +221,6 @@ if [ "$with_ghostty" = 1 ]; then install_ghostty_keys; else ok "Ghostty left alo
 reload_herdr
 
 echo ""
-echo "  Reload Ghostty with ⌘⇧, and the ⌘ keys are live. Every key: herdr/README.md"
+echo "  Reload Ghostty with ⌘⇧, and the ⌘ keys are live. Every key: herdr/in-ghostty/README.md"
 echo "  ⌘O looks in: ${MUZZPI_PROJECT_ROOTS:-~/Documents/Code stuff, ~/StudioProjects, ~/Projects, ~/code}"
 echo "     (set MUZZPI_PROJECT_ROOTS=dir1:dir2 in ~/.zshrc to change it)"

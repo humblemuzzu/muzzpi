@@ -109,7 +109,7 @@ any custom value.
 | `scripts/*` | `~/.local/bin/` |
 
 The config's last line, `config-file = ?herdr-keys`, does nothing unless you
-also install the optional [herdr add-on](../herdr/README.md); it never changes
+also install the optional [herdr-in-Ghostty add-on](../herdr/in-ghostty/README.md); it never changes
 Ghostty's own keys on its own.
 
 ## Troubleshooting

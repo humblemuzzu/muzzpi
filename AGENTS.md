@@ -4,17 +4,25 @@ Read by pi and other coding agents at session start. Facts and rules only.
 
 This repo is muzzpi: a portable pi harness in `pi-setup/`, deployed to
 `~/.pi/agent/` by `./install.sh pi` (→ `pi-setup/install.sh`), plus Ghostty
-config in `ghostty/` (`./install.sh ghostty`), and the optional herdr add-on in
-`herdr/` (`./install.sh herdr`, see its README). README.md is the public pitch;
+config in `ghostty/` (`./install.sh ghostty`), and two optional, separate herdr setups in
+`herdr/` (see its README): herdr in Ghostty (`herdr/in-ghostty/`, `./install.sh
+herdr-ghostty`, alias `herdr`) and the Herdr Mac app (`herdr/app/`, `./install.sh herdr-app`).
+They share no settings and neither installer touches the other's files; keep it that way. README.md is the public pitch;
 keep its numbers true when the facts change.
 
 **herdr is opt-in: never wire it into `install.sh pi` or `ghostty`.**
 `ghostty/config` holds only `config-file = ?herdr-keys` (a no-op without the
-file). `herdr/ghostty-keys` makes ⌘ keys type herdr's prefix as bytes
+file). `herdr/in-ghostty/ghostty-keys` makes ⌘ keys type herdr's prefix as bytes
 (`text:\x02c` = ctrl+b c), so a binding changes in it and `herdr-keys.toml`
 together. The installer merges into the user's herdr config (`# muzzpi` lines,
-a marked block) and refuses clashes; **herdr drops its whole config on any parse
+a marked block whose `BEGIN` line must never change) and refuses clashes; **herdr drops its whole config on any parse
 error**, so it runs `herdr config check` before every swap.
+
+The Herdr Mac app learns pi's state only from `herdr/app/pi-status.ts` (OSC 7501, emitted only under `HC_TERMINAL_ID` in TUI mode: a
+child's stdout is RPC); delete it once pi ships #10607. Start pi there via `zsh -lic`:
+herdr-core terminals skip `~/.zshrc` (no API keys). Its mods are named `muzz-*`. Its
+`layout.set` sends the whole tree: merge `layouts/.state/main.json` `nodes` in first, or the
+user's clicks (sidebar width, open panel) reset.
 
 ## Rules for editing this file
 

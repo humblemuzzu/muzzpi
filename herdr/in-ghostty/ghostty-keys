@@ -1,15 +1,15 @@
-# muzzpi · herdr ⌘ shortcuts for Ghostty, installed by ./install.sh herdr
+# muzzpi · herdr ⌘ shortcuts for Ghostty, installed by ./install.sh herdr-ghostty
 # next to your Ghostty config and loaded by its `config-file = ?herdr-keys`.
 #
 # Each sends herdr's prefix (ctrl+b, \x02) and then its action key, so
 # changing herdr's prefix or a binding means changing these lines too
-# (the herdr side is herdr/herdr-keys.toml). In a Ghostty tab without herdr
+# (the herdr side is herdr-keys.toml beside this file). In a Ghostty tab without herdr
 # they type ^B and a letter; ⌘⌥T still opens a plain Ghostty tab.
 keybind = super+alt+t=new_tab
 
 keybind = super+t=text:\x02c
 # ⌘W closes the pane you are in; it asks first when an agent runs there
-# or it is the workspace's last pane (herdr/bin/herdr-close)
+# or it is the workspace's last pane (bin/herdr-close)
 keybind = super+w=text:\x02u
 keybind = super+shift+[=text:\x02p
 keybind = super+shift+]=text:\x02n

@@ -1,0 +1,18 @@
+{
+  "global": {
+    "cmd-o": "mod.open:muzz-open",
+    "cmd-w": "mod.open:muzz-close",
+    "cmd-shift-w": "window.close",
+    "cmd-i": "mod.open:muzz-idea",
+    "cmd-j": "mod.open:muzz-attention",
+    "ctrl-cmd-1": "space.select:1",
+    "ctrl-cmd-2": "space.select:2",
+    "ctrl-cmd-3": "space.select:3",
+    "ctrl-cmd-4": "space.select:4",
+    "ctrl-cmd-5": "space.select:5",
+    "ctrl-cmd-6": "space.select:6",
+    "ctrl-cmd-7": "space.select:7",
+    "ctrl-cmd-8": "space.select:8",
+    "ctrl-cmd-9": "space.select:9"
+  }
+}

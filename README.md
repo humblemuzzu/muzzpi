@@ -383,17 +383,19 @@ To use another default model, change `defaultProvider` and `defaultModel` in
 themes, 11 fonts, live switchers. `./install.sh ghostty`; see
 [`ghostty/`](ghostty/README.md). Each half installs on its own.
 
-**herdr (optional).** If you run [herdr](https://herdr.dev) inside Ghostty,
-`./install.sh herdr` makes Ghostty's ⌘ keys drive it (⌘T tabs, ⌘O open a
-project, ⌘] next agent, ⌘W close, ⌘I park an idea). Nothing else installs
-it, and Ghostty without it is untouched; every key and how to turn it off are
-in [`herdr/`](herdr/README.md).
+**herdr (optional), two separate setups.** [herdr](https://herdr.dev) runs
+your agents in one window, either inside Ghostty or as its own Mac app; they
+share no settings. `./install.sh herdr-ghostty` makes Ghostty's ⌘ keys drive
+herdr (⌘T tabs, ⌘O open a project, ⌘] next agent, ⌘W close, ⌘I park an idea).
+`./install.sh herdr-app` gives the Mac app the same keys, a look, and pi's
+state in its agents list. Nothing else installs either; which is which, every
+key and how to turn each off are in [`herdr/`](herdr/README.md).
 
 ## Layout
 
 ```
 muzzpi/
-├── install.sh              ./install.sh pi | ghostty | herdr
+├── install.sh              ./install.sh pi | ghostty | herdr-ghostty | herdr-app
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
 │   ├── extensions/         19 extensions; tools/ holds the 32 tools
@@ -407,7 +409,9 @@ muzzpi/
 │   ├── port-harness/       benchmarks and the Claude-plan canary
 │   └── pi-migrations.md    one record per pi release
 ├── ghostty/                themes, fonts, switchers
-└── herdr/                  optional: ⌘ keys for herdr, ⌘O picker, ⌘W close, ⌘I ideas
+└── herdr/                  optional, two separate setups:
+    ├── in-ghostty/         herdr inside Ghostty: ⌘ keys, ⌘O picker, ⌘W close, ⌘I ideas
+    └── app/                the Herdr Mac app: the same keys, a look, pi's state
 ```
 
 Read next: [`AGENTS.md`](AGENTS.md) for how it fits together and what not to

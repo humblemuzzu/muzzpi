@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# herdr-idea: the /idea capture box as a herdr popup, filed for the focused pane's project.
+# idea.sh: the /idea capture box from pi's ideas extension, for ⌘I. HERDR_ACTIVE_PANE_CWD picks the project.
 CLI="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/extensions/ideas/cli.js"
 
 fail() {
@@ -10,12 +10,11 @@ fail() {
 
 [ -f "$CLI" ] || fail "$CLI is missing: run ./install.sh pi"
 
-# herdr runs popups with its server's environment, which can be the bare
-# launchd PATH when the server was not started from a login shell
+# herdr-core starts this without your login shell, so node may not be on PATH
 PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.bun/bin"
-if command -v node >/dev/null 2>&1; then exec node "$CLI" prompt; fi
+if command -v node >/dev/null 2>&1; then exec node --no-warnings "$CLI" prompt; fi
 if command -v bun >/dev/null 2>&1; then exec bun "$CLI" prompt; fi
 for node in "$HOME"/.nvm/versions/node/*/bin/node; do
-    [ -x "$node" ] && exec "$node" "$CLI" prompt
+    [ -x "$node" ] && exec "$node" --no-warnings "$CLI" prompt
 done
-fail "herdr-idea needs node or bun"
+fail "⌘I needs node or bun"

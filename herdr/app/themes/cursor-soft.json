@@ -1,0 +1,11 @@
+{
+  "background": "#1e1e1e",
+  "foreground": "#d4d4d4",
+  "selection": "#333333",
+  "cursor": "#d4d4d4",
+  "ansi": [
+    "#2a2a2a", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#d4d4d4",
+    "#505050", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#e8e8e8"
+  ],
+  "colors": { "accent": "#d79921", "accent_foreground": "#1e1e1e" }
+}

@@ -1,6 +1,6 @@
-# muzzpi · herdr bindings. ./install.sh herdr merges these into your own herdr
+# muzzpi · herdr bindings. ./install.sh herdr-ghostty merges these into your own herdr
 # config (marked `# muzzpi`) and leaves the rest of it alone.
-# herdr/ghostty-keys sends them as raw bytes from ⌘ shortcuts ("\x02" is ctrl+b),
+# ghostty-keys beside this file sends them as raw bytes from ⌘ shortcuts ("\x02" is ctrl+b),
 # so a binding changed here must change there too.
 
 [ui]
