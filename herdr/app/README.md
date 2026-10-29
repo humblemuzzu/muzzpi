@@ -27,6 +27,7 @@ a second:
 | zoom, theme, font, sounds | `settings.json` (also Herdr → Settings, `⌘,`) |
 | every key | `keys.json` |
 | colours | `themes/cursor-soft.json` |
+| focus mode's layout | `layouts/muzz-focus.json` |
 | popups and panels | `mods/<name>/` |
 | pi's state in the agents list | `~/.pi/agent/extensions/herdr-app-status.ts` |
 
@@ -46,6 +47,7 @@ The app already has `⌘T`, `⌘1`–`⌘9`, `⌘⇧[` `⌘⇧]`, `⌘D` / `⌘�
 | `⌘J` | the agent that needs you, else the one that just finished | `mods/muzz-attention` |
 | `⌘⌃1` … `⌘⌃9` | go to space 1–9 (the app's own `ctrl-1` … `ctrl-9` stay) | `keys.json` |
 | `⌘⇧W` | close the window; every terminal keeps running | `keys.json` |
+| `⌘⇧F` | focus mode: only your terminals, no sidebar, tab bar, pane header or status bar; `⌘⇧F` or `⌘B` goes back | `layouts/muzz-focus.json` |
 
 And a look: the `cursor-soft` theme (Ghostty's colours with herdr's gruvbox
 orange), Fira Code 14, a grey border on the pane you are typing in, and herdr's

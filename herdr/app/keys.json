@@ -5,6 +5,7 @@
     "cmd-shift-w": "window.close",
     "cmd-i": "mod.open:muzz-idea",
     "cmd-j": "mod.open:muzz-attention",
+    "cmd-shift-f": "layout.switch:muzz-focus",
     "ctrl-cmd-1": "space.select:1",
     "ctrl-cmd-2": "space.select:2",
     "ctrl-cmd-3": "space.select:3",
@@ -14,5 +15,9 @@
     "ctrl-cmd-7": "space.select:7",
     "ctrl-cmd-8": "space.select:8",
     "ctrl-cmd-9": "space.select:9"
+  },
+  "layout:muzz-focus": {
+    "cmd-shift-f": "layout.switch:main",
+    "cmd-b": "layout.switch:main"
   }
 }

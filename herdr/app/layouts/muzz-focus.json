@@ -1,0 +1,25 @@
+{
+  "id": "root",
+  "type": "column",
+  "titlebar": "none",
+  "traffic_lights": [8, 8],
+  "background": "background",
+  "terminal_padding": [4, 8],
+  "children": [
+    {
+      "id": "main",
+      "type": "block",
+      "content": {
+        "tab": "active",
+        "pane": {
+          "gap": 2,
+          "radius": 0,
+          "background": "background",
+          "lone": false,
+          "border": { "width": 1, "color": "border" },
+          "focus": { "width": 1, "color": "input" }
+        }
+      }
+    }
+  ]
+}

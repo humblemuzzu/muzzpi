@@ -57,6 +57,11 @@ for section, binds in ours.items():
         [ -d "$APP_HOME/mods/$mod" ] && mv "$APP_HOME/mods/$mod" "$APP_HOME/mods/.$mod.removed-$STAMP"
     done
     ok "mods moved aside as $APP_HOME/mods/.<name>.removed-$STAMP"
+    if [ -f "$APP_HOME/layouts/muzz-focus.json" ]; then
+        herdr-app do layout.switch --name main >/dev/null 2>&1 || true
+        mv "$APP_HOME/layouts/muzz-focus.json" "$APP_HOME/layouts/.muzz-focus.json.removed-$STAMP"
+        ok "focus layout moved aside"
+    fi
     [ -f "$PI_EXT" ] && mv "$PI_EXT" "$PI_EXT.removed-$STAMP" && ok "pi status reporter off (restart pi)"
     echo "  The cursor-soft theme and your settings.json stay; pick another theme in Herdr's settings."
     exit 0
@@ -74,6 +79,9 @@ done
 ok "⌘O ⌘W ⌘I ⌘J mods → $APP_HOME/mods ($MODS)"
 
 cp "$HERE/themes/cursor-soft.json" "$APP_HOME/themes/"
+mkdir -p "$APP_HOME/layouts"
+cp "$HERE/layouts/muzz-focus.json" "$APP_HOME/layouts/"
+ok "focus layout → $APP_HOME/layouts/muzz-focus.json (⌘⇧F)"
 if [ -f "$OLD_SOUND" ]; then
     mkdir -p "$APP_HOME/sounds"
     cp "$OLD_SOUND" "$APP_HOME/sounds/needs-you.mp3"
