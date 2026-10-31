@@ -122,14 +122,14 @@ describe("read: failures are reported, never shipped", () => {
 		expect(result.content[0].text).toContain("/compact");
 	});
 
-	test("past half the request limit, the result says so", async () => {
+	test("past three quarters of the request limit, the result says so", async () => {
 		const p = path.join(dir, "busy.png");
 		save(noise(300, 200), p);
 		const busy = {
 			...ctx,
 			sessionManager: {
 				buildSessionProjection: () => ({
-					messages: [{ role: "user", content: [{ type: "image", data: "A".repeat(20 * MiB), mimeType: "image/png" }] }],
+					messages: [{ role: "user", content: [{ type: "image", data: "A".repeat(25 * MiB), mimeType: "image/png" }] }],
 				}),
 			},
 		};

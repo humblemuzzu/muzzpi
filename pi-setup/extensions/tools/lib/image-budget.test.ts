@@ -20,6 +20,16 @@ const catalog = JSON.parse(
 )["anthropic-messages"];
 const model = (id: string) => catalog[`chat:${id}`];
 
+const setupDir = join(import.meta.dir, "../../..");
+const anthropicOverrides = JSON.parse(fs.readFileSync(join(setupDir, "models.json"), "utf8")).providers.anthropic
+  .modelOverrides as Record<string, { inputLimits?: { maxRequestBytes?: number } }>;
+
+/** pi's merge: an override's top-level inputLimits fields replace the catalog's (provider-composer.js). */
+const withOverride = (id: string) => ({
+  ...model(id),
+  inputLimits: { ...model(id).inputLimits, ...anthropicOverrides[id]!.inputLimits },
+});
+
 const MiB = 1024 * 1024;
 
 function ctxWith(messages: any[], extra: Record<string, unknown> = {}, sessionId = "budget-test") {
@@ -100,7 +110,7 @@ describe("measureSession", () => {
 describe("planCallBudget", () => {
   const limits = limitsForModel(model("claude-opus-5-5"));
 
-  test("an empty session gets a quarter of the request limit and the per-call image cap", () => {
+  test("an empty session gets the 8 MiB per-call share and the per-call image cap", () => {
     const decision = planCallBudget(limits, { images: 0, requestBytes: 50_000 });
     expect(decision).toEqual({ ok: true, budget: { bytes: 8 * MiB, images: MAX_IMAGES_PER_CALL } });
   });
@@ -139,11 +149,60 @@ describe("planCallBudget", () => {
   });
 });
 
+describe("the 128 MB first-party request limit (models.json override)", () => {
+  const enabledClaude = (JSON.parse(fs.readFileSync(join(setupDir, "settings.json"), "utf8")).enabledModels as string[])
+    .filter((id) => id.startsWith("anthropic/"))
+    .map((id) => id.slice("anthropic/".length));
+  const limits = limitsForModel(withOverride("claude-opus-5-5"));
+
+  test("every enabled Claude model is raised to 128,000,000 bytes and keeps the rest of its catalog limits", () => {
+    expect(enabledClaude.length).toBeGreaterThan(0);
+    for (const id of enabledClaude) {
+      expect(limitsForModel(withOverride(id))).toEqual({
+        maxSide: 2000,
+        maxImageBase64: 4.5 * MiB - 1,
+        maxRequestBytes: 128_000_000,
+        maxImagesPerRequest: 600,
+      });
+    }
+  });
+
+  test("one call still gets 8 MiB, not a quarter of 128 MB", () => {
+    expect(planCallBudget(limits, { images: 0, requestBytes: 50_000 })).toEqual({
+      ok: true,
+      budget: { bytes: 8 * MiB, images: MAX_IMAGES_PER_CALL },
+    });
+  });
+
+  test("a session far past the old 32 MiB limit still gets its full share", () => {
+    expect(planCallBudget(limits, { images: 60, requestBytes: 90 * MiB })).toEqual({
+      ok: true,
+      budget: { bytes: 8 * MiB, images: MAX_IMAGES_PER_CALL },
+    });
+  });
+
+  test("refuses only near 128 MB, and never lets a session reach it", () => {
+    expect(planCallBudget(limits, { images: 80, requestBytes: 120 * MiB }).ok).toBe(false);
+    for (let used = 0; used < 128_000_000; used += 512 * 1024) {
+      const decision = planCallBudget(limits, { images: 1, requestBytes: used });
+      if (decision.ok) expect(used + decision.budget.bytes).toBeLessThan(128_000_000);
+    }
+  });
+
+  test("no session-size note until three quarters of 128 MB, then it says how much is left", () => {
+    expect(sessionNote(limits, { images: 40, requestBytes: 64 * MiB }, 2 * MiB)).toBeUndefined();
+    expect(sessionNote(limits, { images: 60, requestBytes: 90_000_000 }, 2 * MiB)).toBeUndefined();
+    const note = sessionNote(limits, { images: 65, requestBytes: 96_000_000 }, 2_000_000);
+    expect(note).toContain("~98.0 MB of the 128.0 MB limit");
+    expect(note).toContain(`~${((128_000_000 - 2 * MiB - 98_000_000) / 1_000_000).toFixed(1)} MB left`);
+  });
+});
+
 describe("sessionNote", () => {
   const limits = limitsForModel(model("claude-opus-5-5"));
-  test("silent below half the request limit, a line above it", () => {
-    expect(sessionNote(limits, { images: 1, requestBytes: 10 * MiB }, MiB)).toBeUndefined();
-    expect(sessionNote(limits, { images: 1, requestBytes: 15 * MiB }, 2 * MiB)).toContain("/compact");
+  test("silent below three quarters of the request limit, a line above it", () => {
+    expect(sessionNote(limits, { images: 1, requestBytes: 20 * MiB }, MiB)).toBeUndefined();
+    expect(sessionNote(limits, { images: 1, requestBytes: 23 * MiB }, 2 * MiB)).toContain("/compact");
   });
 });
 

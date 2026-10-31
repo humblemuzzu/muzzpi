@@ -482,11 +482,15 @@ in `vision.test.ts`). Tiers: standard 1568px/1568 tokens, high-res (Claude
   `normalizeToolResultImages`): side ≤ 2000px and base64 < `inputLimits.images.resize.maxBytes` (4.5
   MiB). Anything over is silently re-encoded by pi. `image-fit.test.ts` runs pi's real normalizer to
   pin this.
-- Side cap 2000px (`maxSide`): past 20 images per request the API rejects
-  larger ones, and history is resent every turn.
-- **pi does not enforce the 32 MiB request limit**; one oversized request is a 413 on every later
-  turn. `lib/image-budget.ts` measures the context (`buildSessionProjection`) plus in-flight calls
-  and refuses before it.
+- Side cap = the model's resize profile (`PI_DEFAULT_MAX_SIDE` 2000px when none), bounded by the
+  API's many-image rule (`MANY_IMAGE_MAX_SIDE`, 3000px past 20 images). Raising it means
+  overriding `images.resize` in `models.json`; pi's normalizer reads the same profile.
+- **pi does not enforce `maxRequestBytes`**; one oversized request is a 413 on every later turn.
+  `lib/image-budget.ts` measures the context (`buildSessionProjection`) plus in-flight calls and
+  refuses before it. The first-party API takes 128 MB (proven on OAuth); pi's catalog still says
+  32 MiB, so `models.json` overrides it to `128000000` for each Claude model, and
+  `verify-patches.sh` fails an enabled `anthropic/` model without it. One call's share stays 8 MiB:
+  every model call re-uploads the whole request.
 - Media type comes from the bytes, never the extension (a mismatch is a 400).
   sips ignores EXIF orientation, so `orient()` applies it.
 - **Chromium returns BLANK past 16384px** without erroring; `MAX_RENDERABLE_HEIGHT`

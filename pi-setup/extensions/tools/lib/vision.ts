@@ -33,12 +33,15 @@ export const TIERS = {
 
 export type TierName = "standard" | "high";
 
+/** pi re-encodes a tool image with a side over this when the model declares no resize profile. */
+export const PI_DEFAULT_MAX_SIDE = 2000;
+
 /**
  * Once a request holds more than 20 images, the API rejects any image with a
- * side over 2000px. Old images are resent every turn, so every image has to be
- * legal at that size from the start.
+ * side over 3000px. Old images are resent every turn, so no image may exceed
+ * it, whatever a model's resize profile allows.
  */
-export const MANY_IMAGE_MAX_SIDE = 2000;
+export const MANY_IMAGE_MAX_SIDE = 3000;
 
 export const MAX_IMAGES_PER_CALL = 12;
 
@@ -223,7 +226,7 @@ export function planView(width: number, height: number, opts: ViewOptions = {}):
  * no output can become illegal later in a session. Any name but "standard"
  * gets the high tier, which is never smaller.
  */
-export function resolveTier(name?: TierName | string, maxSide: number = MANY_IMAGE_MAX_SIDE): Tier {
+export function resolveTier(name?: TierName | string, maxSide: number = PI_DEFAULT_MAX_SIDE): Tier {
   const base = name === "standard" ? TIERS.standard : TIERS.highRes;
   return { ...base, maxSide: Math.min(maxSide, MANY_IMAGE_MAX_SIDE) };
 }

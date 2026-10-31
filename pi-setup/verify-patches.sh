@@ -202,6 +202,29 @@ else
          "re-check lib/image-budget.ts against pi's utils/image-resize-core.js, then re-run bun test lib/image-fit.test.ts"
 fi
 
+# ── images: every enabled Claude model carries the 128 MB request limit ──
+# pi's catalog still says 32 MiB; without the models.json override the image
+# tools refuse at a quarter of what the API accepts.
+REQ_REPORT=$(python3 - "$PI_AGENT/settings.json" "$PI_AGENT/models.json" <<'PY'
+import json, sys
+try:
+    enabled = json.load(open(sys.argv[1])).get("enabledModels") or []
+    providers = json.load(open(sys.argv[2])).get("providers") or {}
+    overrides = (providers.get("anthropic") or {}).get("modelOverrides") or {}
+    missing = [m for m in enabled if m.startswith("anthropic/")
+               and ((overrides.get(m[len("anthropic/"):]) or {}).get("inputLimits") or {}).get("maxRequestBytes") != 128000000]
+    print(" ".join(missing))
+except Exception as e:
+    print(f"cannot read config: {type(e).__name__}: {e}")
+PY
+)
+if [ -z "$REQ_REPORT" ]; then
+    pass "images: every enabled Claude model has the 128 MB request limit"
+else
+    fail "images: 128 MB request limit (maxRequestBytes override) missing — $REQ_REPORT" \
+         "add it under providers.anthropic.modelOverrides in pi-setup/models.json, then ./install.sh pi"
+fi
+
 # ── agent prompts: every repo prompt is deployed ──
 # pi-spawn reads sub-agent prompts from here; a missing file silently
 # degrades that agent to the default body.

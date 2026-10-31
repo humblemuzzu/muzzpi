@@ -314,7 +314,7 @@ Drawing recipes:
 ## 9. Token budget and final checks
 
 - One codemode script = one visual group (write, plus an optional screenshot). Batch font renders and tokens.
-- Screenshots: whole board at scale 0.4–0.5, detail at 1. Session images add up (about 32 MB request cap), so don't re-shoot needlessly.
+- Screenshots: whole board at scale 0.4–0.5, detail at 1. Session images add up (a 128 MB request cap, re-uploaded on every model call), so don't re-shoot needlessly.
 - Final check: no local references remain (local must be 0):
   ```js
   let cloud=0, local=0; for (const b of artboards){ const j=(await tools.mcp__paper__get_jsx({fileId:F,nodeId:b})).content.map(c=>c.text).join("");

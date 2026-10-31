@@ -7,7 +7,7 @@
  * every turn after it fail too.
  */
 
-import { MAX_IMAGES_PER_CALL, type TierName, tierForModel } from "./vision";
+import { MAX_IMAGES_PER_CALL, PI_DEFAULT_MAX_SIDE, type TierName, tierForModel } from "./vision";
 
 export interface ImageLimits {
   /** pi re-encodes a tool image with a side over this. */
@@ -19,13 +19,15 @@ export interface ImageLimits {
 }
 
 /** pi's resize profile when a model declares none (utils/image-resize-core.js). */
-const PI_DEFAULT_RESIZE = { maxWidth: 2000, maxHeight: 2000, maxBytes: 4.5 * 1024 * 1024 };
+const PI_DEFAULT_RESIZE = { maxWidth: PI_DEFAULT_MAX_SIDE, maxHeight: PI_DEFAULT_MAX_SIDE, maxBytes: 4.5 * 1024 * 1024 };
 const DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 const DEFAULT_MAX_IMAGES_PER_REQUEST = 100;
 
 /** System prompt, tool schemas and the turns that follow this one. */
 const RESERVED_BYTES = 2 * 1024 * 1024;
 const MIN_USEFUL_CALL_BYTES = 512 * 1024;
+/** One call's share stays this size however large the request limit is: every model call re-uploads it. */
+const MAX_CALL_BYTES = 8 * 1024 * 1024;
 const PENDING_TTL_MS = 10 * 60 * 1000;
 
 interface ModelLike {
@@ -66,7 +68,10 @@ export interface CallBudget {
 }
 
 export function defaultCallBudget(limits: ImageLimits): CallBudget {
-  return { bytes: Math.floor(limits.maxRequestBytes / 4), images: MAX_IMAGES_PER_CALL };
+  return {
+    bytes: Math.min(Math.floor(limits.maxRequestBytes / 4), MAX_CALL_BYTES),
+    images: MAX_IMAGES_PER_CALL,
+  };
 }
 
 /**
@@ -150,7 +155,8 @@ export type BudgetDecision =
   | { ok: true; budget: CallBudget }
   | { ok: false; reason: string };
 
-const mb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+/** Decimal megabytes, the unit providers publish their request limits in. */
+const mb = (bytes: number): string => (bytes / 1_000_000).toFixed(1);
 
 export function planCallBudget(limits: ImageLimits, usage: SessionImageUsage | undefined): BudgetDecision {
   const perCall = defaultCallBudget(limits);
@@ -181,7 +187,7 @@ export function planCallBudget(limits: ImageLimits, usage: SessionImageUsage | u
   };
 }
 
-/** A line for the tool result once the session is past half its request limit. */
+/** A line for the tool result once the session has used three quarters of its request limit. */
 export function sessionNote(
   limits: ImageLimits,
   usage: SessionImageUsage | undefined,
@@ -189,10 +195,12 @@ export function sessionNote(
 ): string | undefined {
   if (!usage) return undefined;
   const after = usage.requestBytes + addedBytes;
-  if (after < limits.maxRequestBytes / 2) return undefined;
+  if (after < limits.maxRequestBytes * 0.75) return undefined;
+  const left = Math.max(0, limits.maxRequestBytes - RESERVED_BYTES - after);
   return (
     `session size: requests now carry ~${mb(after)} MB of the ${mb(limits.maxRequestBytes)} MB ` +
-    `limit, mostly images. /compact drops old images; image tools refuse before the limit.`
+    `limit (~${mb(left)} MB left for images). /compact drops old images; image tools refuse ` +
+    `before the limit.`
   );
 }
 

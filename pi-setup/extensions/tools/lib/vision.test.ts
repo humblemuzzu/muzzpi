@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   countImageTokens,
   MANY_IMAGE_MAX_SIDE,
+  PI_DEFAULT_MAX_SIDE,
   MAX_IMAGES_PER_CALL,
   planView,
   resizedSize,
@@ -214,32 +215,44 @@ describe("resolveTier", () => {
   });
 
   test("a larger side cap never lifts it past the many-image limit", () => {
+    expect(MANY_IMAGE_MAX_SIDE).toBe(3000);
     expect(resolveTier("high", 4000).maxSide).toBe(MANY_IMAGE_MAX_SIDE);
+  });
+
+  test("a 2576px resize profile is used in full on the high tier", () => {
+    expect(resolveTier("high", 2576).maxSide).toBe(2576);
+    expect(resizedSize(3840, 2160, resolveTier("high", 2576))).toEqual(size(2576, 1449));
+  });
+
+  test("without a model profile the cap is pi's default", () => {
+    expect(resolveTier("high").maxSide).toBe(PI_DEFAULT_MAX_SIDE);
   });
 });
 
-// Above 20 images in one request the API rejects any image with a side over
-// 2000px, and old images are resent every turn.
-describe("the many-image side cap", () => {
+// pi re-encodes any tool image over the model's resize profile (2000px by
+// default); the API's many-image rule (3000px past 20 images) bounds any profile.
+describe("the side cap", () => {
   test("3840×2160 on high becomes 2000×1125: 2000 raw is legal, the padded 2016 is not checked against it", () => {
     const fitted = resizedSize(3840, 2160, resolveTier("high"));
     expect(fitted).toEqual(size(2000, 1125));
     expect(countImageTokens(2000, 1125)).toBeLessThanOrEqual(TIERS.highRes.maxTokens);
   });
 
-  test("no input makes either shipped tier emit a side over 2000px", () => {
+  test("no input makes either tier emit a side over the cap it was given", () => {
     const shapes: Array<[number, number]> = [
       [3840, 2160], [2880, 1800], [5120, 2880], [1000, 9000], [9000, 1000],
-      [8000, 8000], [2576, 1449], [2001, 2001], [1, 12000], [12000, 1],
+      [8000, 8000], [2576, 1449], [2001, 2001], [3001, 3001], [1, 12000], [12000, 1],
     ];
-    for (const name of ["standard", "high"] as const) {
-      for (const [w, h] of shapes) {
-        const plan = planView(w, h, { tier: resolveTier(name) });
-        const sizes = plan.kind === "asis" ? [size(w, h)] : plan.kind === "downscale" ? [plan.to] : plan.slices;
-        for (const s of sizes) {
-          expect({ name, w, h, over: Math.max(s.width, s.height) > MANY_IMAGE_MAX_SIDE }).toEqual({
-            name, w, h, over: false,
-          });
+    for (const [profile, cap] of [[undefined, PI_DEFAULT_MAX_SIDE], [2576, 2576], [4000, MANY_IMAGE_MAX_SIDE]] as const) {
+      for (const name of ["standard", "high"] as const) {
+        for (const [w, h] of shapes) {
+          const plan = planView(w, h, { tier: resolveTier(name, profile) });
+          const sizes = plan.kind === "asis" ? [size(w, h)] : plan.kind === "downscale" ? [plan.to] : plan.slices;
+          for (const s of sizes) {
+            expect({ profile, name, w, h, over: Math.max(s.width, s.height) > cap }).toEqual({
+              profile, name, w, h, over: false,
+            });
+          }
         }
       }
     }

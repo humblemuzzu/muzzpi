@@ -12,6 +12,16 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## Claude request limit 32 MiB → 128 MB (2026-10-31, no pi update)
+
+Anthropic raised Messages/Token Counting to 128 MB on the first-party API (many-image rule
+2000 → 3000px). Proven on our OAuth path: a 37.4 MiB `count_tokens` returned 200; unauthenticated
+127 MiB passed the size gate, 129 MiB got 413; 21 images at 3100px got "many-image requests: 3000
+pixels". pi 1.4.0's catalog (`anthropic.ts`) still declares 32 MiB, so `models.json` overrides
+`inputLimits.maxRequestBytes` per Claude model. **When pi's catalog ships 128 MB, drop the
+override.** The resize profile (2000px) was kept deliberately: 2576px costs ~40% more tokens and
+~35% more bytes per screenshot, and every model call re-uploads the request (~3.4 MB/s measured).
+
 ## 1.4.0, two more core patches: fast /resume
 
 `core/session-manager.js` and `modes/interactive/components/session-selector-search.js` joined

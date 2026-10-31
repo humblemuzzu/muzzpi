@@ -1,5 +1,12 @@
 {
   "providers": {
+    "anthropic": {
+      "modelOverrides": {
+        "claude-opus-5-5": { "inputLimits": { "maxRequestBytes": 128000000 } },
+        "claude-sonnet-5-5": { "inputLimits": { "maxRequestBytes": 128000000 } },
+        "claude-haiku-5-5": { "inputLimits": { "maxRequestBytes": 128000000 } }
+      }
+    },
     "deepseek": {
       "modelOverrides": {
         "deepseek-flash": {
