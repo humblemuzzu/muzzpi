@@ -49,7 +49,7 @@ describe("chad allowlist: read-only by construction", () => {
 	});
 
 	test("excludes the sub-agents — nesting one is a process for tools chad already has", () => {
-		for (const tool of ["oracle", "finder", "librarian", "code_review"]) {
+		for (const tool of ["oracle", "finder", "librarian", "review_code"]) {
 			expect(allowlist).not.toContain(tool);
 		}
 	});

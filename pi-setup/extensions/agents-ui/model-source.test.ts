@@ -39,11 +39,11 @@ function fakeCtx(mode = "tui") {
 }
 
 describe("/agents models", () => {
-	test("the shipped file lets delegate, oracle and code_review follow the main model", async () => {
+	test("the shipped file lets delegate, oracle and review_code follow the main model", async () => {
 		const { ctx, notices } = fakeCtx();
 		await runModelsCommand("main", ctx, shipped);
 		expect(readModelSource()).toBe("main");
-		expect(notices[0]).toContain("delegate, oracle and code_review now run on the main session's model (claude-opus-5-5 right now)");
+		expect(notices[0]).toContain("delegate, oracle and review_code now run on the main session's model (claude-opus-5-5 right now)");
 		await runModelsCommand("own", ctx, shipped);
 		expect(readModelSource()).toBe("list");
 	});
@@ -60,9 +60,9 @@ describe("/agents models", () => {
 		const { ctx, menus } = fakeCtx();
 		const done = runModelsCommand("", ctx, shipped);
 		const text = menus[0]!.component.render(100).map(strip).join("\n");
-		expect(text).toContain("delegate, oracle and code_review run on their own models");
+		expect(text).toContain("delegate, oracle and review_code run on their own models");
 		expect(text).toMatch(/Their own models\s+current/);
-		expect(text).toContain("delegate, oracle, code_review → sonnet · high");
+		expect(text).toContain("delegate, oracle, review_code → sonnet · high");
 		menus[0]!.resolve({ id: "main", values: {} });
 		await done;
 		expect(readModelSource()).toBe("main");

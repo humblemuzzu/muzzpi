@@ -57,7 +57,7 @@ export const SUB_AGENTS = [
 	"oracle",
 	"finder",
 	"librarian",
-	"code_review",
+	"review_code",
 	"read_session",
 	"read_web_page",
 ] as const;

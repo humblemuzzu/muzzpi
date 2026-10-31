@@ -43,7 +43,7 @@ export const A_LEN = 10;
 export const T = { calls: 0, errors: 1, durationMs: 2, timed: 3, checked: 4 } as const;
 export const T_LEN = 5;
 
-const AGENT_TOOLS = new Set(["Task", "Agent", "task", "delegate", "chad", "oracle", "finder", "code_review", "librarian"]);
+const AGENT_TOOLS = new Set(["Task", "Agent", "task", "delegate", "chad", "oracle", "finder", "review_code", "code_review", "librarian"]);
 
 const IDLE_GAP_MS = 10 * 60_000;
 const CACHE_TTL_MS = 5 * 60_000;

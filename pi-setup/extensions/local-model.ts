@@ -43,7 +43,7 @@ Tools (schemas also in the API):
 - web_search / read_web_page — web; x_search — posts on X
 - screenshot — screen/window/url capture
 - github tools — read_github, search_github, list_directory_github, list_repositories, glob_github, commit_search, diff
-- finder / oracle / delegate / chad / librarian / code_review — sub-agents (slow on local; avoid unless asked)
+- finder / oracle / delegate / chad / librarian / review_code — sub-agents (slow on local; avoid unless asked)
 - read_session / search_sessions — session history
 `;
 

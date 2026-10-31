@@ -66,7 +66,9 @@ stays hidden. DeepSeek's `deepseek-flash` always serves its newest release, so i
 needs no update; `models.json` only sets its off-peak cost.
 
 **Claude-plan billing.** An OAuth request whose system prompt holds the phrases
-in `tools/lib/anthropic-sub.ts` bills as extra usage (here a 400). Never write
+in `tools/lib/anthropic-sub.ts` bills as extra usage (here a 400). **Tool names count too**:
+a tool named `code_review` billed as extra usage while `review_code` bills to plan (description
+and schema made no difference), so a new or renamed tool must pass the canary before it ships. Never write
 them into a prompt or drop `anthropic-sub`; `update-pi.sh` runs
 `bun pi-setup/port-harness/anthropic-oauth-canary.ts`, run it by hand otherwise. pi's extra-usage banner
 (`warnings.anthropicExtraUsage: false`) is not a billing signal.
@@ -562,7 +564,7 @@ machinery mapped to pi tools or cut; every subagent they spawn is read-only.
 ## Agent mention directives
 
 `@oracle @finder @codereview @task @chad` → hidden `display: false` directive to call that tool
-(`codereview` → `code_review`, `task` → `delegate`); `@commit/<sha>` adds context the same way,
+(`codereview` → `review_code`, `task` → `delegate`); `@commit/<sha>` adds context the same way,
 stored once after the user's message (`before_agent_start`), never re-injected from `context`.
 **Keep the explicit `import "./tools/lib/mentions/agent-source.js"`** in `mentions.ts` (the
 barrel `export *` may not evaluate it). Don't add `/value` to agent mentions.

@@ -7,10 +7,10 @@
  *   finder       -> query
  *   librarian    -> query
  *   oracle       -> task
- *   code_review  -> diff_description
+ *   review_code  -> diff_description
  *   delegate     -> prompt
  *
- * a model that just called oracle({ task }) then calls code_review({ task }) and
+ * a model that just called oracle({ task }) then calls review_code({ task }) and
  * gets "must have required properties diff_description". it retries and usually
  * self-corrects, but that wastes a whole turn and, for tools whose failure is
  * silent rather than loud, produces subtly wrong behaviour.

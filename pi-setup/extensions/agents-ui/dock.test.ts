@@ -140,7 +140,7 @@ describe("the rows", () => {
 		const { store, dock } = setup();
 		store.ingest([
 			run({ label: "a very long label that cannot possibly fit into a narrow terminal ".repeat(2), activity: "read /a/very/long/path/to/a/file/that/is/deep/in/the/tree.ts" }),
-			run({ agent: "code_review", label: "日本語のラベル" }),
+			run({ agent: "review_code", label: "日本語のラベル" }),
 			finished({ status: "failed", errorMessage: "boom\nsecond" }),
 		]);
 		for (const width of [12, 20, ...WIDTHS]) {

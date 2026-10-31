@@ -73,7 +73,7 @@ for it; a call can pass `model` / `thinking` to override:
 - `oracle` — technical advisor that returns a verdict
 - `chad` — read-only research agent that returns cited evidence
 - `librarian` — GitHub repo explorer
-- `code_review` — two-phase review
+- `review_code` — two-phase review
 - `delegate` — full resumable sub-agent for parallel independent work
 - `read_web_page` — static web page reader; `prompt` / `objective` spawn a Q&A / excerpt child
 - `read_session` — past-session reader

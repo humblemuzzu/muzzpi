@@ -399,7 +399,7 @@ describe("stall watchdog", () => {
 
 describe("persisted session ids", () => {
 	test("a new id is named after the spawning tool", () => {
-		for (const agent of ["chad", "code_review"]) expect(newSessionId(agent)).toMatch(new RegExp(`^${agent}-[0-9a-f-]{36}$`));
+		for (const agent of ["chad", "review_code"]) expect(newSessionId(agent)).toMatch(new RegExp(`^${agent}-[0-9a-f-]{36}$`));
 	});
 
 	test("the id and its directory are passed through untouched", async () => {

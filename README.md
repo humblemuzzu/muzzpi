@@ -34,7 +34,7 @@ The last 30 days, one machine:
 |---|---|
 | Sessions | **196**, on 29 of the 30 days |
 | Tool calls | **18,905** |
-| Sub-agent runs | **1,016**: delegate 479 · chad 249 · read_web_page 103 · code_review 100 · oracle 23 · librarian 21 · read_session 21 · finder 20 |
+| Sub-agent runs | **1,016**: delegate 479 · chad 249 · read_web_page 103 · review_code 100 · oracle 23 · librarian 21 · read_session 21 · finder 20 |
 | Screenshots | 270 |
 | Web searches | 99 |
 
@@ -132,7 +132,7 @@ Pick by what you need back:
 | `oracle` | one verdict, its trade-offs and effort | Sonnet 5.5 |
 | `delegate` | finished work | Sonnet 5.5 |
 | `librarian` | how code works across GitHub repos you have not cloned | DeepSeek Flash |
-| `code_review` | a structured review of a diff described in plain words | Sonnet 5.5 |
+| `review_code` | a structured review of a diff described in plain words | Sonnet 5.5 |
 
 - **They run in the background.** A call returns at once and the answer
   arrives as a message that wakes the main agent; agents that finish together
@@ -144,7 +144,7 @@ Pick by what you need back:
   [`agent-models.json`](pi-setup/agent-models.json); a name not on it is refused,
   never swapped for the nearest one. Every result ends with the model and
   thinking level that actually ran. `/agents models main` moves delegate, oracle
-  and code_review onto whatever model your main session is on; `/agents models list`
+  and review_code onto whatever model your main session is on; `/agents models list`
   (the default) puts them back.
 - **chad cannot write.** No `edit` or `write`, and its bash runs under an
   allowlist that refuses redirection, `sed -i`, interpreters and every git
@@ -266,7 +266,7 @@ mentions a token stays readable.
 |---|---|
 | Files | `read` · `edit` · `write` · `undo_edit` · `redo_edit` · `grep` · `find` · `ls` · `format_file` |
 | Shell | `bash` · `codemode` |
-| Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `code_review` · `agents` |
+| Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `review_code` · `agents` |
 | Web | `web_search` · `x_search` · `read_web_page` |
 | GitHub | `read_github` · `search_github` · `list_directory_github` · `list_repositories` · `glob_github` · `commit_search` · `diff` |
 | Screen | `screenshot` |

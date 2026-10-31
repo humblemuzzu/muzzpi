@@ -1,6 +1,6 @@
 /**
  * rendering utilities for sub-agent tool results: DisplayItem, message
- * parsing and the TUI tree. every spawning tool (finder, oracle, code_review,
+ * parsing and the TUI tree. every spawning tool (finder, oracle, review_code,
  * delegate, chad, librarian) uses these for a consistent renderResult.
  */
 

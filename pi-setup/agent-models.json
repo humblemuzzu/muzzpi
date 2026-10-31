@@ -15,7 +15,7 @@
     "oracle": { "model": "sonnet", "thinking": "high", "followMain": true },
     "finder": { "model": "deepseek-flash", "thinking": "high" },
     "librarian": { "model": "deepseek-flash", "thinking": "high" },
-    "code_review": { "model": "sonnet", "thinking": "high", "followMain": true },
+    "review_code": { "model": "sonnet", "thinking": "high", "followMain": true },
     "read_session": { "model": "deepseek-flash", "thinking": "high" },
     "read_web_page": { "model": "deepseek-flash", "thinking": "high" }
   }

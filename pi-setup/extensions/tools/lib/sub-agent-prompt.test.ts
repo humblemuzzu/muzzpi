@@ -107,7 +107,7 @@ describe("every sub-agent's prompt matches its real allowlist", () => {
 	const agents: Array<[string, string[]]> = [
 		["finder", finderAllowlist()],
 		["oracle", oracleAllowlist()],
-		["code_review", codeReviewAllowlist()],
+		["review_code", codeReviewAllowlist()],
 		["librarian", librarianAllowlist()],
 		["delegate", delegateAllowlist()],
 		// the two fetch/read tools that spawn a child with a single read-only tool

@@ -1,5 +1,5 @@
 /**
- * e2e tests for dedicated sub-agent tools (finder, oracle, delegate, code_review).
+ * e2e tests for dedicated sub-agent tools (finder, oracle, delegate, review_code).
  *
  * spawns `pi --mode json -p --no-session` for each test and parses
  * the NDJSON event stream. validates registration, sub-agent spawn,
@@ -287,7 +287,7 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		console.log(sep);
 	});
 
-	it("registration: finder, oracle, delegate, code_review visible to model", async () => {
+	it("registration: finder, oracle, delegate, review_code visible to model", async () => {
 		const t0 = Date.now();
 		const { events, exitCode } = await runPi(
 			"List every tool you have available. Just the names, one per line.",
@@ -301,7 +301,7 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		expect(text).toContain("write");
 		expect(text).toContain("read_web_page");
 		expect(text).toContain("web_search");
-		expect(text).toContain("code_review");
+		expect(text).toContain("review_code");
 
 		const c = getCosts(events);
 		costs.push({ test: "registration", parent: c.parent, subAgent: c.subAgent, total: c.parent + c.subAgent, durationMs: Date.now() - t0 });
@@ -445,20 +445,20 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		costs.push({ test: "web_search", parent: c.parent, subAgent: c.subAgent, total: c.parent + c.subAgent, durationMs: Date.now() - t0 });
 	}, 60_000);
 
-	it("code_review: sub-agent reviews a diff and produces a Markdown report", async () => {
+	it("review_code: sub-agent reviews a diff and produces a Markdown report", async () => {
 		const t0 = Date.now();
 		const { events, exitCode } = await runPi(
-			'Use the code_review tool with diff_description "the last commit on the current branch (git diff HEAD~1)". Just call the tool, nothing else.',
+			'Use the review_code tool with diff_description "the last commit on the current branch (git diff HEAD~1)". Just call the tool, nothing else.',
 		);
 		expect(exitCode).toBe(0);
 
 		const calls = getToolCalls(events);
-		const crCalls = calls.filter(c => c.name === "code_review");
+		const crCalls = calls.filter(c => c.name === "review_code");
 		expect(crCalls.length).toBeGreaterThanOrEqual(1);
 		expect(crCalls[0].args.diff_description).toBeTruthy();
 
 		const results = getToolResults(events);
-		const crResults = results.filter(r => r.toolName === "code_review");
+		const crResults = results.filter(r => r.toolName === "review_code");
 		expect(crResults.length).toBeGreaterThanOrEqual(1);
 
 		const result = crResults[0];
@@ -472,7 +472,7 @@ describe.skipIf(!ENABLED)("sub-agent tools e2e", () => {
 		expect(result.usage?.turns).toBeGreaterThanOrEqual(1);
 
 		const c = getCosts(events);
-		costs.push({ test: "code_review", parent: c.parent, subAgent: c.subAgent, total: c.parent + c.subAgent, durationMs: Date.now() - t0 });
+		costs.push({ test: "review_code", parent: c.parent, subAgent: c.subAgent, total: c.parent + c.subAgent, durationMs: Date.now() - t0 });
 	}, 180_000);
 
 	describe.skipIf(!tmuxAvailable)("TUI rendering", () => {

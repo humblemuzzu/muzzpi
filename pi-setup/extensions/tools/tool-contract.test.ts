@@ -54,7 +54,7 @@ const SUB_AGENT_TOOLS: Array<[string, AnyTool]> = [
 	["delegate", createDelegateTool() as any],
 	["chad", createChadTool() as any],
 	["finder", createFinderTool() as any],
-	["code_review", createCodeReviewTool() as any],
+	["review_code", createCodeReviewTool() as any],
 ];
 
 /** the primary input each sub-agent tool cannot run without. */
@@ -64,7 +64,7 @@ const PRIMARY_PARAM: Record<string, string> = {
 	delegate: "prompt",
 	chad: "prompt",
 	finder: "query",
-	code_review: "diff_description",
+	review_code: "diff_description",
 };
 
 describe("tool contract: schema and prose must agree", () => {
@@ -200,7 +200,7 @@ describe("tool contract: the spawn graph is acyclic", () => {
 	const allowlists: Record<string, string[]> = {
 		finder: finderAllowlist(),
 		oracle: oracleAllowlist(),
-		code_review: codeReviewAllowlist(),
+		review_code: codeReviewAllowlist(),
 		librarian: librarianAllowlist(),
 		delegate: delegateAllowlist(),
 		chad: chadAllowlist(),
@@ -241,8 +241,8 @@ describe("tool contract: the spawn graph is acyclic", () => {
 		}
 	});
 
-	test("codemode goes to chad, delegate and code_review, and gives chad no way to write", () => {
-		for (const name of ["chad", "delegate", "code_review"]) expect(allowlists[name]).toContain("codemode");
+	test("codemode goes to chad, delegate and review_code, and gives chad no way to write", () => {
+		for (const name of ["chad", "delegate", "review_code"]) expect(allowlists[name]).toContain("codemode");
 		for (const name of ["finder", "oracle", "librarian"]) expect(allowlists[name]).not.toContain("codemode");
 		for (const mutation of ["edit", "write", "format_file", "undo_edit", "redo_edit"]) {
 			expect(allowlists.chad).not.toContain(mutation);
@@ -283,7 +283,7 @@ describe("tool contract: every sub-agent takes a model and a thinking level", ()
 		["oracle", createOracleTool({ models })],
 		["finder", createFinderTool({ models })],
 		["librarian", createLibrarianTool({ models })],
-		["code_review", createCodeReviewTool({ models })],
+		["review_code", createCodeReviewTool({ models })],
 		["read_session", createReadSessionTool({ models })],
 		["read_web_page", createReadWebPageTool({ models })],
 	];

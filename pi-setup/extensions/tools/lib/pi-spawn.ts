@@ -243,7 +243,7 @@ function readSessionHeader(file: string): SessionHeader | undefined {
 	}
 }
 
-const SESSION_AGENTS: readonly string[] = ["delegate", "chad", "oracle", "finder", "librarian", "code_review"];
+const SESSION_AGENTS: readonly string[] = ["delegate", "chad", "oracle", "finder", "librarian", "review_code"];
 
 /** sessions started before this carry `delegate-` whichever tool made them, so a chad may resume those. */
 const AGENT_NAMED_IDS_SINCE = Date.parse("2026-10-21T00:00:00Z");

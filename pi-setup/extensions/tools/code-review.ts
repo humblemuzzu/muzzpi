@@ -1,5 +1,5 @@
 /**
- * code_review tool — structured diff review via a sub-agent.
+ * review_code tool — structured diff review via a sub-agent.
  *
  * spawns a sub-agent that:
  * 1. runs git diff (or other bash command) based on diff_description
@@ -35,7 +35,7 @@ const EXTENSION_TOOLS = [
 /**
  * the merged, deduped, alias-resolved allowlist piSpawn turns into `--tools`
  * and exports to the child as its tool list. exported so tests can pin the
- * exact surface a code_review child receives.
+ * exact surface a review_code child receives.
  */
 export function codeReviewAllowlist(): string[] {
 	return resolveAliases([...BUILTIN_TOOLS, ...EXTENSION_TOOLS]);
@@ -192,7 +192,7 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 	const models = config.models ?? emptyAgentModels();
 	const runs = config.runs ?? new AgentRuns();
 	return {
-		name: "code_review",
+		name: "review_code",
 		label: "Code Review",
 		description:
 			"Review code changes, diffs, outstanding changes, or modified files. " +
@@ -203,7 +203,7 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 			"or any other tool to generate the diff but just pass a natural language description " +
 			"of how to compute the diff in the diff_description argument.\n\n" +
 			runs.backgroundNote +
-			'Example: code_review({ diff_description: "uncommitted changes on the current branch vs HEAD" })',
+			'Example: review_code({ diff_description: "uncommitted changes on the current branch vs HEAD" })',
 
 		parameters: Type.Object({
 			diff_description: Type.String({
@@ -225,15 +225,15 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 					description: "Additional instructions to guide the review agent.",
 				}),
 			),
-			...runs.params("code_review"),
-			...modelParams(models, "code_review"),
+			...runs.params("review_code"),
+			...modelParams(models, "review_code"),
 		}),
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const resolved = requireParam(
 				params as Record<string, unknown>,
 				CODE_REVIEW_PARAM_NAMES,
-				"code_review",
+				"review_code",
 			);
 			if ("error" in resolved) return resolved.error;
 
@@ -247,7 +247,7 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 
 			return runs.launch(
 				{
-					agent: "code_review",
+					agent: "review_code",
 					label: resolved.value,
 					working: "(reviewing...)",
 					returnImages: true,
@@ -269,11 +269,11 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 		},
 
 		renderCall(args: any, theme: any, context: any) {
-			return renderAgentCall("code_review", args.diff_description || "...", theme, context, fileCount(args.files));
+			return renderAgentCall("review_code", args.diff_description || "...", theme, context, fileCount(args.files));
 		},
 
 		renderShell: AGENT_SHELL,
-		renderResult: renderAgentRunResult("code_review", (details) => {
+		renderResult: renderAgentRunResult("review_code", (details) => {
 			const comments = parseReviewMarkdown(getFinalOutput(details.messages));
 			return comments.length > 0 ? formatReviewSummary(comments) : undefined;
 		}),

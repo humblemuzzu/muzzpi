@@ -18,7 +18,7 @@ const IDENTITY: Record<string, string> = {
 	oracle: "thinkingHigh",
 	finder: "mdLink",
 	librarian: "syntaxNumber",
-	code_review: "mdQuote",
+	review_code: "mdQuote",
 };
 const FALLBACK_IDENTITY = ["accent", "syntaxVariable", "thinkingHigh", "mdLink", "syntaxNumber", "mdQuote", "borderAccent", "customMessageLabel"];
 

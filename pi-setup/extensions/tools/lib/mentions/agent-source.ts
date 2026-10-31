@@ -33,7 +33,7 @@ const agents: Record<AgentMentionKind, AgentDef> = {
     description: "codebase search by concept or behavior",
   },
   codereview: {
-    tool: "code_review",
+    tool: "review_code",
     description: "code review with diff analysis",
   },
   task: {

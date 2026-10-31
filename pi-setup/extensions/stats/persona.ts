@@ -94,7 +94,7 @@ const TOOL_KINDS: Array<[string, RegExp]> = [
 	["reading", /^(read|grep|glob|find|ls|list|view|lsp|codesearch|read_github|search_github|glob_github|list_directory_github|read_session|search_sessions)/],
 	["editing", /^(edit|write|apply_patch|multiedit|notebookedit|undo_edit|redo_edit|format_file)/],
 	["shell", /^(bash|exec_command|shell|shell_command|write_stdin|execute|exec)$/],
-	["delegating", /^(task|agent|delegate|chad|oracle|finder|code_review|librarian|spawn_agent)$/],
+	["delegating", /^(task|agent|delegate|chad|oracle|finder|review_code|code_review|librarian|spawn_agent)$/],
 	["the web", /^(web_?search|web_?fetch|read_web_page|fetch|screenshot)/],
 ];
 

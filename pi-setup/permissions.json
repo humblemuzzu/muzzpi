@@ -100,7 +100,7 @@
       "where": "local"
     },
     "action": "reject",
-    "message": "do not launch the amp CLI from bash — it is a separate program that runs outside this pi session. use the delegate / chad / oracle / finder / code_review / librarian tools, which run inside this pi session with your tools, permissions and visible output"
+    "message": "do not launch the amp CLI from bash — it is a separate program that runs outside this pi session. use the delegate / chad / oracle / finder / review_code / librarian tools, which run inside this pi session with your tools, permissions and visible output"
   },
   {
     "tool": "Bash",

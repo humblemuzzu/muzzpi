@@ -24,7 +24,7 @@ const SOURCES: ReadonlyArray<Word & { name: ModelSource }> = [
 
 export const MODELS_WORD: Word = {
 	name: "models",
-	description: "run delegate, oracle and code_review on their own models or the main one",
+	description: "run delegate, oracle and review_code on their own models or the main one",
 	next: () => SOURCES.map((s) => ({ value: s.name, description: s.description })),
 };
 
