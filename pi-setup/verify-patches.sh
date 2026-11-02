@@ -34,10 +34,12 @@ if declare -F pi_bin_is_bundle >/dev/null && pi_bin_is_bundle; then
     # npm (re)installed pi, which also undid every patch
     fail "pi entrypoint: pi's own bundle — every core patch is inert" "bash pi-setup/install.sh"
 elif declare -F pi_bin_is_our_bundle >/dev/null && pi_bin_is_our_bundle; then
-    if STALE=$(node "$SCRIPT_DIR/pi-bundle/build-pi-bundle.mjs" --pkg "$PI_PKG" --check 2>&1); then
-        pass "pi entrypoint: our bundle, current with the patched files"
-    else
+    if ! STALE=$(node "$SCRIPT_DIR/pi-bundle/build-pi-bundle.mjs" --pkg "$PI_PKG" --check 2>&1); then
         fail "pi entrypoint: our bundle is out of date (${STALE//$'\n'/; })" "$BUILD_FIX"
+    elif ! pi_bin_is_our_launcher; then
+        fail "pi entrypoint: our bundle without its launcher (on macOS a long session holds ~3x the memory)" "$BUILD_FIX"
+    else
+        pass "pi entrypoint: our bundle, current with the patched files"
     fi
 else
     note "pi entrypoint: modular CLI (patches load, every start ~170 ms slower)" "$BUILD_FIX"
@@ -125,6 +127,14 @@ if node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs" --check >/dev
 else
     fail "pi-tui: width patch missing in some copies (TUI will smear on exotic unicode)" \
          "node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs"
+fi
+
+# ── speed patches (pi-core-patches/text-patches.mjs): pi is correct without them, only slower ──
+if TEXT_PATCHES=$(node "$SCRIPT_DIR/pi-core-patches/text-patches.mjs" --pkg "$PI_PKG" --check 2>&1); then
+    pass "pi speed patches: streaming Markdown lexed from its last blocks, lean finished tool rows"
+else
+    note "pi speed patches missing: $(grep -v '^applied' <<<"$TEXT_PATCHES" | sed 's/  */ /g' | tr '\n' ';')" \
+         "node pi-setup/pi-core-patches/text-patches.mjs --pkg '$PI_PKG', then rebuild our bundle (a file pi changed: re-derive its edit there)"
 fi
 
 # ── anthropic-sub extension ──

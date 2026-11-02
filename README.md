@@ -66,6 +66,10 @@ Medians of 11–15 runs, alternated between versions so load hits both equally.
   not all 17.
 - **Every transcript row caches its render.** A 700k-token session types at
   10 ms per keystroke; it was 180.
+- **Long replies and long sessions stay light.** A streaming reply is lexed
+  from its last blocks instead of in full every frame: a 60,000-character
+  answer costs 10.7 s of CPU, it was 23.2. A 40-prompt session holds 453 MB,
+  it was 1,314: macOS no longer keeps pi's freed buffers.
 
 Opening pi went from 1.1 s to 0.44 s to 0.27 s since March.
 

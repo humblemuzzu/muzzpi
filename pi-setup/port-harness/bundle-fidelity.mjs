@@ -66,7 +66,9 @@ try {
 	if (build.status !== 0) throw new Error(`build-pi-bundle.mjs failed (exit ${build.status})`);
 
 	const official = load(join(pkg, "dist", "bundle"));
-	const ours = load(join(pkg, "dist", "fidelity"));
+	const ours = load(join(pkg, "dist", "fidelity"))
+		.filter((f) => f.rel !== "pi")
+		.map((f) => (f.rel === "cli.js" ? { ...f, text: f.text.replace(/if \(process\.env\.MUZZPI_DROP_MALLOC_LARGE_CACHE\) \{[^}]*\}\n/, "") } : f));
 	const stems = (list) => list.map((f) => f.stem).sort().join("\n");
 	if (stems(official) !== stems(ours)) {
 		const a = new Set(official.map((f) => f.stem));

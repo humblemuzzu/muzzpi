@@ -94,6 +94,14 @@ describe("buildSubAgentPrompt", () => {
 		expect(prompt).not.toContain("There is no separate `edit` or `write` tool");
 	});
 
+	test("a child with a writing bash learns the delete rule; one without bash, or read-only, is not told", () => {
+		const rule = "`trash <path>`. `rm` and every other local delete are";
+		expect(buildSubAgentPrompt("Amp", "read,bash,edit")).toContain(rule);
+		expect(buildSubAgentPrompt("Amp", "read,bash", true)).not.toContain(rule);
+		expect(prompt).not.toContain(rule);
+		expect(bulletTools(buildSubAgentPrompt("Amp", "read,bash"))).toEqual(["read", "bash"]);
+	});
+
 	test("a single-tool child reads as english, not 'These 1 are'", () => {
 		// read_web_page and read_session children get exactly one tool.
 		const single = buildSubAgentPrompt("Amp", "read");

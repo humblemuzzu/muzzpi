@@ -17,7 +17,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBashTool, idleKillSec, maxTimeoutSec } from "./bash";
+import { validateToolArguments } from "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
+import { clampTimeout, createBashTool, idleKillSec, maxTimeoutSec } from "./bash";
 
 const mockCtx = {
 	cwd: "/tmp",
@@ -176,6 +177,49 @@ describe("runtime net: malformed timeout is refused before any work", () => {
 	test("boundary values 1 and 600 are accepted", async () => {
 		expect((await run({ cmd: "echo LOW", timeout: 1 })).isError).toBe(false);
 		expect((await run({ cmd: "echo HIGH", timeout: 600 })).isError).toBe(false);
+	});
+});
+
+describe("over the ceiling: run at the ceiling, and told so", () => {
+	/** what pi does with a model's call: prepareArguments, then its own schema validation, then execute. */
+	async function piRuns(args: Record<string, unknown>) {
+		const tool = createBashTool() as any;
+		const params = validateToolArguments(tool, { type: "toolCall", id: "c", name: "bash", arguments: tool.prepareArguments(args) } as any);
+		const result: any = await tool.execute("c", params, undefined, undefined, mockCtx);
+		return { params, text: result.content?.[0]?.text ?? "", isError: result.isError === true, result };
+	}
+
+	test("900 and \"1200\" pass pi's validation as 600 and the result names the clamp", async () => {
+		for (const timeout of [900, "1200"]) {
+			const { params, text, isError, result } = await piRuns({ cmd: "echo RAN", timeout });
+			expect(params.timeout).toBe(600);
+			expect(isError).toBe(false);
+			expect(text).toContain("RAN");
+			expect(text).toContain(`(your timeout ${Number(timeout)}s is over the 600s cap, so it ran with 600s)`);
+			expect(result.structuredContent.exit_code).toBe(0);
+		}
+	});
+
+	test("a timeout within the cap is passed through untouched, with no note", async () => {
+		const args = { cmd: "echo RAN", timeout: 600 };
+		expect(clampTimeout(args, 600)).toBe(args);
+		const { text } = await piRuns(args);
+		expect(text).not.toContain("cap");
+	});
+
+	test("a missing, too-small or non-numeric timeout is still refused by the schema", () => {
+		const tool = createBashTool() as any;
+		for (const timeout of [undefined, 0, -5, "abc", null]) {
+			const args: Record<string, unknown> = { cmd: "echo x" };
+			if (timeout !== undefined) args.timeout = timeout;
+			expect(() => validateToolArguments(tool, { type: "toolCall", id: "c", name: "bash", arguments: tool.prepareArguments(args) } as any)).toThrow(/timeout/);
+		}
+	});
+
+	test("the schema and description the model sees are unchanged", () => {
+		const params = createBashTool().parameters as any;
+		expect(params.properties.timeout.maximum).toBe(600);
+		expect(params.properties.timeout_clamped_from).toBeUndefined();
 	});
 });
 

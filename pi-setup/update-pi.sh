@@ -38,6 +38,9 @@ if [ "$drift" -ne 0 ]; then
     echo "re-derive pi-core-patches/ onto $WORK/new/package/dist, set base-version to $VERSION, rerun"
     exit 1
 fi
+# speed-only edits: one that no longer fits is skipped (pi stays correct, only slower) until it is re-derived
+node "$SCRIPT_DIR/pi-core-patches/text-patches.mjs" --drift "$WORK/new/package" ||
+    echo "WARN  the speed patches marked DRIFT will be skipped: re-derive them in pi-core-patches/text-patches.mjs"
 
 BACKUP="$HOME/pi-update-backup-$CURRENT-$(date +%Y%m%d-%H%M%S)"
 cp -R "$PI_DIR" "$BACKUP"
@@ -53,6 +56,8 @@ for entry in "${PI_CORE_PATCHES[@]}"; do
     cp "$SCRIPT_DIR/pi-core-patches/$(patch_source "$entry")" "$target"
 done
 node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs"
+node "$SCRIPT_DIR/pi-core-patches/text-patches.mjs" --pkg "$PI_DIR" ||
+    echo "WARN  pi runs without the speed patches above until they are re-derived in pi-core-patches/text-patches.mjs"
 if ! node "$SCRIPT_DIR/pi-bundle/build-pi-bundle.mjs" --pkg "$PI_DIR" --link "$PREFIX/bin/pi"; then
     echo "WARN  pi runs the patched files directly (~170 ms slower per start) until build-pi-bundle.mjs builds (see above)"
 fi

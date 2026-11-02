@@ -59,7 +59,8 @@ pi CLI (v1.5.0) — @earendil-works/pi-coding-agent
 
 Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
 `cacheWarming: "off"` (`prompt-cache` owns warming), `tuiMode: "fullscreen"`,
-`quietStartup: "header"` (`"regular"` restores normal scrollback).
+`quietStartup: "header"` (`"regular"` restores normal scrollback), `markdown.mermaid: "final"`
+(`"streaming"` lexes the whole reply again every frame).
 
 `/model` shows only `settings.json` `enabledModels`; the rest of the catalog
 stays hidden. DeepSeek's `deepseek-flash` always serves its newest release, so it
@@ -123,7 +124,8 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 | `session-manager.js` + `session-selector-search.js` | pi core | fast `/resume`: a tool result is counted without being decoded, each file's info cached by size+mtime, a keystroke that extends the query re-matches only the last matches; the list, matches and order stay stock's |
 | `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect; stock connects every enabled server at every session start |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
-| **our bundle** | `dist/muzzpi-bundle/`, `pi` → its `cli.js` | what pi runs: the patched files, bundled; stale after any change to them |
+| **our bundle** | `dist/muzzpi-bundle/`, `pi` → its launcher `pi` | what pi runs: the patched files, bundled; stale after any change to them. The launcher sets `MallocLargeCache=0` (macOS kept ~640 MB of freed buffers per long session) for pi alone: `cli.js` drops it, so nothing pi runs inherits it |
+| speed patches | `pi-core-patches/text-patches.mjs` | edits to pi-tui `markdown.js`, `assistant-message.js`, `interactive-mode.js`, each applied only to the stock file (sha256) it was made on; a drifted one is skipped (pi stays correct, slower) until re-derived; `markdown-stream.test.ts` pins that a streaming reply renders as stock |
 | extension bundles | `~/.pi/agent/extensions/` | `.js` only; a stray `.ts` shadows its bundle |
 | MCP config | `~/.pi/agent/mcp.json` | every server has a `description`; no `-builtin:mcp` in `settings.json` |
 | sub-agent models | `~/.pi/agent/agent-models.json` | valid, every id listed by `pi --list-models` |
@@ -453,7 +455,7 @@ back; drop the override only once pi stops sending Claude strict.
 
 | | mechanism | bounds |
 |---|---|---|
-| L1 | **`timeout` required**, schema-bounded 1–600s | declared budget |
+| L1 | **`timeout` required**, schema-bounded 1–600s; over the cap `prepareArguments` runs it at the cap and the result says so (missing stays an error) | declared budget |
 | L2 | idle kill: no output **and** no CPU for 300s | a hung command |
 | L3 | `startChild` stall watchdog: no child output for 900s | sub-agent children |
 
@@ -587,7 +589,8 @@ barrel `export *` may not evaluate it). Don't add `/value` to agent mentions.
    0.84's #7327 silently killed every sub-agent that way. When a release touches model resolution,
    tool filtering, CLI arguments or RPC, call one real sub-agent before declaring it clean.
 3. **pi core update** → re-derive the 6 core patches against the new stock files (never blind-copy;
-   see `pi-migrations.md`) + the width patch, then rebuild (`update-pi.sh` does). The
+   see `pi-migrations.md`) + the width patch + each speed patch `update-pi.sh` reports as DRIFT,
+   then rebuild (`update-pi.sh` does). The
    `@mariozechner/*` compat aliases will eventually go — then rename imports.
 4. **tools extension deps** (`extensions/tools/package.json`) → `npm outdated`
    there; `npm ci` (node_modules is gitignored), then `bun test --parallel` before deploying.

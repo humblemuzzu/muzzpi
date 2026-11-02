@@ -38,8 +38,15 @@ export function parseToolList(csv: string): string[] {
  *     sub-agent with no agent prompt of its own; the shared behaviour rules
  *     arrive separately as the `rules` section (agents/rules.amp.md)
  */
-export function buildSubAgentPrompt(identity: string, toolCsv: string): string {
+export function buildSubAgentPrompt(identity: string, toolCsv: string, readOnlyBash = false): string {
 	const tools = parseToolList(toolCsv);
+	const deletes =
+		tools.includes("bash") && !readOnlyBash
+			? [
+				"- **Deleting files on this Mac:** `trash <path>`. `rm` and every other local delete are",
+				"  blocked; on a server over `ssh` they work normally.",
+			]
+			: [];
 	// grammar matters here: read_web_page and read_session children get exactly
 	// one tool, and "These 1 are the only tools" reads like a bug.
 	const countLine =
@@ -68,6 +75,7 @@ export function buildSubAgentPrompt(identity: string, toolCsv: string): string {
 		"- **Read first.** Open the relevant files before changing or concluding anything.",
 		"- **Verify.** After an edit: imports resolve, signatures match callers, tests pass.",
 		"- **Match the surrounding style** — naming, indentation, error handling.",
+		...deletes,
 		"- **Fix the root cause of the task you were given** and finish it. Name anything",
 		"  blocked or unverified instead of implying it is done.",
 		"- Your final message is the entire answer returned to the main agent — make it",

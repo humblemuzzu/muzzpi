@@ -34,12 +34,13 @@ const ALLOWED_COMMANDS: ReadonlySet<string> = new Set([
 	// search
 	"rg", "grep", "egrep", "fgrep", "zgrep", "find", "fd", "ag", "ack",
 	// inspect + transform (gated below — several of these can write)
-	"jq", "yq", "sed", "xxd", "od", "strings", "base64",
+	"jq", "yq", "sed", "xxd", "od", "strings", "base64", "paste", "fold",
 	"shasum", "md5", "md5sum", "sha1sum", "sha256sum", "cksum",
 	"diff", "comm", "cmp",
 	// environment + trivia
 	"echo", "printf", "date", "env", "printenv", "whoami", "hostname", "uname",
 	"which", "type", "id", "sleep", "true", "false", "test", "man", "ps", "lsof",
+	"sw_vers", "dig",
 	// gated below
 	"git", "curl",
 ]);

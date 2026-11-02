@@ -12,6 +12,39 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## CPU and memory, ideas from Pi-Bolt (2026-11-02) — on 1.5.0, no pi update
+
+Bench: Pi-Bolt's `bench/` (throwaway home, scripted model, so stock tools, not ours), M4 Pro, Node 22,
+medians of 3 runs, before = the 1.5.0 bundle as it was, after = all of the below.
+
+- **Launcher** (`build-pi-bundle.mjs` writes `dist/muzzpi-bundle/pi`, `pi` links to it): on macOS it sets
+  `MallocLargeCache=0` when unset (libmalloc reads it once, at exec), and `cli.js` deletes it again, so bash
+  commands, MCP servers and searchd never inherit it; sub-agents get it from their own launcher.
+  long_session (40 prompts, 2.2M tokens): RSS at prompt 40 1,314 → 453 MB, CPU per prompt 181 → 192 ms
+  (+6%, the cost of returning freed buffers to the OS). Idle RPC sub-agent: RSS 175 → 156 MB, footprint
+  132 → 89 MB. `--version` 104 → 107 ms (sh + exec). `verify-patches.sh` fails a `pi` linked past it.
+- **`markdown.mermaid: "final"`**: the transformer full-lexed the reply every frame to look for diagrams.
+  long_answer 60k: 25.2 → 21.2 s CPU. Diagrams render when the reply ends; the settled screen is identical.
+- **Text patches** (`pi-core-patches/text-patches.mjs`, applied by install.sh/update-pi.sh, checked by
+  verify-patches.sh as WARN): each edit applies only to the stock file sha256 it was made on.
+  - `streaming-markdown` (pi-tui `markdown.js` + `assistant-message.js`): while the reply streams and only
+    grew, lex from its last three top-level blocks (two left a "2." line split from the paragraph above it
+    in 1 of 3,000 fuzz documents); not streaming = full lex, so a finished reply renders as stock. On top
+    of mermaid final: 21.0 → 11.5 s. Exactness: 400 longest real answers, 287,525 frames, 0 differ;
+    `markdown-stream.test.ts` (fuzz, pi's AssistantMessageComponent, `MD_STREAM_SESSIONS=n` for yours).
+  - `tool-row-result` (`interactive-mode.js`): a finished tool row keeps content/details/isError/durationMs,
+    not `structuredContent` (bash: up to 1 MiB each, for the session's life). 30 `seq 1 300000` calls: heap
+    after GC 61 → 34 MB. Renderers only ever received content/details (`text-patches.test.ts` pins it).
+- **Together**, long_answer 60k: 23.2 → 10.7 s CPU (20k: 7.5 → 3.9 s); idle own memory 95 → 58 MB;
+  TTI 155 → 159 ms. Key echo while a 20k reply streams over 1,000 entries: median 5.6 → 6.5 ms, p95
+  12–13 → 13–15 ms; without the launcher 6.0 ms, so about 1 ms of it is `MallocLargeCache=0`.
+- **Tools**: bash `timeout` over the cap runs at the cap (`prepareArguments`, before pi's validation) and
+  the result says so; schema and description unchanged. chad allows `sw_vers`, `paste`, `fold`, `dig`.
+  A sub-agent with a writing bash is told `trash <path>` (canary 4/4, parent and child prompt).
+- **Dropped**: no frame for a tool-call delta (Pi-Bolt `f67707c4c`): 1.5.0's streaming JSON parser returns a
+  new arguments object for every delta (0 of 26,669 equal), and rows already apply args once per frame.
+  Spacing slow frames by 3× (`9aacafaa3`): −6% on 60k after the above, none on 20k; not worth the risk.
+
 ## 1.5.0 (2026-11-02) — from 1.4.0, four patches re-derived, /resume search rebuilt
 
 **Patch drift (stock 1.4.0 vs 1.5.0, registry tarballs):** `keybindings.js`, `mcp/index.js`

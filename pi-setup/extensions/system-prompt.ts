@@ -14,6 +14,7 @@ import { piPackageDir } from "./tools/lib/pi-package-dir";
 import { interpolatePromptVars } from "./tools/lib/interpolate";
 import { describeAgentModels, loadAgentModels } from "./tools/lib/agent-models";
 import { isLocalProvider } from "./tools/lib/local-providers";
+import { isReadOnlyBash } from "./tools/lib/read-only-bash";
 import {
 	buildSubAgentPrompt,
 	parseToolList,
@@ -69,7 +70,7 @@ export default function (pi: ExtensionAPI) {
 		// misled before any footnote arrives. its agent prompt arrives as appendSystemPrompt.
 		const childTools = process.env[SUB_AGENT_TOOLS_ENV]?.trim();
 		if (childTools && parseToolList(childTools).length > 0) {
-			options.customPrompt = buildSubAgentPrompt(IDENTITY, childTools);
+			options.customPrompt = buildSubAgentPrompt(IDENTITY, childTools, isReadOnlyBash());
 			if (rules) options.sections.rules = rules;
 			addShared();
 			return;

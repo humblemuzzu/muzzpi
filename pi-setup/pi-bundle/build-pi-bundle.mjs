@@ -211,7 +211,19 @@ function dependencyDir(repoRoot, name) {
 	throw new Refusal(`cannot find ${name} in any node_modules above ${repoRoot}`);
 }
 
-async function runRecipe(esbuild, repoRoot, bundleDir) {
+// macOS keeps freed large allocations for reuse: a long session held ~640 MB of them. Set before node
+// starts (libmalloc reads it once), only for pi itself: cli.js drops it, so what pi runs never inherits it.
+const LAUNCHER = "pi";
+const MALLOC_MARKER = "MUZZPI_DROP_MALLOC_LARGE_CACHE";
+function shellLauncher(cli) {
+	const malloc =
+		process.platform === "darwin"
+			? `if [ -z "\${MallocLargeCache+x}" ]; then\n\tMallocLargeCache=0 ${MALLOC_MARKER}=1\n\texport MallocLargeCache ${MALLOC_MARKER}\nfi\n`
+			: "";
+	return `#!/bin/sh\n${malloc}exec node '${cli.replaceAll("'", `'\\''`)}' "$@"\n`;
+}
+
+async function runRecipe(esbuild, repoRoot, bundleDir, finalDir) {
 	const { build } = esbuild;
 	const codingAgentDistDir = join(repoRoot, "dist");
 	const aiDistDir = join(dependencyDir(repoRoot, "@earendil-works/pi-ai"), "dist");
@@ -345,11 +357,17 @@ async function runRecipe(esbuild, repoRoot, bundleDir) {
 	const cliLauncher = `#!/usr/bin/env node
 import { createRequire, enableCompileCache } from "node:module";
 
+if (process.env.${MALLOC_MARKER}) {
+	delete process.env.MallocLargeCache;
+	delete process.env.${MALLOC_MARKER};
+}
 enableCompileCache();
 createRequire(import.meta.url)("./cli-runtime.js");
 `;
 	writeFileSync(join(bundleDir, "cli.js"), cliLauncher);
 	chmodSync(join(bundleDir, "cli.js"), 0o755);
+	writeFileSync(join(bundleDir, LAUNCHER), shellLauncher(join(finalDir, "cli.js")));
+	chmodSync(join(bundleDir, LAUNCHER), 0o755);
 	chmodSync(join(bundleDir, "rpc-entry.js"), 0o755);
 	return { metafiles, oauthFlows };
 }
@@ -429,7 +447,7 @@ function smoke(dir, version, full) {
 // Hashed chunk names change with their content. A pi already running from the
 // previous build imports its chunks lazily, so that build's files stay until the next one.
 function publish(staging, final, files, previousFiles) {
-	const rank = (file) => (file === "cli.js" ? 2 : file.startsWith("chunks/") ? 0 : 1);
+	const rank = (file) => (file === "cli.js" || file === LAUNCHER ? 2 : file.startsWith("chunks/") ? 0 : 1);
 	mkdirSync(final, { recursive: true });
 	for (const file of [...files].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))) {
 		mkdirSync(dirname(join(final, file)), { recursive: true });
@@ -511,7 +529,7 @@ async function main() {
 	process.once("SIGINT", onSignal);
 	process.once("SIGTERM", onSignal);
 	try {
-		const { metafiles, oauthFlows } = await runRecipe(esbuild, opts.pkg, staging);
+		const { metafiles, oauthFlows } = await runRecipe(esbuild, opts.pkg, staging, final);
 		const inputPaths = new Set();
 		for (const metafile of metafiles) {
 			for (const input of Object.keys(metafile.inputs)) if (existsSync(join(opts.pkg, input))) inputPaths.add(input);
@@ -532,6 +550,10 @@ async function main() {
 			inputs,
 		});
 		smoke(final, pkgJson.version, false);
+		const launched = spawnSync(join(final, LAUNCHER), ["--version"], { cwd: tmpdir(), input: "", encoding: "utf8", timeout: 60_000 });
+		if (launched.status !== 0 || launched.stdout.trim() !== pkgJson.version) {
+			throw new Refusal(`smoke test: ${join(final, LAUNCHER)} --version printed "${launched.stdout?.trim()}" (exit ${launched.status})\n${launched.stderr?.slice(-800)}`);
+		}
 
 		const bytes = files.reduce((sum, file) => sum + lstatSync(join(final, file)).size, 0);
 		console.log(
@@ -546,8 +568,8 @@ async function main() {
 	}
 
 	if (opts.link) {
-		link(opts.link, join(final, "cli.js"));
-		console.log(`linked ${opts.link} → ${join(final, "cli.js")}`);
+		link(opts.link, join(final, LAUNCHER));
+		console.log(`linked ${opts.link} → ${join(final, LAUNCHER)}`);
 	}
 	return 0;
 }

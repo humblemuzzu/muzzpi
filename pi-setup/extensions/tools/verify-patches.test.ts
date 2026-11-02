@@ -51,12 +51,12 @@ function fakePi(entry: string) {
 		writeFileSync(join(pkg, file), text, { mode });
 	};
 	write("package.json", JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "1.3.0" }));
-	for (const cli of ["dist/cli.js", "dist/bundle/cli.js", "dist/muzzpi-bundle/cli.js"]) write(cli, "#!/usr/bin/env node\n", 0o755);
+	for (const cli of ["dist/cli.js", "dist/bundle/cli.js", "dist/muzzpi-bundle/cli.js", "dist/muzzpi-bundle/pi"]) write(cli, "#!/usr/bin/env node\n", 0o755);
 	write("dist/core/keybindings.js", "patched");
 	const builder = readFileSync(join(PI_SETUP, "pi-bundle", "build-pi-bundle.mjs"));
 	write(
 		"dist/muzzpi-bundle/.muzzpi-build.json",
-		JSON.stringify({ piVersion: "1.3.0", builder: sha16(builder), files: ["cli.js"], inputs: { "dist/core/keybindings.js": sha16("patched") } }),
+		JSON.stringify({ piVersion: "1.3.0", builder: sha16(builder), files: ["cli.js", "pi"], inputs: { "dist/core/keybindings.js": sha16("patched") } }),
 	);
 	mkdirSync(join(root, "bin"));
 	symlinkSync(join(pkg, entry), join(root, "bin", "pi"));
@@ -143,11 +143,17 @@ describe("verify-patches.sh: pi entrypoint", () => {
 	const REBUILD = /fix: node pi-setup\/pi-bundle\/build-pi-bundle\.mjs --pkg '.+' --link '.+\/bin\/pi'/;
 
 	test("our bundle, current with the patched files, passes", () => {
-		expect(entrypoint(fakePi("dist/muzzpi-bundle/cli.js").bin).line).toStartWith("PASS  pi entrypoint: our bundle");
+		expect(entrypoint(fakePi("dist/muzzpi-bundle/pi").bin).line).toStartWith("PASS  pi entrypoint: our bundle");
+	}, 60_000);
+
+	test("our bundle linked past its launcher fails and is relinked", () => {
+		const { line, fix } = entrypoint(fakePi("dist/muzzpi-bundle/cli.js").bin);
+		expect(line).toStartWith("FAIL  pi entrypoint: our bundle without its launcher");
+		expect(fix).toMatch(REBUILD);
 	}, 60_000);
 
 	test("our bundle fails once a patched file changes, naming the file", () => {
-		const pi = fakePi("dist/muzzpi-bundle/cli.js");
+		const pi = fakePi("dist/muzzpi-bundle/pi");
 		pi.write("dist/core/keybindings.js", "patched, then edited");
 		const { line, fix } = entrypoint(pi.bin);
 		expect(line).toStartWith("FAIL");
@@ -156,13 +162,13 @@ describe("verify-patches.sh: pi entrypoint", () => {
 	}, 60_000);
 
 	test("our bundle fails after a pi update it was not rebuilt for", () => {
-		const pi = fakePi("dist/muzzpi-bundle/cli.js");
+		const pi = fakePi("dist/muzzpi-bundle/pi");
 		pi.write("package.json", JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "1.3.1" }));
 		expect(entrypoint(pi.bin).line).toContain("built from pi 1.3.0, installed is 1.3.1");
 	}, 60_000);
 
 	test("our bundle fails when its build record is gone", () => {
-		const pi = fakePi("dist/muzzpi-bundle/cli.js");
+		const pi = fakePi("dist/muzzpi-bundle/pi");
 		unlinkSync(join(pi.pkg, "dist", "muzzpi-bundle", ".muzzpi-build.json"));
 		expect(entrypoint(pi.bin).line).toStartWith("FAIL");
 	}, 60_000);

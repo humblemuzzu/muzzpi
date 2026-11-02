@@ -54,6 +54,12 @@ describe("research commands are allowed", () => {
 		"ls src 2>/dev/null",
 		"rg pattern . >/dev/null 2>&1",
 		"ps aux | grep node",
+		"sw_vers -productVersion",
+		"paste -sd, list.txt",
+		"paste - - < pairs.txt",
+		"fold -w 80 long.txt",
+		"dig +short example.com",
+		"dig -x 8.8.8.8 +noall +answer",
 	];
 	for (const cmd of allowed) {
 		test(cmd, () => expect(allows(cmd)).toBe(true));
@@ -77,6 +83,9 @@ describe("direct mutation is refused", () => {
 		"trash file.txt",
 		"install -m 644 a b",
 		"rsync -a src/ dst/",
+		"paste a b > merged.txt",
+		"fold -w 80 long.txt > folded.txt",
+		"dig example.com > answer.txt",
 	];
 	for (const cmd of refused) {
 		test(cmd, () => expect(refuses(cmd)).toBe(true));

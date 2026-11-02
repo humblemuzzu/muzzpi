@@ -43,7 +43,14 @@ pi_bin_is_bundle() {
     [[ "$(readlink "$PI_BIN" 2>/dev/null)" == *dist/bundle/cli.js ]]
 }
 
-# Ours: pi's recipe run on the patched files by pi-bundle/build-pi-bundle.mjs.
+# Ours: pi's recipe run on the patched files by pi-bundle/build-pi-bundle.mjs,
+# started by its launcher (dist/muzzpi-bundle/pi); a link to its cli.js predates the launcher.
 pi_bin_is_our_bundle() {
-    [[ "$(readlink "$PI_BIN" 2>/dev/null)" == *dist/muzzpi-bundle/cli.js ]]
+    local target
+    target="$(readlink "$PI_BIN" 2>/dev/null)"
+    [[ "$target" == *dist/muzzpi-bundle/pi || "$target" == *dist/muzzpi-bundle/cli.js ]]
+}
+
+pi_bin_is_our_launcher() {
+    [[ "$(readlink "$PI_BIN" 2>/dev/null)" == *dist/muzzpi-bundle/pi ]]
 }

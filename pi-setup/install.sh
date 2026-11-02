@@ -453,7 +453,10 @@ if [ -d "$SCRIPT_DIR/pi-core-patches" ]; then
     # every npm package bundles its own pi-tui, and one unpatched copy still smears
     run node "$SCRIPT_DIR/pi-core-patches/apply-pi-tui-width-patch.mjs" || \
         warn "pi-tui width patch failed on some copies — TUI may smear on exotic unicode (see AGENTS.md)"
-    ok "pi core patches applied (resource-loader + session pinning + fast /resume + lazy MCP + pi-tui widths)"
+    # speed only: a file that differs from the stock copy an edit was made on is left alone
+    run node "$SCRIPT_DIR/pi-core-patches/text-patches.mjs" --pkg "$PI_PKG" || \
+        warn "a speed patch does not fit this pi (above): pi works, only slower; re-derive it in pi-core-patches/text-patches.mjs"
+    ok "pi core patches applied (resource-loader + session pinning + fast /resume + lazy MCP + pi-tui widths + speed patches)"
 else
     warn "pi-core-patches/ missing — apply them by hand"
 fi

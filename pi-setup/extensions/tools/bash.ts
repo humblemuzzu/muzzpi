@@ -76,6 +76,28 @@ export function maxTimeoutSec(): number {
 	return Math.max(MIN_TIMEOUT_SEC, value);
 }
 
+const TIMEOUT_CLAMPED_FROM = "timeout_clamped_from";
+
+/**
+ * a timeout over the ceiling runs at the ceiling, and the result says so; runs
+ * before schema validation, which would refuse it. A missing, non-numeric or
+ * too-small timeout is left for the schema to refuse.
+ */
+export function clampTimeout(args: unknown, max: number): unknown {
+	if (!args || typeof args !== "object") return args;
+	const raw = (args as Record<string, unknown>).timeout;
+	const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= max) return args;
+	return { ...args, timeout: max, [TIMEOUT_CLAMPED_FROM]: value };
+}
+
+function withClampNote(result: any, from: unknown, max: number): any {
+	const note = `(your timeout ${from}s is over the ${max}s cap, so it ran with ${max}s)`;
+	const [first, ...rest] = result?.content ?? [];
+	if (first?.type !== "text") return result;
+	return { ...result, content: [{ ...first, text: `${first.text}\n\n${note}` }, ...rest] };
+}
+
 /** idle window, per call so `0` can disable without rebuilding the tool. */
 export function idleKillSec(): number {
 	return envInt("PI_BASH_IDLE_KILL_SEC", DEFAULT_IDLE_KILL_SEC);
@@ -319,6 +341,7 @@ export function createBashTool(): ToolDefinition {
 			// at least one of cmd/command must be present
 		}),
 		outputSchema: bashOutputSchema,
+		prepareArguments: (args: unknown) => clampTimeout(args, maxTimeout) as any,
 
 		renderCall(args: any, theme: any, context: any) {
 			// clock starts here, not on first output: a command can be silent for its
@@ -572,7 +595,11 @@ export function createBashTool(): ToolDefinition {
 				params.mayRunSilent === true ||
 				params.expect_silent === true;
 			const effectiveIdleSec = mayRunSilent ? 0 : idleSec;
-			const run = () => runCommand(command, effectiveCwd, timeoutSec, effectiveIdleSec, signal, onUpdate, secretEnv);
+			const clampedFrom = (params as Record<string, unknown>)[TIMEOUT_CLAMPED_FROM];
+			const run = async () => {
+				const result = await runCommand(command, effectiveCwd, timeoutSec, effectiveIdleSec, signal, onUpdate, secretEnv);
+				return clampedFrom === undefined ? result : withClampNote(result, clampedFrom, maxTimeout);
+			};
 
 			if (isGitCommand(command)) {
 				const gitLockKey = path.join(effectiveCwd, ".git", "__pi_git_lock__");
