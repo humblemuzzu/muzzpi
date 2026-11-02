@@ -1,4 +1,3 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -6,6 +5,10 @@ import { goalToolResponse, toToolText, type GoalToolResponse } from "./format.ts
 import { createGoal, parseTokenBudgetPolicy, replaceGoal, type TokenBudgetPolicy } from "./state.ts";
 import { TOOL_PROMPT_GUIDELINES } from "./prompts.ts";
 import type { GoalEntrySource, GoalResult, ThreadGoal } from "./types.ts";
+
+function StringEnum<const T extends readonly string[]>(values: T, options: { description: string }) {
+  return Type.Unsafe<T[number]>({ type: "string", enum: values, description: options.description });
+}
 
 const EmptyParams = Type.Object({});
 

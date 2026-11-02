@@ -59,7 +59,7 @@ fi
 
 bash "$SCRIPT_DIR/verify-patches.sh"
 
-reply="$(pi --mode json -p --thinking low "Reply with exactly UPDATE_OK and nothing else." 2>/dev/null)"
+reply="$(pi --mode json -p --no-session --thinking low "Reply with exactly UPDATE_OK and nothing else." 2>/dev/null)"
 if ! grep -q '"text":"UPDATE_OK"' <<<"$reply"; then
     echo "FAIL  headless smoke test did not reply UPDATE_OK"
     echo "$ROLLBACK"

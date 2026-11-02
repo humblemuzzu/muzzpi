@@ -25,6 +25,11 @@
       "description": "Paper Desktop, the design file open on this Mac: read and edit it. Load the paper-chrome skill first",
       "url": "http://127.0.0.1:29979/mcp"
     },
+    "mobilebuildmcp": {
+      "description": "Apple platform build and run: discover Xcode projects and schemes, build-and-run on a simulator or device, install/launch, runtime logs, screenshots and video, LLDB debugging, and accessibility-driven UI automation (snapshot, tap, type, swipe). xcodebuildmcp renamed to mobilebuildmcp",
+      "command": "mobilebuildmcp",
+      "args": ["mcp"]
+    },
     "cloudflare": {
       "description": "Cloudflare API for the whole account: search the API spec, run calls, read docs",
       "url": "https://mcp.cloudflare.com/mcp"

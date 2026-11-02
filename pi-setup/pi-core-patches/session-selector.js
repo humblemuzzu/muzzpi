@@ -2,18 +2,17 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import * as os from "node:os";
 import { Container, getKeybindings, Input, Spacer, Text, truncateToWidth, visibleWidth, } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.js";
 import { getAgentDir } from "../../../config.js";
-import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.js";
+import { canonicalizePath, getPathComparisonKey, shortenHomePath } from "../../../utils/paths.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, keyText } from "./keybinding-hints.js";
 import { filterAndSortSessions, hasSessionName } from "./session-selector-search.js";
 
 // --- LOCAL PATCH: session pinning (see pi-setup/pi-core-patches) ---
-// Pins are stored as a JSON array of canonical session file paths in
+// Pins are stored as a JSON array of session path keys (getSessionPathKey) in
 // ~/.pi/agent/pinned-sessions.json. Pinned sessions float to the top of the
 // list (flattened to depth 0) and are marked with a 📌 prefix. Ctrl+B toggles.
 function getPinFilePath() {
@@ -29,7 +28,7 @@ function readPinnedPaths() {
         for (const entry of parsed) {
             if (typeof entry !== "string")
                 continue;
-            set.add(canonicalizePath(entry) ?? entry);
+            set.add(getSessionPathKey(entry));
         }
         return set;
     }
@@ -48,11 +47,11 @@ function writePinnedPaths(paths) {
     }
 }
 function isPinnedPath(pinnedSet, path) {
-    return pinnedSet.has(canonicalizePath(path) ?? path);
+    return pinnedSet.has(getSessionPathKey(path));
 }
 function togglePinnedPath(path) {
     const pinned = readPinnedPaths();
-    const key = canonicalizePath(path) ?? path;
+    const key = getSessionPathKey(path);
     if (pinned.has(key)) {
         pinned.delete(key);
     }
@@ -83,15 +82,6 @@ function applyPinning(list, pinnedSet) {
     return [...pinned, ...rest];
 }
 // --- END LOCAL PATCH ---
-function shortenPath(path) {
-    const home = os.homedir();
-    if (!path)
-        return path;
-    if (path.startsWith(home)) {
-        return `~${path.slice(home.length)}`;
-    }
-    return path;
-}
 function formatSessionDate(date) {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -112,20 +102,20 @@ function formatSessionDate(date) {
         return `${Math.floor(diffDays / 30)}mo`;
     return `${Math.floor(diffDays / 365)}y`;
 }
-// LOCAL PATCH: fast /resume. A session file's real path is resolved once, not
-// for every session each time the tree is rebuilt.
-const canonicalPaths = new Map();
-function canonicalizePath(path) {
-    if (!path)
-        return path;
-    let canonical = canonicalPaths.get(path);
-    if (canonical === undefined) {
-        canonical = _canonicalizePath(path);
+// LOCAL PATCH: fast /resume. A session file's key is resolved once, not for
+// every session each time the tree is rebuilt.
+const sessionPathKeys = new Map();
+/** Comparison key for a session file path; follows symlinks and ignores case on Windows. */
+function getSessionPathKey(path) {
+    let key = sessionPathKeys.get(path);
+    if (key === undefined) {
+        const canonical = canonicalizePath(path);
+        key = getPathComparisonKey(canonical);
         // a path that does not resolve yet (a session file not written) is resolved again next time
         if (canonical !== path || existsSync(path))
-            canonicalPaths.set(path, canonical);
+            sessionPathKeys.set(path, key);
     }
-    return canonical;
+    return key;
 }
 class SessionSelectorHeader {
     scope;
@@ -253,14 +243,14 @@ class SessionSelectorHeader {
 function buildSessionTree(sessions) {
     const byPath = new Map();
     for (const session of sessions) {
-        const sessionPath = canonicalizePath(session.path) ?? session.path;
+        const sessionPath = getSessionPathKey(session.path);
         byPath.set(sessionPath, { session, children: [], latestActivity: session.modified.getTime() });
     }
     const roots = [];
     for (const session of sessions) {
-        const sessionPath = canonicalizePath(session.path) ?? session.path;
+        const sessionPath = getSessionPathKey(session.path);
         const node = byPath.get(sessionPath);
-        const parentPath = canonicalizePath(session.parentSessionPath);
+        const parentPath = session.parentSessionPath ? getSessionPathKey(session.parentSessionPath) : undefined;
         if (parentPath && byPath.has(parentPath)) {
             byPath.get(parentPath).children.push(node);
         }
@@ -328,7 +318,7 @@ class SessionList {
     keybindings;
     showPath = false;
     confirmingDeletePath = null;
-    currentSessionCanonicalPath;
+    currentSessionPathKey;
     onSelect;
     onCancel;
     onExit = () => { };
@@ -359,7 +349,7 @@ class SessionList {
         this.sortMode = sortMode;
         this.nameFilter = nameFilter;
         this.keybindings = keybindings;
-        this.currentSessionCanonicalPath = canonicalizePath(currentSessionFilePath);
+        this.currentSessionPathKey = currentSessionFilePath ? getSessionPathKey(currentSessionFilePath) : undefined;
         this.filterSessions("");
         // Handle Enter in search input - select current item
         this.searchInput.onSubmit = () => {
@@ -431,9 +421,9 @@ class SessionList {
         this.setConfirmingDeletePath(selected.session.path);
     }
     isCurrentSessionPath(path) {
-        if (!this.currentSessionCanonicalPath)
+        if (!this.currentSessionPathKey)
             return false;
-        return (canonicalizePath(path) ?? path) === this.currentSessionCanonicalPath;
+        return getSessionPathKey(path) === this.currentSessionPathKey;
     }
     invalidate() { }
     render(width) {
@@ -484,10 +474,10 @@ class SessionList {
             const msgCount = String(session.messageCount);
             let rightPart = `${msgCount} ${age}`;
             if (this.showCwd && session.cwd) {
-                rightPart = `${shortenPath(session.cwd)} ${rightPart}`;
+                rightPart = `${shortenHomePath(session.cwd)} ${rightPart}`;
             }
             if (this.showPath) {
-                rightPart = `${shortenPath(session.path)} ${rightPart}`;
+                rightPart = `${shortenHomePath(session.path)} ${rightPart}`;
             }
             // Cursor
             const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
@@ -686,6 +676,9 @@ async function deleteSessionFile(sessionPath) {
  * Component that renders a session selector
  */
 export class SessionSelectorComponent extends Container {
+    get capturesViewportInput() {
+        return this.mode !== "rename";
+    }
     handleInput(data) {
         if (this.mode === "rename") {
             const kb = getKeybindings();

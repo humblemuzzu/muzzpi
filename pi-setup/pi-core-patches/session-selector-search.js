@@ -1,87 +1,81 @@
+import { fuzzyMatch } from "@earendil-works/pi-tui";
 function normalizeWhitespaceLower(text) {
     return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
-function getSessionSearchText(session) {
-    return `${session.id} ${session.name ?? ""} ${session.allMessagesText} ${session.cwd}`;
+/**
+ * Match tiers, best first. Each token is scored by the best field it matches; tiers dominate
+ * fuzzy scores so an exact hit anywhere beats a scattered subsequence in a short field.
+ */
+const TIER_NAME = 0; // query text appears in the session name
+const TIER_TEXT = 1; // query text appears in the session id, messages, or cwd
+const TIER_FUZZY = 2; // query characters appear scattered in the session name or cwd
+const TIER_WEIGHT = 1_000_000;
+/**
+ * Lowercased message text per session. allMessagesText holds every user/assistant message and
+ * can be megabytes, so lowercase it once instead of on every keystroke.
+ */
+const messageTextCache = new WeakMap();
+function getMessageText(session) {
+    let cached = messageTextCache.get(session);
+    if (!cached || cached.source !== session.allMessagesText) {
+        cached = { source: session.allMessagesText, lower: session.allMessagesText.toLowerCase() };
+        messageTextCache.set(session, cached);
+    }
+    return cached;
 }
-// --- LOCAL PATCH: fast /resume search (see pi-setup/pi-core-patches) ---
-// A session's search text does not change while the list is open: it is built
-// and lowercased once, not for every session on every keystroke.
-const searchTexts = new WeakMap();
-function getSearchTexts(session) {
-    let texts = searchTexts.get(session);
-    if (!texts) {
-        const text = getSessionSearchText(session);
-        texts = { text, lower: text.toLowerCase(), normalized: null };
-        searchTexts.set(session, texts);
-    }
-    return texts;
+function getNormalizedMessageText(session) {
+    const cached = getMessageText(session);
+    cached.normalized ??= cached.lower.replace(/\s+/g, " ").trim();
+    return cached.normalized;
 }
-/** pi-tui's fuzzyMatch, given text that is already lowercase. */
-function fuzzyMatchLower(query, textLower) {
-    const queryLower = query.toLowerCase();
-    const matchQuery = (normalizedQuery) => {
-        if (normalizedQuery.length === 0) {
-            return { matches: true, score: 0 };
-        }
-        if (normalizedQuery.length > textLower.length) {
-            return { matches: false, score: 0 };
-        }
-        let queryIndex = 0;
-        let score = 0;
-        let lastMatchIndex = -1;
-        let consecutiveMatches = 0;
-        while (queryIndex < normalizedQuery.length) {
-            const i = textLower.indexOf(normalizedQuery[queryIndex], lastMatchIndex + 1);
-            if (i === -1)
-                break;
-            const isWordBoundary = i === 0 || /[\s\-_./:]/.test(textLower[i - 1]);
-            if (lastMatchIndex === i - 1) {
-                consecutiveMatches++;
-                score -= consecutiveMatches * 5;
-            }
-            else {
-                consecutiveMatches = 0;
-                if (lastMatchIndex >= 0) {
-                    score += (i - lastMatchIndex - 1) * 2;
-                }
-            }
-            if (isWordBoundary) {
-                score -= 10;
-            }
-            score += i * 0.1;
-            lastMatchIndex = i;
-            queryIndex++;
-        }
-        if (queryIndex < normalizedQuery.length) {
-            return { matches: false, score: 0 };
-        }
-        if (normalizedQuery === textLower) {
-            score -= 100;
-        }
-        return { matches: true, score };
-    };
-    const primaryMatch = matchQuery(queryLower);
-    if (primaryMatch.matches) {
-        return primaryMatch;
-    }
-    const alphaNumericMatch = queryLower.match(/^(?<letters>[a-z]+)(?<digits>[0-9]+)$/);
-    const numericAlphaMatch = queryLower.match(/^(?<digits>[0-9]+)(?<letters>[a-z]+)$/);
-    const swappedQuery = alphaNumericMatch
-        ? `${alphaNumericMatch.groups?.digits ?? ""}${alphaNumericMatch.groups?.letters ?? ""}`
-        : numericAlphaMatch
-            ? `${numericAlphaMatch.groups?.letters ?? ""}${numericAlphaMatch.groups?.digits ?? ""}`
-            : "";
-    if (!swappedQuery) {
-        return primaryMatch;
-    }
-    const swappedMatch = matchQuery(swappedQuery);
-    if (!swappedMatch.matches) {
-        return primaryMatch;
-    }
-    return { matches: true, score: swappedMatch.score + 5 };
+function tierScore(tier, score = 0) {
+    return tier * TIER_WEIGHT + score;
 }
-// --- END LOCAL PATCH ---
+/** Exact (case-insensitive) text match. Messages and ids are only matched exactly: scattered matches in them are noise. */
+function matchLiteralToken(session, value) {
+    const name = session.name?.toLowerCase() ?? "";
+    if (name.includes(value))
+        return tierScore(TIER_NAME, fuzzyMatch(value, name).score);
+    if (session.id.toLowerCase().includes(value))
+        return tierScore(TIER_TEXT);
+    if (getMessageText(session).lower.includes(value))
+        return tierScore(TIER_TEXT);
+    if (session.cwd.toLowerCase().includes(value))
+        return tierScore(TIER_TEXT);
+    return undefined;
+}
+function matchFuzzyToken(session, value) {
+    const literal = matchLiteralToken(session, value.toLowerCase());
+    if (literal !== undefined)
+        return literal;
+    let best;
+    for (const field of [session.name ?? "", session.cwd]) {
+        const m = fuzzyMatch(value, field);
+        if (m.matches && (best === undefined || m.score < best))
+            best = m.score;
+    }
+    return best === undefined ? undefined : tierScore(TIER_FUZZY, best);
+}
+function matchPhraseToken(session, phrase) {
+    const name = normalizeWhitespaceLower(session.name ?? "");
+    if (name.includes(phrase))
+        return tierScore(TIER_NAME, fuzzyMatch(phrase, name).score);
+    if (session.id.toLowerCase().includes(phrase))
+        return tierScore(TIER_TEXT);
+    if (getNormalizedMessageText(session).includes(phrase))
+        return tierScore(TIER_TEXT);
+    if (normalizeWhitespaceLower(session.cwd).includes(phrase))
+        return tierScore(TIER_TEXT);
+    return undefined;
+}
+function matchRegex(session, regex) {
+    if (session.name && regex.test(session.name))
+        return tierScore(TIER_NAME);
+    if (regex.test(session.id) || regex.test(session.allMessagesText) || regex.test(session.cwd)) {
+        return tierScore(TIER_TEXT);
+    }
+    return undefined;
+}
 export function hasSessionName(session) {
     return Boolean(session.name?.trim());
 }
@@ -159,44 +153,54 @@ export function parseSearchQuery(query) {
     flush(inQuote ? "phrase" : "fuzzy");
     return { mode: "tokens", tokens, regex: null };
 }
+/**
+ * Each field is matched separately, so a token never matches across field boundaries.
+ * Different tokens may match different fields.
+ */
 export function matchSession(session, parsed) {
-    const texts = getSearchTexts(session);
-    const text = texts.text;
     if (parsed.mode === "regex") {
         if (!parsed.regex) {
             return { matches: false, score: 0 };
         }
-        const idx = text.search(parsed.regex);
-        if (idx < 0)
-            return { matches: false, score: 0 };
-        return { matches: true, score: idx * 0.1 };
-    }
-    if (parsed.tokens.length === 0) {
-        return { matches: true, score: 0 };
+        const score = matchRegex(session, parsed.regex);
+        return score === undefined ? { matches: false, score: 0 } : { matches: true, score };
     }
     let totalScore = 0;
-    let normalizedText = null;
     for (const token of parsed.tokens) {
+        let score;
         if (token.kind === "phrase") {
-            if (normalizedText === null) {
-                normalizedText = texts.normalized ??= texts.lower.replace(/\s+/g, " ").trim();
-            }
             const phrase = normalizeWhitespaceLower(token.value);
             if (!phrase)
                 continue;
-            const idx = normalizedText.indexOf(phrase);
-            if (idx < 0)
-                return { matches: false, score: 0 };
-            totalScore += idx * 0.1;
-            continue;
+            score = matchPhraseToken(session, phrase);
         }
-        const m = fuzzyMatchLower(token.value, texts.lower);
-        if (!m.matches)
+        else {
+            score = matchFuzzyToken(session, token.value);
+        }
+        if (score === undefined)
             return { matches: false, score: 0 };
-        totalScore += m.score;
+        totalScore += score;
     }
     return { matches: true, score: totalScore };
 }
+// --- LOCAL PATCH: fast /resume search (see pi-setup/pi-core-patches) ---
+// A query that extends the previous one over the same list (the next keystroke)
+// can only match sessions the previous one matched: a token's prefix matches
+// wherever the token does, and fuzzyMatch's letters/digits swap keeps that true.
+// Only plain ASCII token queries narrow (no quotes, no re:, no case mapping that
+// changes length). Scores and order are stock's.
+const NARROWABLE_QUERY = /^(?!re:)[\x21\x23-\x7e](?:[\x20\x21\x23-\x7e]*[\x21\x23-\x7e])?$/;
+let lastSearch = null;
+function searchCandidates(list, trimmed) {
+    const last = lastSearch;
+    if (last && last.list === list && trimmed.startsWith(last.query) && NARROWABLE_QUERY.test(trimmed))
+        return last.matched;
+    return list;
+}
+function rememberSearch(list, trimmed, matched) {
+    lastSearch = NARROWABLE_QUERY.test(trimmed) ? { list, query: trimmed, matched } : null;
+}
+// --- END LOCAL PATCH ---
 export function filterAndSortSessions(sessions, query, sortMode, nameFilter = "all") {
     const nameFiltered = nameFilter === "all" ? sessions : sessions.filter((session) => matchesNameFilter(session, nameFilter));
     const trimmed = query.trim();
@@ -205,24 +209,27 @@ export function filterAndSortSessions(sessions, query, sortMode, nameFilter = "a
     const parsed = parseSearchQuery(query);
     if (parsed.error)
         return [];
+    const candidates = searchCandidates(nameFiltered, trimmed);
     // Recent mode: filter only, keep incoming order.
     if (sortMode === "recent") {
         const filtered = [];
-        for (const s of nameFiltered) {
+        for (const s of candidates) {
             const res = matchSession(s, parsed);
             if (res.matches)
                 filtered.push(s);
         }
+        rememberSearch(nameFiltered, trimmed, filtered);
         return filtered;
     }
     // Relevance mode: sort by score, tie-break by modified desc.
     const scored = [];
-    for (const s of nameFiltered) {
+    for (const s of candidates) {
         const res = matchSession(s, parsed);
         if (!res.matches)
             continue;
         scored.push({ session: s, score: res.score });
     }
+    rememberSearch(nameFiltered, trimmed, scored.map((r) => r.session));
     scored.sort((a, b) => {
         if (a.score !== b.score)
             return a.score - b.score;

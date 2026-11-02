@@ -48,7 +48,7 @@ Write the one-line rule and delete whatever it supersedes.
 ## Providers and defaults
 
 ```
-pi CLI (v1.4.0) — @earendil-works/pi-coding-agent
+pi CLI (v1.5.0) — @earendil-works/pi-coding-agent
   ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)   [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
@@ -120,7 +120,7 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 |---|---|---|
 | `resource-loader.js` | pi core `dist/core/` | suppresses extension tool-conflict boot errors |
 | `session-selector.js` + `keybindings.js` | pi core | session pinning, `Ctrl+B` in `/resume`; pins in `~/.pi/agent/pinned-sessions.json` (user data) |
-| `session-manager.js` + `session-selector-search.js` | pi core | fast `/resume`: a tool result is counted without being decoded, each file's info cached by size+mtime, a session's search text lowercased once; the list and its order stay stock's |
+| `session-manager.js` + `session-selector-search.js` | pi core | fast `/resume`: a tool result is counted without being decoded, each file's info cached by size+mtime, a keystroke that extends the query re-matches only the last matches; the list, matches and order stay stock's |
 | `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect; stock connects every enabled server at every session start |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
 | **our bundle** | `dist/muzzpi-bundle/`, `pi` → its `cli.js` | what pi runs: the patched files, bundled; stale after any change to them |
@@ -227,7 +227,8 @@ packages external), so pi does not resolve every import through jiti at boot
 (~190 ms on every start and every sub-agent). **Never copy `.ts` into the live
 dir**: pi prefers `index.ts` over `index.js`; `settings.json` lists the `.js`.
 There is **no** disabled state; delete or move out to disable. The live dir also
-holds `herdr-agent-state.ts`, installed by herdr, not from this repo; leave it.
+holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
+`herdr-app-status.ts` (`./install.sh herdr-app`), `broski-link/` (the Broski bridge).
 
 | Extension | Purpose |
 |---|---|

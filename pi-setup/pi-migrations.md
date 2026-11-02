@@ -12,6 +12,44 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## 1.5.0 (2026-11-02) — from 1.4.0, four patches re-derived, /resume search rebuilt
+
+**Patch drift (stock 1.4.0 vs 1.5.0, registry tarballs):** `keybindings.js`, `mcp/index.js`
+identical, copied. Re-derived by applying our hunks to stock 1.5.0 (never copying the old file):
+- `resource-loader.js`, `session-manager.js`: upstream's hunks (Windows path keys, package
+  install warnings, session-write rollback, one-handle fork) miss ours; `patch` applied clean.
+- `session-selector.js`: upstream deleted the local `canonicalizePath` our memo wrapped and added
+  `getSessionPathKey`; the memo moved into it, pins are stored as those keys (same strings on macOS).
+- `session-selector-search.js`: upstream rewrote matching (ids and message text only as exact
+  substrings, `#11220`) and lowercases message text once. Our old file reverted that: `1024` matched
+  2,792 of 3,118 sessions vs stock's 247. Replaced by stock 1.5.0 + one hunk: a keystroke that
+  extends a plain ASCII token query re-matches only the previous matches (a token's prefix matches
+  wherever the token does, `fuzzyMatch`'s letters/digits swap included). On 3,118 real sessions
+  (90 M chars): median 26.7 → 4.1 ms per keystroke, p95 50 → 34 ms; 3,768 keystrokes identical
+  to stock in results and order. `core-patches.test.ts` pins it and fails both mutants tried.
+  `verify-patches.sh`'s `fuzzy.js` hash check went with the copied `fuzzyMatch`.
+
+**Changes checked against our setup:**
+- Bundle recipe sha `bb8134c8…` and esbuild 0.28.2 unchanged; `bundle-fidelity.mjs 1.5.0`: 76/82
+  files identical, the rest npm dependency drift. New dep `@earendil-works/pi-schema` is inlined.
+- Tool validation moved to pi-schema (breaking upstream): none of our schemas uses the dropped
+  TypeBox features; `@sinclair/typebox` stays a virtual module. pi-ai stopped exporting
+  `StringEnum`/`Type`: `goal/src/tools.ts` now has its own `StringEnum` (same JSON).
+- Claude request: payload vs 1.4.0 differs only in top-level `output_config.effort` (`high` →
+  `low`; the per-message marker carries the real level), the edit tool's guidelines (4 → 2), the
+  skills hint line. ttl 1h ×4, betas and 37 tools identical: one cache re-write on the first turn.
+  `maxRequestBytes` still 32 MiB in pi's catalog: the override stays. Every invariant in the 2026-10-20
+  entry re-read in 1.5.0's source; `cache-warmer.js`, `runner.js`, `modes/rpc/*` byte-identical.
+- pi-tui: `graphemeWidth` identical, width patch clean; the editor's Indic/CJK/emoji line renders
+  byte-identical to 1.4.0 in tmux. `getPrimaryScrollView`/`viewportHeight` (focus) unchanged.
+- `verify-patches.sh` now also skips `herdr-app-status.ts` and `broski-link/` (other installers);
+  that false FAIL would have stopped `update-pi.sh` (`set -e`) before its smoke test.
+- Verified: staged 1.5.0 in /tmp first (patches, width patch, bundle, verify all PASS, canary 4/4,
+  payload diff, `finder`, `chad` refused `touch`, `delegate` edit/write, codemode `bash`, startup
+  233 vs 236 ms), then `update-pi.sh`: verify all PASS, smoke, canary 4/4; `install.sh pi`; tests
+  2187 + 468 pass / 0 fail on 1.5.0; real edit, write and failed edit; `/resume` pin and search in tmux.
+- Backup: `~/pi-update-backup-1.4.0-20261102-211449`.
+
 ## Claude request limit 32 MiB → 128 MB (2026-10-31, no pi update)
 
 Anthropic raised Messages/Token Counting to 128 MB on the first-party API (many-image rule

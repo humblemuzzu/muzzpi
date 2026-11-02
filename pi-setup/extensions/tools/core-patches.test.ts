@@ -1,21 +1,22 @@
 /**
  * The fast /resume patches must change nothing but speed: the list pi builds
- * matches stock's rules line for line, and the search scores match pi-tui's
- * fuzzyMatch. The list runs through the installed pi, so this checks what pi runs.
+ * matches stock's rules line for line, and a search narrowed from the previous
+ * keystroke returns what a full scan returns. The list runs through the
+ * installed pi, so this checks what pi runs.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { fuzzyMatch } from "@mariozechner/pi-tui";
-// @ts-expect-error a dist file of pi's, stored as the patch: no type declarations
-import { matchSession, parseSearchQuery } from "../../pi-core-patches/session-selector-search.js";
+const { filterAndSortSessions } = await import(
+	path.join(import.meta.dir, "node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/session-selector-search.js"),
+);
 
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "core-patches-"));
 afterAll(() => fs.rmSync(DIR, { recursive: true, force: true }));
 
-/** stock 1.4.0's buildSessionInfo, over lines split on "\n" */
+/** stock's buildSessionInfo (unchanged 1.4.0 to 1.5.0), over lines split on "\n" */
 function stockInfo(file: string) {
 	try {
 		const stats = fs.statSync(file);
@@ -93,16 +94,28 @@ describe("fast /resume", () => {
 		}
 	});
 
-	test("a query scores as pi-tui's fuzzyMatch scores it", () => {
+	test("a search narrowed from the previous keystroke equals a full scan", () => {
 		let seed = 7;
 		const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
-		const alphabet = "abcdeiklmnopstuvz0123456789-_./:ÄéİK";
-		for (let i = 0; i < 3000; i++) {
-			const text = Array.from({ length: 20 + Math.floor(rand() * 200) }, () => alphabet[Math.floor(rand() * alphabet.length)] + (rand() < 0.15 ? " " : "")).join("");
-			const query = Array.from({ length: 1 + Math.floor(rand() * 6) }, () => alphabet[Math.floor(rand() * alphabet.length)]).join("");
-			const want = fuzzyMatch(query, `  ${text} `);
-			const got = matchSession({ id: "", name: "", allMessagesText: text, cwd: "" }, parseSearchQuery(query));
-			expect([query, got.matches, got.matches ? got.score : 0]).toEqual([query, want.matches, want.matches ? want.score : 0]);
+		const pick = (chars: string, n: number) => Array.from({ length: n }, () => chars[Math.floor(rand() * chars.length)]).join("");
+		const textChars = "abcdeiklmnopstuvz0123456789 -_./:ÄéİKΣ";
+		const sessions = Array.from({ length: 400 }, (_, i) => ({
+			path: `/s/${i}.jsonl`, id: pick("0123456789abcdef-", 12), name: rand() < 0.4 ? pick(textChars, 4 + Math.floor(rand() * 12)) : undefined,
+			cwd: `/w/${pick(textChars, 6)}`, allMessagesText: pick(textChars, 20 + Math.floor(rand() * 200)),
+			modified: new Date(1_700_000_000_000 + Math.floor(rand() * 1e9)),
+		}));
+		const queryChars = 'abcdeiklmnopstuvz0123456789 -_./:"ÄéİKΣ\t';
+		const queries = ["a1", "a12b", "ab12", "12ab", "re:ab", '"ab c" d', "ΣΣa"];
+		for (let i = 0; i < 600; i++) queries.push(pick(queryChars, 1 + Math.floor(rand() * 7)));
+		for (const mode of ["relevance", "recent"]) {
+			for (const query of queries) {
+				const steps = Array.from({ length: query.length }, (_, k) => query.slice(0, k + 1));
+				steps.push(query.slice(0, -1), query);
+				const paths = (list: { path: string }[]) => list.map((s) => s.path);
+				const narrowed = steps.map((typed) => paths(filterAndSortSessions(sessions, typed, mode)));
+				const full = steps.map((typed) => paths(filterAndSortSessions([...sessions], typed, mode)));
+				steps.forEach((typed, k) => expect([mode, typed, narrowed[k]]).toEqual([mode, typed, full[k]]));
+			}
 		}
 	});
 });
