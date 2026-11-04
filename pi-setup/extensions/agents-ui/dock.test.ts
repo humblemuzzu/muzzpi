@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import { Dock, DOCK_MAX_ROWS, type DockHost } from "./dock";
+import type { DockView } from "./dock-view";
 import type { PickerAction } from "./picker";
 import { RunStore } from "./store";
 import { fakeClock, finished, run, scheduler, strip, T0, theme } from "./test-helpers";
@@ -8,7 +9,7 @@ import { fakeClock, finished, run, scheduler, strip, T0, theme } from "./test-he
 const KEY = { down: "\u001b[B", up: "\u001b[A", enter: "\r", esc: "\u001b" };
 const WIDTHS = [40, 60, 80, 160];
 
-function setup() {
+function setup(view: DockView = "line") {
 	const store = new RunStore();
 	const clock = fakeClock();
 	const timers = scheduler();
@@ -21,9 +22,12 @@ function setup() {
 		later: timers.later,
 	};
 	const dock = new Dock(store, clock, theme, host);
+	dock.view = view;
 	const lines = (width = 100) => dock.render(width).map(strip);
 	return { store, clock, timers, events, dock, lines };
 }
+
+const BOLD = "\u001b[1m";
 
 describe("when the dock is there", () => {
 	test("nothing shows before any run, and finished runs of an old session never bring it up", () => {
@@ -39,6 +43,8 @@ describe("when the dock is there", () => {
 		store.ingest([run({ background: false })]);
 		expect(dock.mode()).toBe("hidden");
 		store.ingest([run({ background: false }), run()]);
+		expect(dock.mode()).toBe("line");
+		dock.view = "full";
 		expect(dock.mode()).toBe("full");
 	});
 
@@ -54,7 +60,7 @@ describe("when the dock is there", () => {
 	});
 
 	test("new work brings it back without the runs of the last batch", () => {
-		const { store, clock, lines } = setup();
+		const { store, clock, lines } = setup("full");
 		const old = finished({ id: "a", label: "old batch", endedAt: clock.now() });
 		store.ingest([run({ id: "a", label: "old batch" })]);
 		store.ingest([old]);
@@ -66,9 +72,118 @@ describe("when the dock is there", () => {
 	});
 });
 
+describe("the line view: one grey line until it has the focus", () => {
+	test("one line: a glyph, the counts, the agents at work and the longest time, the hint flush right", () => {
+		const { store, clock, lines } = setup();
+		clock.advance(70_000);
+		store.ingest([run(), run(), run(), run({ agent: "oracle" }), finished()]);
+		const shown = lines(120);
+		expect(shown).toHaveLength(1);
+		expect(shown[0]).toMatch(/^ [◐◓◑◒] 4 working · 1 done · chad ×3, oracle · 1m10s +↓ manage$/);
+		expect(visibleWidth(shown[0]!)).toBe(120);
+	});
+
+	test("easy to find, calm to live with: the glyph and the names in colour, the rest muted, nothing bold", () => {
+		const { store, dock } = setup();
+		store.ingest([run(), run(), run({ agent: "oracle", activity: "bash rm -rf something loud" }), finished()]);
+		const line = dock.render(120)[0]!;
+		expect(line).toContain(theme.fg("warning", "◐"));
+		expect(line).toContain(theme.fg("muted", "3 working"));
+		expect(line).toContain(theme.fg("syntaxVariable", "chad ×2"));
+		expect(line).toContain(theme.fg("thinkingHigh", "oracle"));
+		expect(line).toContain(theme.fg("muted", "↓ manage"));
+		expect(line).not.toContain(BOLD);
+		expect(strip(line)).not.toContain("rm -rf");
+		store.ingest([run(), finished({ status: "failed" })]);
+		expect(dock.render(120)[0]).toContain(theme.fg("error", "1 failed"));
+	});
+
+	test("queued work alone shows the queued glyph, which does not spin", () => {
+		const { store, clock, lines } = setup();
+		store.ingest([run({ status: "queued", startedAt: undefined })]);
+		const first = lines()[0]!;
+		clock.advance(1_000);
+		expect(first).toStartWith(" ◌ 1 queued");
+		expect(lines()[0]!.slice(0, 3)).toBe(first.slice(0, 3));
+	});
+
+	test("the focus opens the rows, with what each is doing; leaving folds them again", () => {
+		const { store, dock, lines } = setup();
+		store.ingest([run({ id: "a", label: "audit it", activity: "read pi-spawn.ts" })]);
+		dock.focused = true;
+		const open = lines(120);
+		expect(open).toHaveLength(2);
+		expect(open[1]).toContain("chad audit it");
+		expect(open[1]).toContain("read pi-spawn.ts");
+		dock.focused = false;
+		expect(lines(120)).toHaveLength(1);
+	});
+
+	test("it moves on its own only once a second step: the glyph and the time follow the frame", () => {
+		const { store, clock, dock } = setup();
+		store.ingest([run()]);
+		const a = dock.render(100);
+		expect(dock.render(100)).toBe(a);
+		clock.advance(1_000);
+		const b = dock.render(100);
+		expect(strip(b[0]!).slice(0, 3)).not.toBe(strip(a[0]!).slice(0, 3));
+		expect(strip(b[0]!)).toContain("1s");
+	});
+});
+
+describe("the full view: quiet rows until it has the focus", () => {
+	test("at rest a row keeps its colours but no bold, no live command, and its glyph stands still", () => {
+		const { store, clock, dock } = setup("full");
+		store.ingest([run({ agent: "oracle", label: "audit it", activity: "bash cd /a/long/path && make" })]);
+		const row = dock.render(140)[1]!;
+		expect(strip(row)).toContain("oracle audit it");
+		expect(strip(row)).not.toContain("bash cd");
+		expect(row).toContain(theme.fg("thinkingHigh", "oracle"));
+		expect(row).toContain(theme.fg("muted", "audit it"));
+		expect(row).toContain(theme.fg("warning", "◐"));
+		expect(row).not.toContain(BOLD);
+		clock.advance(1_000);
+		expect(strip(dock.render(140)[1]!).slice(0, 4)).toBe(strip(row).slice(0, 4));
+	});
+
+	test("a failure and a stop keep their colour at rest", () => {
+		const { store, dock } = setup("full");
+		store.ingest([run({ stopping: true }), finished({ status: "failed", endedAt: T0 })]);
+		const rows = dock.render(120).slice(1).join("\n");
+		expect(rows).toContain(theme.fg("error", "■"));
+		expect(rows).toContain(theme.fg("error", "✕"));
+	});
+
+	test("with the focus the rows show their colour, their activity and spin", () => {
+		const { store, clock, dock } = setup("full");
+		store.ingest([run({ label: "audit it", activity: "read pi-spawn.ts" })]);
+		dock.focused = true;
+		const row = dock.render(140)[1]!;
+		expect(strip(row)).toContain("read pi-spawn.ts");
+		expect(row).toContain(BOLD);
+		clock.advance(250);
+		expect(strip(dock.render(140)[1]!).slice(0, 5)).not.toBe(strip(row).slice(0, 5));
+	});
+});
+
+describe("the off view", () => {
+	test("shows nothing however many run, and gives up a focus it had", () => {
+		const { store, dock, events } = setup();
+		store.ingest([run(), run()]);
+		dock.focused = true;
+		dock.view = "off";
+		expect(dock.mode()).toBe("hidden");
+		expect(dock.render(100)).toEqual([]);
+		expect(events.blur).toBe(1);
+		dock.focused = false;
+		dock.view = "line";
+		expect(dock.render(100)).toHaveLength(1);
+	});
+});
+
 describe("the rows", () => {
 	test("a summary line counts what is working, queued and done, with the hint flush right", () => {
-		const { store, lines } = setup();
+		const { store, lines } = setup("full");
 		store.ingest([run(), run(), run({ status: "queued", startedAt: undefined }), finished()]);
 		const summary = lines()[0]!;
 		expect(summary).toStartWith(" 2 working · 1 queued · 1 done   ");
@@ -76,18 +191,19 @@ describe("the rows", () => {
 		expect(visibleWidth(summary)).toBe(100);
 	});
 
-	test("the summary is grey; only a failure keeps its colour", () => {
-		const { store, dock } = setup();
+	test("the summary is muted; only a failure keeps its colour", () => {
+		const { store, dock } = setup("full");
 		store.ingest([run(), finished(), finished({ status: "failed" })]);
 		const summary = dock.render(100)[0]!;
-		expect(summary).toContain(theme.fg("dim", "1 working"));
-		expect(summary).toContain(theme.fg("dim", "1 done"));
+		expect(summary).toContain(theme.fg("muted", "1 working"));
+		expect(summary).toContain(theme.fg("muted", "1 done"));
 		expect(summary).toContain(theme.fg("error", "1 failed"));
 	});
 
 	test("running first with the activity beside the label, finished dimmed after them", () => {
-		const { store, lines } = setup();
+		const { store, dock, lines } = setup("full");
 		store.ingest([finished({ id: "done-1", label: "an old one" }), run({ id: "live-1", label: "a live one", activity: "read pi-spawn.ts" })]);
+		dock.focused = true;
 		const rows = lines(120);
 		expect(rows[1]).toContain("chad a live one");
 		expect(rows[1]).toContain("read pi-spawn.ts");
@@ -99,7 +215,7 @@ describe("the rows", () => {
 	});
 
 	test("six rows at most, then how many more", () => {
-		const { store, lines } = setup();
+		const { store, lines } = setup("full");
 		store.ingest(Array.from({ length: 9 }, (_, i) => run({ id: `r${i}`, startedAt: T0 + i })));
 		const rows = lines(100);
 		expect(rows).toHaveLength(1 + DOCK_MAX_ROWS + 1);
@@ -107,7 +223,7 @@ describe("the rows", () => {
 	});
 
 	test("right columns are all or nothing: at a narrow width every row loses them together", () => {
-		const { store, lines } = setup();
+		const { store, lines } = setup("full");
 		store.ingest([run({ label: "short" }), run({ label: "another", model: undefined })]);
 		const wide = lines(160);
 		expect(wide[1]).toContain("deepseek-flash");
@@ -119,8 +235,9 @@ describe("the rows", () => {
 	});
 
 	test("a queued run says so, a stopping run says stopping", () => {
-		const { store, lines } = setup();
+		const { store, dock, lines } = setup("full");
 		store.ingest([run({ status: "queued", startedAt: undefined, usage: run().usage }), run({ stopping: true })]);
+		dock.focused = true;
 		const rows = lines(120).join("\n");
 		expect(rows).toContain("queued");
 		expect(rows).toContain("stopping…");
@@ -130,21 +247,28 @@ describe("the rows", () => {
 		const { store, clock, timers, dock, lines } = setup();
 		const control = { action: "continue" as const, ok: false, text: "still running; steer it instead", at: clock.now() };
 		store.ingest([run({ control })]);
+		dock.focused = true;
 		expect(lines(120).join("\n")).toContain("✗ still running; steer it instead");
 		clock.advance(7_000);
 		timers.advance(7_000);
 		expect(dock.render(120).map(strip).join("\n")).not.toContain("still running");
 	});
 
-	test("every width keeps every line inside it", () => {
+	test("every width keeps every line inside it, in every view, focused or not", () => {
 		const { store, dock } = setup();
 		store.ingest([
 			run({ label: "a very long label that cannot possibly fit into a narrow terminal ".repeat(2), activity: "read /a/very/long/path/to/a/file/that/is/deep/in/the/tree.ts" }),
 			run({ agent: "review_code", label: "日本語のラベル" }),
 			finished({ status: "failed", errorMessage: "boom\nsecond" }),
 		]);
-		for (const width of [12, 20, ...WIDTHS]) {
-			for (const line of dock.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		for (const view of ["line", "full"] as const) {
+			dock.view = view;
+			for (const focused of [false, true]) {
+				dock.focused = focused;
+				for (const width of [12, 13, 20, ...WIDTHS]) {
+					for (const line of dock.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				}
+			}
 		}
 	});
 });
@@ -163,9 +287,10 @@ describe("caching", () => {
 		expect(dock.render(80)).not.toBe(dock.render(70));
 	});
 
-	test("a hidden dock returns no lines and the glyph spins with the frame", () => {
+	test("a focused row's glyph spins with the frame", () => {
 		const { store, clock, dock } = setup();
 		store.ingest([run()]);
+		dock.focused = true;
 		const a = strip(dock.render(100)[1]!);
 		clock.advance(250);
 		const b = strip(dock.render(100)[1]!);

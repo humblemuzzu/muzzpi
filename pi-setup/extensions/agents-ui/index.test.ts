@@ -1,17 +1,28 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initTheme } from "@mariozechner/pi-coding-agent";
 import { AGENT_CONTROL_CHANNEL, AGENT_RUNS_CHANNEL, type RunSnapshot } from "../tools/lib/agent-channel";
+import { readDockView, writeDockView } from "./dock-view";
 import agentsUi from "./index";
 import { finished, run, strip, theme } from "./test-helpers";
 
 const inheritedTools = process.env.PI_SUBAGENT_TOOLS;
+const inheritedAgentDir = process.env.PI_CODING_AGENT_DIR;
+const agentDir = mkdtempSync(join(tmpdir(), "agents-ui-"));
 beforeAll(() => {
 	initTheme("dark");
 	delete process.env.PI_SUBAGENT_TOOLS;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 });
 afterAll(() => {
 	if (inheritedTools !== undefined) process.env.PI_SUBAGENT_TOOLS = inheritedTools;
+	if (inheritedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = inheritedAgentDir;
+	rmSync(agentDir, { recursive: true, force: true });
 });
+beforeEach(() => writeDockView("line"));
 
 const DOWN = "\u001b[B";
 const ESC = "\u001b";
@@ -37,6 +48,7 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 	bus.on(AGENT_CONTROL_CHANNEL, (request) => events.control.push(request));
 	const sessionHandlers = new Map<string, ((event: unknown, ctx: unknown) => void)[]>();
 	const commands = new Map<string, (args: string, ctx: unknown) => unknown>();
+	const completions = new Map<string, (prefix: string) => Array<{ value: string }> | null>();
 	const shortcuts = new Map<string, (ctx: unknown) => unknown>();
 	const editor = { text: options.editorText ?? "", getText() { return this.text; }, render: () => [] as string[], invalidate() {}, focused: false };
 	let focused: any = editor;
@@ -63,8 +75,8 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 				state.inputListeners.add(handler);
 				return () => state.inputListeners.delete(handler);
 			},
-			setWidget: (key: string, factory: any) => {
-				state.widgetSet.push([key, typeof factory]);
+			setWidget: (key: string, factory: any, options?: { placement?: string }) => {
+				state.widgetSet.push([key, typeof factory, options?.placement]);
 				dock = factory ? factory(tui, theme) : undefined;
 			},
 			setStatus: (key: string, text: string | undefined) => state.status.push([key, text]),
@@ -81,7 +93,10 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 	const pi: any = {
 		events: bus,
 		on: (name: string, handler: (event: unknown, ctx: unknown) => void) => sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
-		registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => unknown }) => commands.set(name, def.handler),
+		registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => unknown; getArgumentCompletions?: (prefix: string) => Array<{ value: string }> | null }) => {
+			commands.set(name, def.handler);
+			if (def.getArgumentCompletions) completions.set(name, def.getArgumentCompletions);
+		},
 		registerShortcut: (key: string, def: { handler: (ctx: unknown) => unknown }) => shortcuts.set(key, def.handler),
 	};
 	agentsUi(pi);
@@ -97,7 +112,7 @@ function harness(options: { editorText?: string; overlay?: boolean } = {}) {
 		return false;
 	};
 	const broadcast = (runs: RunSnapshot[]) => bus.emit(AGENT_RUNS_CHANNEL, runs);
-	return { bus, events, state, tui, editor, commands, shortcuts, start, stop, key, broadcast, ctx, dock: () => dock, focused: () => focused };
+	return { bus, events, state, tui, editor, commands, completions, shortcuts, start, stop, key, broadcast, ctx, dock: () => dock, focused: () => focused };
 }
 
 const live: Array<() => void> = [];
@@ -114,9 +129,9 @@ function started(options?: Parameters<typeof harness>[0]) {
 }
 
 describe("mounting", () => {
-	test("a TUI session mounts the dock above the editor and listens to the broadcast", () => {
+	test("a TUI session mounts the dock under the editor and listens to the broadcast", () => {
 		const h = started();
-		expect(h.state.widgetSet).toEqual([["agents-dock", "function"]]);
+		expect(h.state.widgetSet).toEqual([["agents-dock", "function", "belowEditor"]]);
 		expect(h.dock().render(80)).toEqual([]);
 		h.broadcast([run()]);
 		expect(h.dock().render(80).map(strip)[0]).toContain("1 working");
@@ -143,7 +158,7 @@ describe("mounting", () => {
 		h.broadcast([run()]);
 		expect(h.bus.count(AGENT_RUNS_CHANNEL)).toBe(1);
 		h.stop();
-		expect(h.state.widgetSet.at(-1)).toEqual(["agents-dock", "undefined"]);
+		expect(h.state.widgetSet.at(-1)).toEqual(["agents-dock", "undefined", undefined]);
 		expect(h.bus.count(AGENT_RUNS_CHANNEL)).toBe(0);
 		expect(h.state.inputListeners.size).toBe(0);
 		const renders = h.state.renders;
@@ -153,17 +168,39 @@ describe("mounting", () => {
 });
 
 describe("animation", () => {
-	test("ticks only while a background agent runs, and an idle dock costs no frames", async () => {
+	test("at rest a frame a second while a background agent runs, and an idle dock costs no frames", async () => {
 		const h = started();
 		h.broadcast([run({ id: "a" })]);
 		const before = h.state.renders;
-		await Bun.sleep(700);
-		expect(h.state.renders - before).toBeGreaterThanOrEqual(2);
+		await Bun.sleep(1_150);
+		expect(h.state.renders - before).toBe(1);
 		h.broadcast([finished({ id: "a", endedAt: Date.now() })]);
 		await Bun.sleep(300);
 		const settled = h.state.renders;
-		await Bun.sleep(700);
+		await Bun.sleep(1_100);
 		expect(h.state.renders).toBe(settled);
+	});
+
+	test("four frames a second while the dock has the focus, back to one when it leaves", async () => {
+		const h = started();
+		h.broadcast([run({ id: "a" })]);
+		h.key(DOWN);
+		const before = h.state.renders;
+		await Bun.sleep(600);
+		expect(h.state.renders - before).toBeGreaterThanOrEqual(2);
+		h.key(ESC);
+		const rest = h.state.renders;
+		await Bun.sleep(600);
+		expect(h.state.renders - rest).toBeLessThanOrEqual(1);
+	});
+
+	test("the off view animates nothing", async () => {
+		writeDockView("off");
+		const h = started();
+		h.broadcast([run({ id: "a" })]);
+		const before = h.state.renders;
+		await Bun.sleep(1_150);
+		expect(h.state.renders).toBe(before);
 	});
 
 	test("a blocking run animates nothing", async () => {
@@ -224,6 +261,7 @@ describe("↓ on the editor", () => {
 describe("acting from the dock", () => {
 	test("s sends a steer on the control channel, x a stop, c a continue", () => {
 		const h = started();
+		h.broadcast([run({ id: "a" }), run({ id: "b" })]);
 		h.broadcast([run({ id: "a" }), finished({ id: "b", endedAt: Date.now() })]);
 		h.key(DOWN);
 		h.key("s");
@@ -315,6 +353,35 @@ describe("/agents", () => {
 		await open("chad-aaa", h.ctx);
 		expect(h.state.notices).toEqual(['No agent matches "nothing".', '"chad-aaa" matches 2 agents; give more of the id.']);
 		expect(h.state.customCalls).toHaveLength(0);
+	});
+
+	test("/agents dock full|line|off switches the dock at once and remembers it", async () => {
+		const h = withThree();
+		const open = h.commands.get("agents")!;
+		expect(h.dock().render(100)).toHaveLength(1);
+		await open("dock full", h.ctx);
+		expect(readDockView()).toBe("full");
+		expect(h.dock().render(100)).toHaveLength(4);
+		await open("dock off", h.ctx);
+		expect(h.dock().render(100)).toEqual([]);
+		expect(h.key(DOWN)).toBe(false);
+		expect(h.state.notices.at(-1)).toContain("Remembered across sessions");
+		await open("dock loud", h.ctx);
+		expect(h.state.notices.at(-1)).toContain('/agents dock has no "loud"');
+		expect(readDockView()).toBe("off");
+	});
+
+	test("typing /agents d offers dock, and after it the three views", () => {
+		const complete = withThree().completions.get("agents")!;
+		expect(complete("d")!.map((item) => item.value)).toEqual(["dock "]);
+		expect(complete("dock ")!.map((item) => item.value)).toEqual(["dock line", "dock full", "dock off"]);
+	});
+
+	test("a new session starts in the view last chosen", () => {
+		writeDockView("full");
+		const h = withThree();
+		expect(h.dock().view).toBe("full");
+		expect(h.dock().render(100)).toHaveLength(4);
 	});
 
 	test("the shortcut opens the list", async () => {

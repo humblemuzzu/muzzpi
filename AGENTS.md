@@ -251,7 +251,7 @@ holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
 | `theme-studio/` | `/theme`, Ctrl+Shift+K — live pi + Ghostty theme/font/cursor/opacity preview. Esc reverts, Enter keeps. Writes the Ghostty config at `PI_STUDIO_GHOSTTY_CONFIG` or the default path |
 | `editor/` | box-drawn editor, clipboard image paste, one meta row below (cache, `setStatus` texts, diff); `/hud` / Ctrl+Shift+I opens the detail view. Labels take `priority` (narrow drops lowest) and `when: "idle"\|"detail"`. Values stay plain text (the user reads them); colour only for an alert |
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent) |
-| `agents-ui/` | the background agents on screen: dock above the editor, `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
+| `agents-ui/` | the background agents on screen: a dock under the editor (one grey line; `/agents dock line\|full\|off`), `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
@@ -382,7 +382,8 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
   `muzzpi:agent-runs:control` (`AgentRuns.control`: steer / continue / stop / stopAll; the answer or
   refusal comes back as `RunSnapshot.control`, a stop in progress as `stopping`). Its dock widget
   stays mounted and renders no lines when hidden; it ticks (`clock.frame`) only while a background
-  run runs. A UI stop is still reported to the main agent (`delivered` stays false).
+  run runs: once a second at rest, every 250 ms while it has the focus or a view is open (each tick is
+  a whole-transcript frame). A UI stop is still reported to the main agent (`delivered` stays false).
 - **Never bind `ctrl+x`: it is pi's copy key** (`app.message.copy`); stop-all is `X` twice in the
   dock or list. `↓` takes the dock only from an empty editor. The agent view's input takes every
   printable key, so its actions sit on ctrl keys.

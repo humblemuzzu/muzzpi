@@ -1,15 +1,17 @@
 import { truncateToWidth, visibleWidth, type Component, type Focusable } from "@mariozechner/pi-tui";
 import type { RunSnapshot, RunStatus } from "../tools/lib/agent-channel";
 import type { Styler } from "../tools/lib/agent-layout";
-import { STATUS_STYLE } from "../tools/lib/agent-style";
+import { identityColor, STATUS_STYLE } from "../tools/lib/agent-style";
+import { formatDuration } from "../tools/lib/sub-agent-render";
+import type { DockView } from "./dock-view";
 import { Picker, type PickerAction } from "./picker";
-import { noticeExpiry, planColumns, renderRow } from "./rows";
+import { elapsedMs, noticeExpiry, planColumns, renderRow, SPINNER } from "./rows";
 import { dockOrder, isLive, type Clock, type RunStore } from "./store";
 
 export const DOCK_MAX_ROWS = 6;
 const FINISHED_ROWS = 3;
 
-type DockMode = "hidden" | "full";
+type DockMode = "hidden" | Exclude<DockView, "off">;
 
 export interface DockHost {
 	requestRender(): void;
@@ -26,17 +28,27 @@ const countOf = (runs: readonly RunSnapshot[], status: RunSnapshot["status"]) =>
 
 const SUMMARY_ORDER = ["running", "queued", "done", "failed", "stopped", "interrupted"] as const;
 
-/** The summary is grey; only an outcome that needs a look keeps its colour. */
+/** The counts are muted; only an outcome that needs a look keeps its colour. */
 const SUMMARY_ALERT: Partial<Record<RunStatus, string>> = { failed: STATUS_STYLE.failed.color, interrupted: STATUS_STYLE.interrupted.color };
 const HINT_GAP = 3;
 
+/** `chad ×3, oracle`: the agents at work, in dock order, each in its own colour. */
+function agentsAtWork(runs: readonly RunSnapshot[], theme: Styler): string {
+	const counts = new Map<string, number>();
+	for (const run of runs) counts.set(run.agent, (counts.get(run.agent) ?? 0) + 1);
+	return [...counts].map(([agent, n]) => theme.fg(identityColor(agent), n > 1 ? `${agent} ×${n}` : agent)).join(theme.fg("dim", ", "));
+}
+
 /**
- * The strip above the editor: one row per background agent while any runs, and
- * nothing once they have all finished (/agents lists them). Lines are cached per
- * width and rebuilt only when a run, the clock frame or the selection changed,
- * so an idle dock costs nothing per frame.
+ * The strip under the editor while any background agent runs, nothing once they
+ * have all finished (/agents lists them). Folded to one grey line in the "line"
+ * view; the rows show while it has the focus, or always in the "full" view, where
+ * they stay quiet until focused. Lines are cached per width and rebuilt only when
+ * a run, the clock frame, the view or the selection changed, so an idle dock costs
+ * nothing per frame.
  */
 export class Dock implements Component, Focusable {
+	private shownAs: DockView = "line";
 	private periodStart = 0;
 	private wasLive = false;
 	private dismissed = new Set<string>();
@@ -65,12 +77,23 @@ export class Dock implements Component, Focusable {
 		this.touch();
 	}
 
+	get view(): DockView {
+		return this.shownAs;
+	}
+
+	set view(value: DockView) {
+		if (value === this.shownAs) return;
+		this.shownAs = value;
+		if (this.focused && this.mode() === "hidden") this.host.blur();
+		this.touch();
+	}
+
 	mode(): DockMode {
-		return this.store.live().length > 0 ? "full" : "hidden";
+		return this.shownAs === "off" || this.store.live().length === 0 ? "hidden" : this.shownAs;
 	}
 
 	handleInput(data: string): void {
-		if (this.mode() !== "full") return this.host.blur();
+		if (this.mode() === "hidden") return this.host.blur();
 		this.picker.handleInput(data);
 		this.touch();
 	}
@@ -104,7 +127,7 @@ export class Dock implements Component, Focusable {
 		const live = this.store.live().length > 0;
 		if (live && !this.wasLive) this.periodStart = this.clock.now();
 		this.wasLive = live;
-		if (this.focused && this.mode() !== "full") this.host.blur();
+		if (this.focused && this.mode() === "hidden") this.host.blur();
 		const expiry = noticeExpiry(this.store.all(), this.clock.now());
 		this.cancelNotice?.();
 		this.cancelNotice = expiry === undefined ? undefined : this.host.later(() => this.touch(), expiry - this.clock.now() + 50);
@@ -123,9 +146,25 @@ export class Dock implements Component, Focusable {
 		const mode = this.mode();
 		const key = `${mode}|${this.store.version}|${this.picker.version}|${this.revision}|${this.clock.frame}`;
 		if (this.cache?.key === key && this.cache.width === width) return this.cache.lines;
-		const lines = mode === "hidden" || width < 12 ? [] : this.panel(width);
+		const lines = mode === "hidden" || width < 12 ? [] : mode === "line" && !this.focused ? [this.line(width)] : this.panel(width);
 		this.cache = { key, width, lines };
 		return lines;
+	}
+
+	/** `◐ 4 working · chad ×3, oracle · 1m56s      ↓ manage`: the glyph and the names in colour, no bold. */
+	private line(width: number): string {
+		const inner = width - 1;
+		const runs = this.shown();
+		const live = runs.filter(isLive);
+		const now = this.clock.now();
+		const running = live.some((run) => run.status === "running");
+		const glyph = running
+			? this.theme.fg(STATUS_STYLE.running.color, SPINNER[this.clock.frame % SPINNER.length]!)
+			: this.theme.fg(STATUS_STYLE.queued.color, STATUS_STYLE.queued.icon);
+		const longest = Math.max(...live.map((run) => elapsedMs(run, now)));
+		const dot = this.theme.fg("dim", " · ");
+		const detail = `${agentsAtWork(live, this.theme)}${dot}${this.theme.fg("muted", formatDuration(longest))}`;
+		return ` ${truncateToWidth(`${glyph} ${this.summary(runs, inner - 2, detail)}`, inner)}`;
 	}
 
 	private panel(width: number): string[] {
@@ -138,7 +177,7 @@ export class Dock implements Component, Focusable {
 		const cols = planColumns(window, inner, now);
 		const lines = [this.summary(runs, inner)];
 		for (const run of window) {
-			lines.push(renderRow(run, cols, inner, this.theme, this.clock, { selected: this.focused && run.id === this.picker.current()?.id, dim: !isLive(run) }));
+			lines.push(renderRow(run, cols, inner, this.theme, this.clock, { selected: this.focused && run.id === this.picker.current()?.id, dim: !isLive(run), quiet: !this.focused }));
 		}
 		const above = start;
 		const below = runs.length - start - window.length;
@@ -151,18 +190,19 @@ export class Dock implements Component, Focusable {
 		return lines.map((line) => ` ${truncateToWidth(line, inner)}`);
 	}
 
-	/** `2 working · 1 done      ↓ manage`: counts on the left, the hint flush right with the row columns. */
-	private summary(runs: RunSnapshot[], width: number): string {
+	/** `2 working · 1 done      ↓ manage`: counts (and the painted `detail`) on the left, the hint flush right with the row columns. */
+	private summary(runs: RunSnapshot[], width: number, detail = ""): string {
 		const counts = SUMMARY_ORDER.map((status) => ({ status, n: countOf(runs, status) }))
 			.filter(({ n }) => n > 0)
-			.map(({ status, n }) => this.theme.fg(SUMMARY_ALERT[status] ?? "dim", `${n} ${status === "done" ? "done" : STATUS_STYLE[status].verb}`))
+			.map(({ status, n }) => this.theme.fg(SUMMARY_ALERT[status] ?? "muted", `${n} ${status === "done" ? "done" : STATUS_STYLE[status].verb}`))
 			.join(this.theme.fg("dim", " · "));
-		const used = visibleWidth(counts);
+		const left = detail ? counts + this.theme.fg("dim", " · ") + detail : counts;
+		const used = visibleWidth(left);
 		for (const hint of this.hints()) {
 			const gap = width - used - visibleWidth(hint);
-			if (gap >= HINT_GAP) return counts + " ".repeat(gap) + hint;
+			if (gap >= HINT_GAP) return left + " ".repeat(gap) + hint;
 		}
-		return counts;
+		return left;
 	}
 
 	private hints(): string[] {
@@ -176,6 +216,6 @@ export class Dock implements Component, Focusable {
 				dim("esc back"),
 			];
 		}
-		return [dim("↓ manage")];
+		return [this.theme.fg("muted", "↓ manage")];
 	}
 }

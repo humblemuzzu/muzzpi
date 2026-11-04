@@ -21,6 +21,8 @@ interface Columns {
 interface RowOptions {
 	selected: boolean;
 	dim: boolean;
+	/** at rest: no spinner, no bold, no activity, the label muted */
+	quiet?: boolean;
 }
 
 export const elapsedMs = (run: RunSnapshot, now: number) => (run.endedAt ?? now) - (run.startedAt ?? run.queuedAt);
@@ -88,10 +90,14 @@ function activityText(run: RunSnapshot, theme: Styler, now: number, dim: boolean
 export function renderRow(run: RunSnapshot, cols: Columns, width: number, theme: Styler, clock: Clock, options: RowOptions): string {
 	const now = clock.now();
 	const status = STATUS_STYLE[run.status];
-	const glyph = run.status === "running" && !run.stopping ? SPINNER[clock.frame % SPINNER.length]! : run.stopping ? STATUS_STYLE.stopped.icon : status.icon;
-	const paint = (color: string, text: string) => theme.fg(options.dim ? "dim" : color, text);
+	const spinning = run.status === "running" && !run.stopping && !options.quiet;
+	const glyph = spinning ? SPINNER[clock.frame % SPINNER.length]! : run.stopping ? STATUS_STYLE.stopped.icon : status.icon;
+	const tone = options.dim ? "dim" : options.quiet ? "muted" : undefined;
+	const paint = (color: string, text: string) => theme.fg(tone ?? color, text);
 	const pointer = options.selected ? theme.fg("accent", "❯") : " ";
-	const name = options.dim ? paint("dim", run.agent) : theme.fg(identityColor(run.agent), theme.bold(run.agent));
+	const name = options.dim
+		? paint("dim", run.agent)
+		: theme.fg(identityColor(run.agent), options.quiet ? run.agent : theme.bold(run.agent));
 	const room = Math.min(NAME_COLUMN, Math.max(8, width - 5));
 	const nameLabel = padRight(truncateToWidth(`${name} ${paint("text", normalizeForDisplay(run.label))}`, room), room);
 
@@ -99,7 +105,7 @@ export function renderRow(run: RunSnapshot, cols: Columns, width: number, theme:
 	const clusterWidth = cols.model + cols.elapsed + cols.tokens > 0 ? visibleWidth(cluster) : 0;
 	const head = `${pointer} ${theme.fg(run.stopping ? "error" : status.color, glyph)} ${nameLabel}`;
 	const available = width - clusterWidth - (clusterWidth > 0 ? 2 : 0) - visibleWidth(head) - 2;
-	const activity = available >= 6 ? `  ${truncateToWidth(activityText(run, theme, now, options.dim), available, "…")}` : "";
+	const activity = !options.quiet && available >= 6 ? `  ${truncateToWidth(activityText(run, theme, now, options.dim), available, "…")}` : "";
 	const left = head + activity;
 	if (clusterWidth === 0) return truncateToWidth(left, width);
 	return padRight(truncateToWidth(left, width - clusterWidth - 2), width - clusterWidth) + cluster;

@@ -1,8 +1,8 @@
 /**
- * agents-ui: the background agents on screen. A dock above the editor while
- * any run, `↓` on an empty editor to manage them, a full-screen view of each
- * one's conversation, and `/agents` for the whole list. notify.ts already
- * notifies when the turn a result woke ends.
+ * agents-ui: the background agents on screen. A dock under the editor while
+ * any run (one grey line by default, `/agents dock`), `↓` on an empty editor to
+ * manage them, a full-screen view of each one's conversation, and `/agents` for
+ * the whole list. notify.ts already notifies when the turn a result woke ends.
  *
  * It only reads the `muzzpi:agent-runs` broadcast and asks the tools extension
  * to act through `muzzpi:agent-runs:control`; it owns no run state and, in a
@@ -16,6 +16,7 @@ import { completeWords, splitArgs, withoutTyped } from "../tools/lib/command-arg
 import { contributeHelp } from "../tools/lib/help-channel";
 import { AgentView, type ViewActions } from "./agent-view";
 import { Dock, type DockHost } from "./dock";
+import { DOCK_WORD, readDockView, runDockCommand, type DockView } from "./dock-view";
 import { ListView, type ListResult } from "./list-view";
 import { MODELS_WORD, runModelsCommand } from "./model-source";
 import type { PickerAction } from "./picker";
@@ -23,7 +24,10 @@ import { RunStore, systemClock } from "./store";
 
 const WIDGET_KEY = "agents-dock";
 const SHORTCUT = "ctrl+shift+a";
+/** while the list or an agent's view is in front: spinners and live text */
 const TICK_MS = 250;
+/** at rest the dock shows only elapsed seconds, so a frame a second is enough */
+const REST_TICK_MS = 1_000;
 const OVERLAY = { anchor: "top-left", row: 0, col: 0, width: "100%", maxHeight: "100%" } as const;
 
 type FocusAwareTui = TUI & { getFocusedComponent(): Component | null };
@@ -40,8 +44,9 @@ export default function agentsUi(pi: ExtensionAPI): void {
 	let tui: FocusAwareTui | undefined;
 	let dock: Dock | undefined;
 	let cameFrom: Component | null = null;
-	let ticker: ReturnType<typeof setInterval> | undefined;
+	let ticker: { timer: ReturnType<typeof setInterval>; ms: number } | undefined;
 	let viewOpen = false;
+	let dockView: DockView = "line";
 	let cleanups: Array<() => void> = [];
 
 	const guarded = (fn: () => void) => () => {
@@ -83,31 +88,53 @@ export default function agentsUi(pi: ExtensionAPI): void {
 		if (!tui || !dock || tui.getFocusedComponent() === dock) return;
 		cameFrom = tui.getFocusedComponent();
 		tui.setFocus(dock);
+		syncTicker();
 	};
 
 	const blurDock = () => {
 		if (!tui || !dock || tui.getFocusedComponent() !== dock) return;
 		tui.setFocus(cameFrom);
 		cameFrom = null;
+		syncTicker();
+	};
+
+	const stopTicker = () => {
+		if (!ticker) return;
+		clearInterval(ticker.timer);
+		ticker = undefined;
 	};
 
 	const syncTicker = () => {
-		const animated = store.background().some((run) => run.status === "running") || (viewOpen && store.all().some((run) => run.status === "running"));
-		if (animated && !ticker) {
-			ticker = setInterval(
-				guarded(() => {
-					clock.frame++;
-					tui?.requestRender();
-					syncTicker();
-				}),
-				TICK_MS,
-			);
-		} else if (!animated && ticker) {
-			clearInterval(ticker);
-			ticker = undefined;
+		const running = (run: RunSnapshot) => run.status === "running";
+		const shown = dockView !== "off" && store.background().some(running);
+		const animated = shown || (viewOpen && store.all().some(running));
+		const ms = viewOpen || dock?.focused ? TICK_MS : REST_TICK_MS;
+		if (animated && ticker?.ms === ms) return;
+		const wasTicking = ticker !== undefined;
+		stopTicker();
+		if (animated) {
+			ticker = {
+				ms,
+				timer: setInterval(
+					guarded(() => {
+						clock.frame++;
+						tui?.requestRender();
+						syncTicker();
+					}),
+					ms,
+				),
+			};
+		} else if (wasTicking) {
 			clock.frame++;
 			tui?.requestRender();
 		}
+	};
+
+	const setDockView = (view: DockView) => {
+		dockView = view;
+		if (dock) dock.view = view;
+		syncTicker();
+		tui?.requestRender();
 	};
 
 	const editorWithNothingTyped = (): boolean => {
@@ -133,7 +160,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 		} finally {
 			viewOpen = false;
 			syncTicker();
-			if (dock?.focused && dock.mode() !== "full") blurDock();
+			if (dock?.focused && dock.mode() === "hidden") blurDock();
 		}
 	}
 
@@ -165,6 +192,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 		cleanups = [];
 		if (!mounted(current)) return;
 		ctx = current;
+		dockView = readDockView();
 		cleanups.push(
 			pi.events.on(AGENT_RUNS_CHANNEL, (runs) => store.ingest(runs as RunSnapshot[])),
 			store.subscribe(syncTicker),
@@ -177,11 +205,16 @@ export default function agentsUi(pi: ExtensionAPI): void {
 			act: handleAction,
 			later,
 		};
-		current.ui.setWidget(WIDGET_KEY, (t, theme) => {
-			tui = t as FocusAwareTui;
-			dock = new Dock(store, clock, theme, host);
-			return dock;
-		});
+		current.ui.setWidget(
+			WIDGET_KEY,
+			(t, theme) => {
+				tui = t as FocusAwareTui;
+				dock = new Dock(store, clock, theme, host);
+				dock.view = dockView;
+				return dock;
+			},
+			{ placement: "belowEditor" },
+		);
 	});
 
 	pi.on("session_shutdown", () => {
@@ -189,8 +222,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 		cleanups = [];
 		for (const timer of timers) clearTimeout(timer);
 		timers.clear();
-		if (ticker) clearInterval(ticker);
-		ticker = undefined;
+		stopTicker();
 		guarded(() => ctx?.ui.setWidget(WIDGET_KEY, undefined))();
 		dock?.dispose();
 		dock = undefined;
@@ -201,6 +233,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 	const open = async (args: string, current: ExtensionContext) => {
 		const { word, rest } = splitArgs(args);
 		if (word === MODELS_WORD.name) return runModelsCommand(rest, current);
+		if (word === DOCK_WORD.name) return runDockCommand(rest, current, setDockView);
 		if (!mounted(current)) {
 			if (current.hasUI) current.ui.notify("The agents view needs the interactive TUI.", "info");
 			return;
@@ -214,7 +247,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("agents", {
-		description: "See, steer and stop background agents; /agents chad opens one, /agents models picks their models",
+		description: "See, steer and stop background agents; /agents chad opens one, /agents models picks their models, /agents dock how they show",
 		getArgumentCompletions: (prefix) => {
 			const typed = prefix.trim().toLowerCase();
 			const runs = store
@@ -224,7 +257,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 					const short = run.id.slice(run.id.indexOf("-") + 1).slice(0, 8);
 					return { value: run.id, label: `${run.agent} ${short}`, description: `${run.status} · ${run.label}` };
 				});
-			const items = [...(completeWords([MODELS_WORD], prefix) ?? []), ...(withoutTyped(runs, prefix) ?? [])];
+			const items = [...(completeWords([MODELS_WORD, DOCK_WORD], prefix) ?? []), ...(withoutTyped(runs, prefix) ?? [])];
 			return items.length > 0 ? items : null;
 		},
 		handler: (args, current) => open(args, current),
