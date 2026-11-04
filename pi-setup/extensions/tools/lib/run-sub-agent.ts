@@ -23,7 +23,7 @@ export interface SubAgentRun {
 	working: string;
 	/** hand the child's last screenshots back to the caller. */
 	returnImages?: boolean;
-	ctx: { cwd: string; sessionManager?: { getSessionId?(): string } };
+	ctx: { cwd: string; mode?: string; sessionManager?: { getSessionId?(): string } };
 	signal?: AbortSignal;
 	onUpdate?: (update: any) => void;
 	spawn: Omit<PiSpawnConfig, "cwd" | "signal" | "onUpdate" | "sessionId">;
@@ -65,6 +65,7 @@ export async function runSubAgent(run: SubAgentRun): Promise<any> {
 		cwd: run.ctx.cwd,
 		signal: run.signal,
 		sessionId: sessionIdOf(run.ctx),
+		ownProcessGroup: run.ctx.mode === "tui",
 		onUpdate: (partial) => run.onUpdate?.(progressUpdate(details, partial, run.working)),
 	});
 	return finishedResult(details, result, run.returnImages);

@@ -29,7 +29,6 @@ a second:
 | colours | `themes/cursor-soft.json` |
 | focus mode's layout | `layouts/muzz-focus.json` |
 | popups and panels | `mods/<name>/` |
-| pi's state in the agents list | `~/.pi/agent/extensions/herdr-app-status.ts` |
 
 Changing any of these does nothing to herdr in Ghostty, and the Ghostty config
 does nothing here.
@@ -55,10 +54,10 @@ orange), Fira Code 14, a grey border on the pane you are typing in, and herdr's
 
 ## pi in the app
 
-- **pi's state comes from `herdr-app-status.ts`.** The app learns an agent's
-  state only from the program itself (OSC 7501), and pi 1.4 does not send it
-  yet; without the file every pi shows as a plain terminal. It does nothing
-  outside the app, so it is safe to keep with herdr in Ghostty.
+- **pi reports its own state.** The app learns an agent's state only from the
+  program itself (OSC 7501); pi 1.5 sends it once the app answers its query,
+  including "blocked" while the `ask` or approval picker waits on you. The
+  installer moves aside the `herdr-app-status.ts` reporter older setups needed.
 - **Start pi through your shell** (`zsh -lic pi`), as `⌘O` does. The app's
   terminals skip `~/.zshrc`, so a bare `pi` has no `DEEPSEEK_API_KEY`. A tab
   from `⌘T` is already a shell, so typing `pi` there is fine.

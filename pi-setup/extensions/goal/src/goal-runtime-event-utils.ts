@@ -91,7 +91,7 @@ export function recordAssistantContextOverflow(
     return false;
   }
 
-  context.stateController.beginOverflowRecovery(ctx);
+  context.stateController.beginOverflowRecovery(ctx, message.stopReason !== "stop");
   if (isErrorAssistantMessage(message)) {
     context.recoveryRuntime.handlePersistentAssistantError(message, ctx);
   } else {

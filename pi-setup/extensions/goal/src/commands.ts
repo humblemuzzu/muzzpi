@@ -4,10 +4,9 @@ import { completeWords, splitArgs, type Word } from "../../tools/lib/command-arg
 import { askText, canShowMenu, type MenuItem, type MenuSpec, showMenu } from "../../tools/lib/command-menu.ts";
 import { copyTextToClipboard, type ClipboardCopyResult } from "./clipboard.ts";
 import { formatGoalStatus, formatGoalSummary } from "./format.ts";
-import type { GoalStartTurnStrategy } from "./recovery-machine.ts";
-import { compactContinuationPrompt, continuationPrompt } from "./prompts.ts";
+import type { GoalTurnKind } from "./goal-runtime-controller.ts";
 import { replaceGoal, updateGoalStatus } from "./state.ts";
-import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type ThreadGoal } from "./types.ts";
+import type { GoalEntrySource, GoalResult, ThreadGoal } from "./types.ts";
 
 export interface CommandHost {
   getGoal(): ThreadGoal | null;
@@ -15,7 +14,8 @@ export interface CommandHost {
   clearGoal(source: GoalEntrySource, ctx: GoalCommandContext): void;
   cancelProviderLimitAutoResume(goalId: string, ctx: GoalCommandContext): void;
   isProviderLimitAutoResumeScheduled(goalId: string): boolean;
-  getGoalStartTurnStrategy(): GoalStartTurnStrategy;
+  /** queues the turn that starts or resumes work on the goal; refuses while pi's overflow recovery waits for a user message */
+  queueGoalTurn(goal: ThreadGoal, kind: GoalTurnKind, ctx: GoalCommandContext): GoalResult;
   resumeGoalWithContinuation(
     goalId: string,
     source: GoalEntrySource,
@@ -27,7 +27,7 @@ export interface CommandHost {
 
 type CopyText = (text: string) => Promise<ClipboardCopyResult>;
 
-export type GoalCommandPi = Pick<ExtensionAPI, "registerCommand" | "sendMessage" | "sendUserMessage">;
+export type GoalCommandPi = Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">;
 
 export interface GoalCommandContext {
   hasUI: boolean;
@@ -51,22 +51,6 @@ export const GOAL_WORDS: readonly Word[] = [
 
 const SET_HINT = "To set a goal, write it out, like: /goal make every test in src/ pass";
 
-function queueGoalTurn(pi: GoalCommandPi, goal: ThreadGoal, kind: "command_start" | "command_resume"): void {
-  pi.sendMessage(
-    {
-      customType: CUSTOM_ENTRY_TYPE,
-      content: continuationPrompt(goal),
-      display: false,
-      details: { kind, goalId: goal.goalId },
-    },
-    { triggerTurn: true, deliverAs: "followUp" },
-  );
-}
-
-function queueGoalUserTurn(pi: GoalCommandPi, goal: ThreadGoal): void {
-  pi.sendUserMessage(compactContinuationPrompt(goal), { deliverAs: "followUp" });
-}
-
 /** The prompt template with its frontmatter dropped and the task put in for `$@`. */
 export function fillGoalTemplate(template: string, task: string): string {
   const body = template.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
@@ -77,16 +61,16 @@ export function fillGoalTemplate(template: string, task: string): string {
 export function goalMenu(goal: ThreadGoal | null, autoResumeScheduled: boolean): MenuSpec {
   const items: MenuItem[] = [];
   const status = goal?.status;
-  if (status === "active") {
+  if (status === "active" || status === "waiting") {
     items.push({ id: "pause", label: "Pause", description: "The agent stops working on it until you resume." });
   }
-  if (status === "paused" || status === "blocked") {
+  if (status === "paused" || status === "blocked" || status === "waiting") {
     items.push({ id: "resume", label: "Resume", description: "The agent carries on working on it." });
   }
   if (autoResumeScheduled) {
     items.push({ id: "cancel-auto", label: "Stop the automatic resume", description: "It stays paused until you resume it." });
   }
-  const open = status === "active" || status === "paused" || status === "blocked";
+  const open = status === "active" || status === "paused" || status === "blocked" || status === "waiting";
   items.push(
     { id: "set", label: open ? "Replace it with a new goal" : "Set a goal", description: "Type what should be true when the work is done." },
     {
@@ -105,7 +89,6 @@ export function goalMenu(goal: ThreadGoal | null, autoResumeScheduled: boolean):
 }
 
 async function setObjective(
-  pi: GoalCommandPi,
   host: CommandHost,
   objective: string,
   ctx: GoalCommandContext,
@@ -130,12 +113,8 @@ async function setObjective(
     return;
   }
   host.setGoal(result.goal, "command", ctx);
-  ctx.ui.notify(result.message);
-  if (host.getGoalStartTurnStrategy() === "userFollowUp") {
-    queueGoalUserTurn(pi, result.goal);
-  } else {
-    queueGoalTurn(pi, result.goal, "command_start");
-  }
+  const queued = host.queueGoalTurn(result.goal, "command_start", ctx);
+  ctx.ui.notify(queued.ok ? result.message : queued.message, queued.ok ? undefined : "warning");
 }
 
 function startStrictGoal(pi: GoalCommandPi, host: CommandHost, task: string, ctx: GoalCommandContext): void {
@@ -153,14 +132,9 @@ function startStrictGoal(pi: GoalCommandPi, host: CommandHost, task: string, ctx
   else pi.sendUserMessage(prompt);
 }
 
-function pauseOrResume(pi: GoalCommandPi, host: CommandHost, action: "pause" | "resume", ctx: GoalCommandContext): void {
+function pauseOrResume(host: CommandHost, action: "pause" | "resume", ctx: GoalCommandContext): void {
   const current = host.getGoal();
-  if (action === "resume" && current?.status === "active" && host.getGoalStartTurnStrategy() === "userFollowUp") {
-    queueGoalUserTurn(pi, current);
-    ctx.ui.notify("The goal is already active; asked the agent to carry on.");
-    return;
-  }
-  if (action === "resume" && (current?.status === "paused" || current?.status === "blocked")) {
+  if (action === "resume" && (current?.status === "paused" || current?.status === "blocked" || current?.status === "waiting")) {
     const result = host.resumeGoalWithContinuation(current.goalId, "command", ctx);
     ctx.ui.notify(result.message, result.ok ? undefined : "warning");
     return;
@@ -220,7 +194,7 @@ async function openMenu(pi: GoalCommandPi, host: CommandHost, ctx: GoalCommandCo
   switch (choice?.id) {
     case "pause":
     case "resume":
-      return pauseOrResume(pi, host, choice.id, ctx);
+      return pauseOrResume(host, choice.id, ctx);
     case "cancel-auto":
       return cancelAutoResume(host, ctx);
     case "copy":
@@ -229,7 +203,7 @@ async function openMenu(pi: GoalCommandPi, host: CommandHost, ctx: GoalCommandCo
       return clearGoal(host, ctx);
     case "set": {
       const objective = await ask(ctx, "New goal", "what should be true when the work is done");
-      if (objective) await setObjective(pi, host, objective, ctx, true);
+      if (objective) await setObjective(host, objective, ctx, true);
       return;
     }
     case "strict": {
@@ -263,20 +237,20 @@ export async function handleGoalCommand(
   }
 
   if (!rest) {
-    if (word === "pause" || word === "resume") return pauseOrResume(pi, host, word, ctx);
+    if (word === "pause" || word === "resume") return pauseOrResume(host, word, ctx);
     if (word === "clear") return clearGoal(host, ctx);
     if (word === "copy") return copyGoal(host, ctx, copyText);
     // one word is far more often a mistyped command than a goal, so it is only set once confirmed
     const objective = args.trim();
     if (ctx.hasUI && (await ctx.ui.confirm(`Set the goal to "${objective}"?`, `pause, resume, clear and copy are the commands; anything else is a goal. ${SET_HINT}`))) {
-      return setObjective(pi, host, objective, ctx, false);
+      return setObjective(host, objective, ctx, false);
     }
     ctx.ui.notify(`/goal has no "${word}". Try: pause, resume, clear, copy, or strict <task>. ${SET_HINT}`, "error");
     return;
   }
 
   if (word === "resume" && rest.toLowerCase() === "cancel") return cancelAutoResume(host, ctx);
-  await setObjective(pi, host, args.trim(), ctx, false);
+  await setObjective(host, args.trim(), ctx, false);
 }
 
 export function registerGoalCommand(pi: GoalCommandPi, host: CommandHost): void {

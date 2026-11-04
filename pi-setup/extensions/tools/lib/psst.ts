@@ -35,6 +35,7 @@ export interface SecretEntry {
 // --- the vault: psst's own layout and crypto ---
 
 const VAULT_DB = "vault.db";
+const VAULT_CONFIG = "config.json";
 const KEYCHAIN_SERVICE = "psst";
 const KEYCHAIN_ACCOUNT = "vault-key";
 const GCM_TAG_BYTES = 16;
@@ -44,17 +45,26 @@ const KEY_RETRY_MS = 30_000;
 export interface VaultLocation {
 	dir: string;
 	global: boolean;
+	/** a vault that is only a config.json (psst's AWS backend): it has no vault.db to read. */
+	configOnly?: true;
 }
 
+export const UNREADABLE_VAULT = "this vault uses psst's AWS backend; only SQLite vaults are read";
+
 /**
- * <cwd>/.psst before ~/.psst; in each, psst's own order: the legacy layout,
- * then envs/default. Only SQLite vaults: psst's AWS backend has no vault.db.
+ * <cwd>/.psst before ~/.psst, and a directory counts as a vault by its vault.db
+ * or its config.json, as in psst. With PSST_ENV set that environment's
+ * envs/<name> is the only candidate; without it, the legacy layout then envs/default.
+ * `readable` passes over a config-only vault to the next SQLite one, so a project
+ * on psst's AWS backend never stops the secrets that can be read from being scrubbed.
  */
-export function findVault(): VaultLocation | undefined {
+export function findVault(home = os.homedir(), options: { readable?: boolean } = {}): VaultLocation | undefined {
+	const env = process.env.PSST_ENV;
 	for (const global of [false, true]) {
-		const base = path.join(global ? os.homedir() : process.cwd(), ".psst");
-		for (const dir of [base, path.join(base, "envs", "default")]) {
+		const base = path.join(global ? home : process.cwd(), ".psst");
+		for (const dir of env ? [path.join(base, "envs", env)] : [base, path.join(base, "envs", "default")]) {
 			if (fs.existsSync(path.join(dir, VAULT_DB))) return { dir, global };
+			if (!options.readable && fs.existsSync(path.join(dir, VAULT_CONFIG))) return { dir, global, configOnly: true };
 		}
 	}
 	return undefined;
@@ -179,7 +189,7 @@ export function getActiveTags(): string[] {
  * agent USE (via $NAME in bash): bash env injection, system prompt (names only).
  */
 export async function loadSecrets(tags: readonly string[] = activeTags): Promise<SecretEntry[]> {
-	const vault = findVault();
+	const vault = findVault(undefined, { readable: true });
 	if (!vault) return [];
 	const dbPath = path.join(vault.dir, VAULT_DB);
 	const filter = tags.join(",");
@@ -212,7 +222,7 @@ let entryCache: { stamp: string; entries: VaultEntry[] } | undefined;
  * so nothing is decrypted: this is cheap enough to run on a keystroke.
  */
 export function listVaultEntries(): VaultEntry[] {
-	const vault = findVault();
+	const vault = findVault(undefined, { readable: true });
 	if (!vault) return [];
 	const dbPath = path.join(vault.dir, VAULT_DB);
 	const stamp = `${dbPath}|${vaultStamp(dbPath)}`;
@@ -256,11 +266,20 @@ function readSecrets(dbPath: string, key: Buffer, filter: readonly string[]): Se
 export async function saveSecret(name: string, value: string, tags: string[]): Promise<string | undefined> {
 	const vault = findVault();
 	if (!vault) return "No vault found. Run 'psst init' or 'psst init --global' first.";
-	const args = ["set", name, "--stdin", "--json", ...(vault.global ? ["--global"] : []), ...tags.flatMap((tag) => ["--tag", tag])];
-	// the read side ignores these, so the write must too or the two pick different vaults
+	if (vault.configOnly) return `${UNREADABLE_VAULT}, so a secret saved there could not be used.`;
+	const environment = process.env.PSST_ENV;
+	const args = [
+		"set",
+		name,
+		"--stdin",
+		"--json",
+		...(vault.global ? ["--global"] : []),
+		...(environment ? ["--env", environment] : []),
+		...tags.flatMap((tag) => ["--tag", tag]),
+	];
+	// the read side searches project then global and ignores PSST_GLOBAL; the CLI would otherwise follow it to another vault
 	const env = { ...process.env };
 	delete env.PSST_GLOBAL;
-	delete env.PSST_ENV;
 	return new Promise((resolve) => {
 		const child = spawn("psst", args, { cwd: process.cwd(), env, stdio: ["pipe", "pipe", "pipe"], timeout: 30_000 });
 		let out = "";

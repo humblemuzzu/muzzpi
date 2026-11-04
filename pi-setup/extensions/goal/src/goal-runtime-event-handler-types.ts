@@ -13,6 +13,7 @@ import type {
   InputEventResult,
   SessionBeforeCompactEvent,
   SessionCompactEvent,
+  SessionCompactFailedEvent,
   SessionShutdownEvent,
   SessionStartEvent,
   SessionTreeEvent,
@@ -24,7 +25,7 @@ import type { GoalRuntimeState } from "./goal-runtime-state.ts";
 import type { StatusContext } from "./goal-runtime-status.ts";
 import type { GoalStateController } from "./goal-state-controller.ts";
 import type { AssistantErrorMessage } from "./recovery.ts";
-import type { GoalEntrySource, GoalResult } from "./types.ts";
+import type { GoalEntrySource, GoalResult, SessionEntryLike } from "./types.ts";
 
 export type ContextEventResult = { messages?: ContextEvent["messages"] };
 export type MessageStartEvent = Extract<ExtensionEvent, { type: "message_start" }>;
@@ -45,6 +46,7 @@ export interface GoalRuntimeEventHandlers {
   onAgentEnd: ExtensionHandler<AgentEndEvent>;
   onSessionBeforeCompact: ExtensionHandler<SessionBeforeCompactEvent>;
   onSessionCompact: ExtensionHandler<SessionCompactEvent>;
+  onSessionCompactFailed: ExtensionHandler<SessionCompactFailedEvent>;
   onSessionShutdown: ExtensionHandler<SessionShutdownEvent>;
 }
 
@@ -77,6 +79,8 @@ export interface GoalRuntimeContinuationPort {
     },
   ) => void;
   notePassthroughContinuationInput: (input: string) => void;
+  requireFullGoal: () => void;
+  restoreFullGoalNeed: (branch: readonly SessionEntryLike[]) => void;
 }
 
 export interface GoalAccountingPort {
@@ -114,9 +118,10 @@ export interface GoalRuntimeInputContextHandlerContext extends StaleQueuedWorkEf
   >;
   stateController: Pick<
     GoalStateController,
-    "getGoal" | "isCurrentActiveGoalId" | "persistHostOverflowUserReset"
+    "getGoal" | "isCurrentActiveGoalId" | "persistHostOverflowUserReset" | "resumeWaitingGoal"
   >;
   continuation: GoalRuntimeContinuationPort;
+  goalAccounting: Pick<GoalAccountingPort, "beginAccounting">;
   recoveryRuntime: Pick<RecoveryRuntimePort, "onUserInput">;
   resetErrorRecovery: () => void;
 }
@@ -138,6 +143,7 @@ export interface GoalRuntimeTurnHandlerContext extends StaleQueuedWorkEffectCont
     | "getGoal"
     | "maybeFlushRuntimePersistence"
     | "pauseForAbort"
+    | "persistHostOverflowUserReset"
   >;
   continuation: Pick<GoalRuntimeContinuationPort, "bindPassthroughContinuationInputToTurn">;
   goalAccounting: GoalAccountingPort;
@@ -178,7 +184,7 @@ export interface GoalRuntimeSessionHandlerContext extends StaleQueuedWorkEffectC
   >;
   stateController: Pick<
     GoalStateController,
-    "applyGoalTransition" | "flushGoalPersistence" | "getGoal" | "reloadFromSession"
+    "applyGoalTransition" | "flushGoalPersistence" | "getGoal" | "pauseForRecovery" | "reloadFromSession"
   >;
   continuation: Pick<
     GoalRuntimeContinuationPort,
@@ -188,6 +194,8 @@ export interface GoalRuntimeSessionHandlerContext extends StaleQueuedWorkEffectC
     | "maybeContinue"
     | "maybeContinueAfterCurrentEvent"
     | "maybeContinueAfterPostCompactFallback"
+    | "requireFullGoal"
+    | "restoreFullGoalNeed"
   >;
   goalAccounting: GoalAccountingPort;
   recoveryRuntime: Pick<RecoveryRuntimePort, "onSessionCompact">;

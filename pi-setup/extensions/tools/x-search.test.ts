@@ -312,6 +312,17 @@ describe("x_search against the proxy", () => {
 		expect(requests).toHaveLength(0);
 	});
 
+	test("without a Grok CLI login file the call says to log in, at once and without touching the network", async () => {
+		const grokHome = join(dir, "empty-grok");
+		mkdirSync(grokHome);
+		const version = new ClientVersion(join(dir, "x-search.json"), "1.0.62", grokHome);
+		const t = createXSearchTool({ ...X_CONFIG_DEFAULTS, baseUrl: `http://127.0.0.1:${server.port}`, postSources: [] }, { grokHome, version }) as any;
+		const r = await run({ query: "x" }, t);
+		expect(r.isError).toBe(true);
+		expect(r.text).toContain("`grok login`");
+		expect(requests).toHaveLength(0);
+	});
+
 	test("a failure mid-stream is retried once, and a second one is an error, not an empty result", async () => {
 		turns = [{ text: "partial", failMidStream: true }, { text: card("1111111111111111111", "real", "real post"), postIds: ["1111111111111111111"] }];
 		const recovered = await run({ query: "x" });
@@ -542,6 +553,29 @@ describe("client version", () => {
 		expect(v.current()).toBe("1.1.0");
 		writeFileSync(join(grokHome, "version.json"), JSON.stringify({ version: "1.2.3" }));
 		expect(v.current()).toBe("1.2.3");
+	});
+
+	test("the installer's stable version is read once and counts like the others; junk or a failure leaves it out", async () => {
+		let reads = 0;
+		const v = new ClientVersion(join(dir, "cache.json"), "1.0.62", join(dir, "no-grok"));
+		await v.readStable(async () => {
+			reads++;
+			return "1.0.99\n";
+		});
+		await v.readStable(async () => {
+			reads++;
+			return "2.0.0";
+		});
+		expect(reads).toBe(1);
+		expect(v.current()).toBe("1.0.99");
+		const junk = new ClientVersion(join(dir, "cache2.json"), "1.0.62", join(dir, "no-grok"));
+		await junk.readStable(async () => "<html>moved</html>");
+		expect(junk.current()).toBe("1.0.62");
+		const offline = new ClientVersion(join(dir, "cache3.json"), "1.0.62", join(dir, "no-grok"));
+		await offline.readStable(async () => {
+			throw new Error("offline");
+		});
+		expect(offline.current()).toBe("1.0.62");
 	});
 
 	test("JWT expiry is read without verifying the token", () => {

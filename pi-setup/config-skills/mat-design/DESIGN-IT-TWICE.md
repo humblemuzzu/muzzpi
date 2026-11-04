@@ -18,7 +18,7 @@ Show this to the user, then immediately proceed to Step 2. The user reads and th
 
 ### 2. Spawn sub-agents
 
-Call `oracle` 3+ times in ONE message so they run in parallel. Each must produce a **radically different** interface for the deepened module. oracle is read-only, which is right here: the designs are proposals, not edits.
+Call `oracle` 3+ times in ONE message so they run in parallel, each with a fresh context window. Each must produce a **radically different** interface for the deepened module. oracle is read-only, which is right here: the designs are proposals, not edits.
 
 Give each call a separate technical brief in `context` (file paths, coupling details, dependency category from [DEEPENING.md](DEEPENING.md), what sits behind the seam). The brief is independent of the user-facing problem-space explanation in Step 1. Give each agent a different design constraint:
 

@@ -174,7 +174,7 @@ The last open tab can't be closed; `about:blank` stays.
 | `close_page` | `{pageId}` |
 | `resize_page` | `{pageId, width, height}`. Use 1440×900 for desktop measurements |
 | `emulate` | `{pageId, viewport?, colorScheme?:"dark"\|"light", userAgent?, networkConditions?, cpuThrottlingRate?, geolocation?, prefersReducedMotion?, …}`. **Each call replaces all emulation**, so pass everything at once. Use `colorScheme:"dark"` to capture dark-mode tokens |
-| `wait_for` | `{pageId, text:[…], timeout?}`. Returns a snapshot too |
+| `wait_for` | `{pageId, text:[…], timeout?, visible?}`. Returns a snapshot too. Hidden text matches by default; `visible:true` waits for visible text |
 
 ### Inspect
 | tool | args | notes |
@@ -183,7 +183,7 @@ The last open tab can't be closed; `about:blank` stays.
 | `take_snapshot` | `{pageId, verbose?}` | a11y tree with `uid=1_5` per element. **uids belong to the latest snapshot only**; take a new one after navigation |
 | `get_css_styles` | `{pageId, uid}` | matched rules, cascade, custom props for one element. Needs a fresh uid |
 | `take_screenshot` | `{pageId, fullPage?, uid?, format?:"png"\|"jpeg"\|"webp", quality?}` | viewport by default, 2× DPR. `fullPage:true` + `format:"jpeg", quality:60` is cheap for long pages. Element-only with `uid` |
-| `list_network_requests` | `{pageId, resourceTypes?:["font","image","stylesheet",…], pageSize?, pageIdx?}` | the fastest way to list every font and image URL |
+| `list_network_requests` | `{pageId, resourceTypes?:["font","image","stylesheet",…], pageSize?, pageIdx?}` | the fastest way to list every font and image URL. `pageIdx` is ignored unless `pageSize` is set |
 | `get_network_request` | `{pageId, reqid?}` | headers and body |
 | `list_console_messages` / `get_console_message` | `{pageId, types?}` / `{pageId, msgid}` | |
 

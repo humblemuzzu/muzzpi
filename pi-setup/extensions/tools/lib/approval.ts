@@ -121,6 +121,7 @@ async function ask(ctx: UiContext, request: ApprovalRequest, body: string, signa
 				initialRow: 1,
 				digitsPick: false,
 				notify: `Approval needed: ${request.reasons[0] ?? request.command}`,
+				blockedKind: "permission",
 			},
 			signal,
 		);

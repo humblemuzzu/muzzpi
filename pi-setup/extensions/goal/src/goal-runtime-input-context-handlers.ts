@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { continuationGoalIdFromPrompt } from "./prompts.ts";
+import { CUSTOM_ENTRY_TYPE } from "./types.ts";
 import { rewriteStaleQueuedGoalWork, staleQueuedGoalWorkEdits } from "./queued-goal-work.ts";
 import {
   isActiveGoalQueuedDetails,
@@ -121,7 +122,7 @@ export function createInputContextEventHandlers(
       return undefined;
     }) satisfies ExtensionHandler<BeforeAgentStartEvent, undefined>,
 
-    onMessageStart: (async (event, _ctx) => {
+    onMessageStart: (async (event, ctx) => {
       if (event.message.role === "user") {
         stateController.persistHostOverflowUserReset(false);
       }
@@ -131,6 +132,12 @@ export function createInputContextEventHandlers(
         if (event.message.role === "user" || event.message.role === "custom") {
           runtimeState.staleQueuedWorkGuard.noteRunnableWorkStarted();
           continuation.clearContinuationState();
+          // Goal bookkeeping never wakes a wait; turn_start ran before this, so accounting restarts here.
+          const external =
+            event.message.role === "user" || (event.message.role === "custom" && event.message.customType !== CUSTOM_ENTRY_TYPE);
+          if (external && stateController.resumeWaitingGoal(ctx)) {
+            deps.goalAccounting.beginAccounting();
+          }
         }
         return;
       }

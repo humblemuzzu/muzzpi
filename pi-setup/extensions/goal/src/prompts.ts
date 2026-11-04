@@ -2,6 +2,9 @@ import { formatDuration, formatTokenValue } from "./format.ts";
 import type { ThreadGoal } from "./types.ts";
 import { GOAL_CONTINUATION_PREFIX as CONTINUATION_MARKER_PREFIX } from "../../tools/lib/injected-prompts.ts";
 
+const WAITING_GUIDANCE =
+  'When nothing is left to do but wait for a background job or sub-agent that will report back by itself, call update_goal with status "waiting" and a reason naming that work, then end the turn. Do not poll it.';
+
 const COMPLETION_AUDIT_CHECKLIST_LINES = [
   "- Restate the objective as concrete deliverables or success criteria.",
   "- Build a prompt-to-artifact checklist that maps every explicit requirement, numbered item, named file, command, test, gate, and deliverable to concrete evidence.",
@@ -19,7 +22,9 @@ function completionAuditContinuationPromptSection(): string[] {
     "",
     `Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call update_goal with status "complete" so usage accounting is preserved. Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after the goal-completion tool succeeds.`,
     "",
-    `Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If missing user input or external work prevents meaningful progress, call update_goal with status "blocked" and a reason explaining the dependency; do not block while actionable work remains. Only explicit /goal resume reactivates a blocked goal.`,
+    WAITING_GUIDANCE,
+    "",
+    `Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If missing user input or external work that will not report back prevents meaningful progress, call update_goal with status "blocked" and a reason explaining the dependency; do not block while actionable work remains. Only explicit /goal resume reactivates a blocked goal.`,
   ];
 }
 
@@ -28,7 +33,8 @@ export const TOOL_PROMPT_GUIDELINES = [
   "Use create_goal only when the user explicitly asks to track a goal; never infer one from an ordinary task. It fails while a non-complete goal exists unless replace_existing is true, and replaces a completed goal.",
   "Call update_goal with status complete only after an audit maps every explicit requirement to concrete evidence (files, command output, tests, PR state); uncertainty means not complete. Stopping work, partial progress, tests that do not cover every requirement, or a nearly spent budget are not completion.",
   "When a goal is active, keep working through clear low-risk next steps instead of stopping at a plan.",
-  "If missing user input or external work prevents progress, call update_goal with status blocked and a reason, then say what is needed. Only an explicit /goal resume reactivates a blocked goal; never mark it complete while blocked.",
+  WAITING_GUIDANCE,
+  "If missing user input or external work that will not report back prevents progress, call update_goal with status blocked and a reason, then say what is needed. Only an explicit /goal resume reactivates a blocked goal; never mark it complete while blocked.",
 ];
 
 export function continuationGoalIdFromPrompt(prompt: string): string | null {
@@ -78,14 +84,13 @@ export function compactContinuationPrompt(goal: ThreadGoal): string {
     `${CONTINUATION_MARKER_PREFIX}${goal.goalId}\">`,
     "Continue working toward the active thread goal.",
     "",
-    "Inspect the current objective and status with get_goal if needed.",
-    "",
     ...budgetPromptLines(goal, true),
     "",
     "Avoid repeating work that is already done. Choose the next concrete action toward the objective.",
     "",
     "Before marking the goal complete, audit progress against the objective and call update_goal with status \"complete\" only when every requirement is verified.",
-    `If missing input or external work prevents meaningful progress, call update_goal with status "blocked" and explain the dependency in reason; wait for explicit /goal resume.`,
+    WAITING_GUIDANCE,
+    `If missing input or external work that will not report back prevents meaningful progress, call update_goal with status "blocked" and explain the dependency in reason; wait for explicit /goal resume.`,
     "</pi_goal_continuation>",
   ].join("\n");
 }

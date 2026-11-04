@@ -9,6 +9,9 @@ import {
 	payloadTtlMs,
 	pingBudget,
 	pingPayload,
+	pingStreamOptions,
+	prefixBreak,
+	prefixDigest,
 	writtenTtlMs,
 } from "./prompt-cache";
 
@@ -58,6 +61,15 @@ describe("prompt cache rules", () => {
 		expect(ping.max_tokens).toBe(1);
 		expect(JSON.stringify({ ...ping, max_tokens: 128_000 })).toBe(before);
 		expect(JSON.stringify(captured)).toBe(before);
+	});
+
+	test("a replay never continues the conversation's message thread and sends the capture as is", () => {
+		const capture: CapturedRequest = { payload: payload("1h"), messages: [], sessionId: "s1", modelId: "claude-opus-5-5", at: 0 };
+		const replay = pingPayload(capture.payload);
+		const signal = new AbortController().signal;
+		const options = pingStreamOptions(capture, replay, signal);
+		expect(options).toMatchObject({ signal, maxRetries: 0, sessionId: "s1", disableContinuation: true });
+		expect(options.onPayload()).toBe(replay);
 	});
 
 	test("budget thinking is never replayed; adaptive or none is", () => {
@@ -125,6 +137,36 @@ function harness(options: { budget?: number; failures?: number } = {}) {
 	};
 	return { keepAlive, pings, warmed, advanceTo, capture, jump, timers: () => timers };
 }
+
+describe("where a request stops repeating the last one", () => {
+	const request = (messages: unknown[], tools = [{ name: "read" }]) => ({ ...payload("1h"), tools, messages });
+	const user = (text: string, cache = false) => ({ role: "user", content: [{ type: "text", text, ...(cache ? { cache_control: { type: "ephemeral" } } : {}) }] });
+	const reply = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+	const check = (before: Record<string, unknown>, after: Record<string, unknown>) =>
+		prefixBreak(prefixDigest(before), prefixDigest(after), after.messages as unknown[]);
+
+	const effort = { role: "system", content: [], output_config: { effort: "high" } };
+
+	test("a turn that only appends, or only moves its breakpoints and the trailing effort message, repeats the prefix", () => {
+		const first = request([user("a", true), effort]);
+		expect(check(first, request([user("a"), reply("b"), user("c", true), effort]))).toBeUndefined();
+	});
+
+	test("names the first cached part that changed; what came after the last breakpoint was never cached", () => {
+		const first = request([user("a"), reply("b"), user("c", true), reply("after")]);
+		expect(check(first, request([user("a"), reply("b"), user("c")], [{ name: "read" }, { name: "x_search" }]))).toEqual({ part: "tools" });
+		expect(check(first, { ...request([user("a"), reply("b"), user("c")]), system: [{ type: "text", text: "other" }] })).toEqual({ part: "system" });
+		expect(check(first, request([user("a"), reply("B"), user("c")]))).toEqual({ part: "message", index: 1, role: "assistant" });
+		expect(check(first, request([user("a"), reply("b"), user("c"), reply("rewritten")]))).toBeUndefined();
+	});
+
+	test("an image is compared by its size and head, not hashed whole", () => {
+		const image = (data: string) => ({ role: "user", content: [{ type: "image", source: { type: "base64", data }, cache_control: { type: "ephemeral" } }] });
+		const big = "A".repeat(10_000);
+		expect(check(request([image(big)]), request([image(big), reply("ok")]))).toBeUndefined();
+		expect(check(request([image(big)]), request([image(`B${big.slice(1)}`)]))).toEqual({ part: "message", index: 0, role: "user" });
+	});
+});
 
 describe("KeepAlive", () => {
 	test("keeps the main session's 1h entry warm while a background agent runs: one read per lifetime, 54 minutes in", async () => {

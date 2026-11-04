@@ -48,6 +48,8 @@ export interface SearchProvider {
 	keyEnv: string;
 	/** requests this process may have in flight at once; the chain skips the provider rather than queue. */
 	maxConcurrent?: number;
+	/** a zero-hit answer ends the chain; leave unset when the provider shortens the query and so cannot vouch for an empty result. */
+	finalOnEmpty?: boolean;
 	search(call: ProviderCall): Promise<ProviderResult>;
 }
 

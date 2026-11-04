@@ -6,6 +6,7 @@ import {
 	type ChoiceDialogSpec,
 	type ChoiceQuestion,
 	canShowChoiceDialog,
+	describeAnswer,
 	openChoiceDialog,
 	setBlockedReporter,
 } from "./choice-dialog";
@@ -22,6 +23,7 @@ const KEY = {
 	space: " ",
 	backspace: "\x7f",
 	ctrlC: "\x03",
+	ctrlN: "\x0e",
 };
 
 const plain = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s };
@@ -191,6 +193,135 @@ describe("multiple choice", () => {
 	});
 });
 
+describe("notes", () => {
+	const noted = (overrides: Partial<ChoiceQuestion> = {}) => ({ notes: true, questions: [question(overrides)] });
+
+	test("a note on the single pick comes back beside its label", () => {
+		const { outcome, press } = open(noted());
+		press(KEY.ctrlN, "only for sessions", KEY.enter);
+		expect(outcome.done).toBe(false);
+		press(KEY.enter);
+		expect(outcome.answers).toEqual([{ picked: ["Redis"], notes: [{ label: "Redis", note: "only for sessions" }] }]);
+	});
+
+	test("a note on one of two ticks stays with its label", () => {
+		const { outcome, press } = open(noted({ multiple: true }));
+		press(KEY.space, KEY.down, KEY.space, KEY.ctrlN, "fallback", KEY.enter, KEY.tab, KEY.enter);
+		expect(outcome.answers).toEqual([
+			{ picked: ["Redis", "SQLite"], notes: [{ label: "SQLite", note: "fallback" }] },
+		]);
+	});
+
+	test("a note on an option unticked before submit is not returned", () => {
+		const { outcome, press } = open(noted({ multiple: true }));
+		press(KEY.space, KEY.ctrlN, "temp", KEY.enter, KEY.space, KEY.down, KEY.space, KEY.tab, KEY.enter);
+		expect(outcome.answers).toEqual([{ picked: ["SQLite"] }]);
+	});
+
+	test("a note on an option that was never picked is not returned", () => {
+		const { outcome, press } = open(noted());
+		press(KEY.ctrlN, "maybe", KEY.enter, KEY.down, KEY.enter);
+		expect(outcome.answers).toEqual([{ picked: ["SQLite"] }]);
+	});
+
+	test("esc inside the note closes only the note: the dialog stays and nothing is armed", () => {
+		const { dialog, outcome, press } = open(noted());
+		press(KEY.ctrlN, "draft", KEY.esc);
+		expect(outcome.done).toBe(false);
+		const text = dialog.render(80).join("\n");
+		expect(text).not.toContain("Press Esc again");
+		expect(text).not.toContain("draft");
+		press(KEY.esc);
+		expect(outcome).toEqual({ done: true, answers: undefined });
+	});
+
+	test("printable keys, digits included, go to the note and not to the free-text row", () => {
+		const { outcome, press } = open(noted());
+		press(KEY.ctrlN, "2 stores", KEY.enter, KEY.enter);
+		expect(outcome.answers).toEqual([{ picked: ["Redis"], notes: [{ label: "Redis", note: "2 stores" }] }]);
+	});
+
+	test("up and down save the note and leave it", () => {
+		const { dialog, press } = open(noted());
+		press(KEY.ctrlN, "kept", KEY.down);
+		const text = dialog.render(80).join("\n");
+		expect(text).toContain("note: kept");
+		expect(text).toContain("ctrl+n note");
+	});
+
+	test("an empty note removes the note, and editing starts from the old text", () => {
+		const { dialog, outcome, press } = open(noted());
+		press(KEY.ctrlN, "first", KEY.enter, KEY.ctrlN, " second", KEY.enter);
+		expect(dialog.render(80).join("\n")).toContain("note: first second");
+		press(KEY.ctrlN, KEY.backspace.repeat(20), KEY.enter);
+		expect(dialog.render(80).join("\n")).not.toContain("note:");
+		press(KEY.enter);
+		expect(outcome.answers).toEqual([{ picked: ["Redis"] }]);
+	});
+
+	test("a committed note shows under its option, a newline in it is flattened", () => {
+		const { dialog, press } = open(noted());
+		dialog.handleInput(KEY.ctrlN);
+		dialog.handleInput("\x1b[200~line one\nline two\x1b[201~");
+		press(KEY.enter);
+		const lines = dialog.render(80);
+		const at = lines.findIndex((line) => line.includes("1. Redis"));
+		expect(lines[at + 2]).toContain("note: line one");
+		expect(lines.some((line) => /[\r\n]/.test(line))).toBe(false);
+	});
+
+	test("the hint names the key on option rows only", () => {
+		const { dialog, press } = open(noted());
+		expect(dialog.render(120).join("\n")).toContain("ctrl+n note");
+		press(KEY.down, KEY.down, KEY.down);
+		expect(dialog.render(120).join("\n")).not.toContain("ctrl+n");
+	});
+
+	test("ctrl+n on the free-text row opens nothing", () => {
+		const { dialog, press } = open(noted());
+		press(KEY.down, KEY.down, KEY.down, KEY.ctrlN, "x");
+		expect(dialog.render(120).join("\n")).not.toContain("note:");
+	});
+
+	test("no line passes the width, with the note open or committed, at any width", () => {
+		const long = "宽note 👩‍👩‍👧‍👦 ".repeat(40);
+		for (const theme of [plain, ansi]) {
+			const { dialog, press } = open({ ...noted({ multiple: true }), questions: [question({ multiple: true })] }, theme);
+			dialog.handleInput(KEY.ctrlN);
+			dialog.handleInput(`\x1b[200~${long}\x1b[201~`);
+			for (const stage of ["open", "committed"]) {
+				for (let width = 8; width <= 100; width += 7) {
+					for (const line of dialog.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				}
+				if (stage === "open") press(KEY.enter);
+			}
+		}
+	});
+
+	test("lines are rebuilt after a note keystroke", () => {
+		const { dialog, press } = open(noted());
+		press(KEY.ctrlN);
+		const first = dialog.render(80);
+		expect(dialog.render(80)).toBe(first);
+		press("a");
+		expect(dialog.render(80)).not.toBe(first);
+	});
+
+	test("without the spec flag ctrl+n does nothing and the hint is silent", () => {
+		const { dialog, outcome, press } = open({ questions: [question()] });
+		press(KEY.ctrlN, "z");
+		expect(dialog.render(120).join("\n")).not.toContain("ctrl+n");
+		press(KEY.enter);
+		expect(outcome.answers).toEqual([{ picked: [], typed: "z" }]);
+	});
+
+	test("describeAnswer puts the note right after its label", () => {
+		expect(describeAnswer({ picked: ["Redis", "SQLite"], typed: "x", notes: [{ label: "Redis", note: "sessions\nonly" }] })).toBe(
+			'Redis; note: "sessions only", SQLite, "x"',
+		);
+	});
+});
+
 describe("rendering", () => {
 	const hostile = question({
 		header: "雲\nheader\twith\x1b[2Jcontrol",
@@ -263,6 +394,21 @@ describe("openChoiceDialog", () => {
 
 	test("resolves with the answers", async () => {
 		expect(await openChoiceDialog(tuiContext(["2"]), { title: "Q", questions: [question()] })).toEqual([{ picked: ["SQLite"] }]);
+	});
+
+	test("tells pi it is blocked on the user, so a terminal reading pi's status shows it", async () => {
+		const seen: unknown[] = [];
+		const ctx = (options: unknown) => ({
+			hasUI: true,
+			mode: "tui",
+			ui: { custom: async (_factory: unknown, opts: unknown) => (seen.push(opts ?? options), undefined) },
+		});
+		await openChoiceDialog(ctx(undefined) as any, { title: "Q", questions: [question()], notify: "Which store?\nsecond line" });
+		await openChoiceDialog(ctx(undefined) as any, { title: "Allow?", questions: [question()], notify: "Approval needed: drop table", blockedKind: "permission" });
+		expect(seen).toEqual([
+			{ blocked: { kind: "question", message: "Which store? second line" } },
+			{ blocked: { kind: "permission", message: "Approval needed: drop table" } },
+		]);
 	});
 
 	test("an abort closes an open dialog as dismissed", async () => {

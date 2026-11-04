@@ -18,8 +18,8 @@ together. The installer merges into the user's herdr config (`# muzzpi` lines,
 a marked block whose `BEGIN` line must never change) and refuses clashes; **herdr drops its whole config on any parse
 error**, so it runs `herdr config check` before every swap.
 
-The Herdr Mac app learns pi's state only from `herdr/app/pi-status.ts` (OSC 7501, emitted only under `HC_TERMINAL_ID` in TUI mode: a
-child's stdout is RPC); delete it once pi ships #10607. Start pi there via `zsh -lic`:
+The Herdr Mac app learns pi's state from pi's own OSC 7501 reporter (it answers pi's `7501;?` query); our
+pickers report `blocked` through `ctx.ui.custom`'s `blocked` option. Start pi there via `zsh -lic`:
 herdr-core terminals skip `~/.zshrc` (no API keys). Its mods are named `muzz-*`. Its
 `layout.set` sends the whole tree: merge `layouts/.state/main.json` `nodes` in first, or the
 user's clicks (sidebar width, open panel) reset.
@@ -69,7 +69,7 @@ needs no update; `models.json` only sets its off-peak cost.
 **Claude-plan billing.** An OAuth request whose system prompt holds the phrases
 in `tools/lib/anthropic-sub.ts` bills as extra usage (here a 400). **Tool names count too**:
 a tool named `code_review` billed as extra usage while `review_code` bills to plan (description
-and schema made no difference), so a new or renamed tool must pass the canary before it ships. Never write
+and schema made no difference), so a new or renamed tool must pass the canary (it bisects pi's real tool names) before it ships. Never write
 them into a prompt or drop `anthropic-sub`; `update-pi.sh` runs
 `bun pi-setup/port-harness/anthropic-oauth-canary.ts`, run it by hand otherwise. pi's extra-usage banner
 (`warnings.anthropicExtraUsage: false`) is not a billing signal.
@@ -88,7 +88,7 @@ child stall watchdog does not. **Keep pi's `cacheWarming` off**: it would double
 (parent only) replays the capture plus a summary instruction (pi's checkpoint format plus droid's
 continuation rules, `cache-compaction.ts`); any doubt runs pi's own, which lacks those rules. Models
 compact above 970k (`compaction.modelOverrides`, reserve = window − 970k). `cache-report.py` shows what was rebuilt after
-expiry and what the gap waited on; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter per request.
+expiry and what the gap waited on, and `cache/prefix-breaks.jsonl` (main session) names what changed first when a prefix broke; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter per request.
 
 ### System prompt assembly
 
@@ -127,7 +127,7 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 | `resource-loader.js` | pi core `dist/core/` | suppresses extension tool-conflict boot errors |
 | `session-selector.js` + `keybindings.js` | pi core | session pinning, `Ctrl+B` in `/resume`; pins in `~/.pi/agent/pinned-sessions.json` (user data) |
 | `session-manager.js` + `session-selector-search.js` | pi core | fast `/resume`: a tool result is counted without being decoded, each file's info cached by size+mtime, a keystroke that extends the query re-matches only the last matches; the list, matches and order stay stock's |
-| `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect; stock connects every enabled server at every session start |
+| `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect (stock connects every enabled server at every session start); a server's `idleTimeout` (s) closes its transport when unused |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
 | **our bundle** | `dist/muzzpi-bundle/`, `pi` → its launcher `pi` | what pi runs: the patched files, bundled; stale after any change to them. The launcher sets `MallocLargeCache=0` (macOS kept ~640 MB of freed buffers per long session) for pi alone: `cli.js` drops it, so nothing pi runs inherits it |
 | speed patches | `pi-core-patches/text-patches.mjs` | edits to pi-tui `markdown.js`, `assistant-message.js`, `interactive-mode.js`, each applied only to the stock file (sha256) it was made on; a drifted one is skipped (pi stays correct, slower) until re-derived; `markdown-stream.test.ts` pins that a streaming reply renders as stock |
@@ -205,13 +205,13 @@ Rarely used servers stay in the file with `"enabled": false`; `/mcp` turns one o
 
 | Server | Notes |
 |---|---|
-| `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.11.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
+| `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.12.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
 | `astro` | `127.0.0.1:8089/mcp`; runs inside the Astro Mac app (Settings → MCP Server) |
 | `paper` | `127.0.0.1:29979/mcp`; inside Paper Desktop, **read+write** on the open file |
 | `cloudflare*` | remote HTTP; `cloudflare` and `cloudflare-bindings` use OAuth |
 
-**chrome-devtools flags are load-bearing.** `--isolated` (the default profile
-is persistent, single-browser and readable by the agent),
+**chrome-devtools flags are load-bearing.** `--isolated` (1.12 defaults to it only
+while no profile or browser is named; a persistent profile is readable by the agent),
 `--no-usage-statistics` + `--no-performance-crux` (both default ON; telemetry
 to Google, trace URLs to CrUX). **Its arg parser is not strict** — a misspelled
 flag is only warned about (`Unknown arguments`); confirm a flag by its startup
@@ -219,7 +219,7 @@ notice disappearing. `CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY=1` stops it applyi
 an ambient `~/.config/cd4a/config.json`. **Keep `"cwd": "/tmp"`**: from any folder
 under `~` without its own package.json, npx reads `~/package.json`'s bun
 `devEngines` and refuses to start (`EBADDEVENGINES`).
-Pin the version, never `@latest`: a lazy spawn re-resolves on every cold start.
+Pin the version, never `@latest`: a lazy spawn re-resolves on every cold start (`verify-patches.sh` checks the pin).
 File-writing tools are confined to the OS temp dir.
 
 `auth` takes only `{ "provider": "<pi login>" }`; the adapter's `"oauth"` or
@@ -235,7 +235,7 @@ packages external), so pi does not resolve every import through jiti at boot
 dir**: pi prefers `index.ts` over `index.js`; `settings.json` lists the `.js`.
 There is **no** disabled state; delete or move out to disable. The live dir also
 holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
-`herdr-app-status.ts` (`./install.sh herdr-app`), `broski-link/` (the Broski bridge).
+`broski-link/` (the Broski bridge), and an old `herdr-app-status.ts` until `./install.sh herdr-app` moves it aside.
 
 | Extension | Purpose |
 |---|---|
@@ -257,7 +257,7 @@ holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
 | `ideas/` | `/idea <text>` parks an idea per project, `pi:` in front (or any idea in the repo holding `pi-setup/extensions/ideas`) files it under the harness; `/idea` lists. `<agent dir>/ideas/*.jsonl` is append-only user data, never rewritten; the `.md` views are regenerated. `cli.js` is herdr's ⌘I popup. Parent only |
 | `focus/` | `/focus`, Ctrl+Shift+H: covers only pi's fullscreen chat rows (`viewport.ts` reads pi-tui's private chat height; `verify-patches.sh` checks it) with the session as prompts and answers. It holds the keyboard so pi does not scroll the hidden chat and **forwards every key it does not own to pi's editor**. Goal and /ysk prompts are recognised by `tools/lib/injected-prompts.ts`: their senders must build them from it. Parent only |
-| `goal/` | `/goal` (`/goal strict <task>` sends `create-goal.md`) and the goal tools; pi-codex-goal 0.6.1 (MIT) with trimmed model text and guarded timers. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it. A continuation delivered after its goal stopped is rewritten once and stored as a `context_edit`; ones that ran are never rewritten |
+| `goal/` | `/goal` (`/goal strict <task>` sends `create-goal.md`) and the goal tools; pi-codex-goal 0.6.1 (MIT) plus 0.7.7's `waiting` status, compaction filter, full objective after a compaction and overflow pauses, with trimmed model text and guarded timers; not its delivery-ownership rewrite, below-editor widget or envelope removal. Merge upstream by running `port-harness/goal-upstream-tests.mjs` on the old and new code and diffing the failures. Keep its stored entry type `pi-codex-goal`: old sessions' goals load by it. A continuation delivered after its goal stopped is rewritten once and stored as a `context_edit`; ones that ran are never rewritten |
 | `tools/` | custom tools |
 
 ### guardrails — the comment gate, and where the rules live
@@ -474,9 +474,9 @@ Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables), `PI_
   returns `undefined` on failure, degrading to output-only.
 - The idle timer runs from t=0 (pipes block-buffer), stamped on raw chunk arrival; the
   machine-sleep guard (`SLEEP_JUMP_MS`, `watchdog.ts`) is checked first and wins.
-- Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild holds stdout. The
-  child is **not** spawned `detached` (Ctrl+C must reach it). 900s sits above pi's HTTP idle (300s)
-  + retry; re-check those before shrinking it.
+- Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild holds stdout. A TUI parent's
+  child leads its own process group (`ownProcessGroup`), so a stop ends its MCP servers and sub-agents too; under
+  `pi -p` it shares the parent's, where Ctrl+C reaches it. 900s sits above pi's HTTP idle (300s) + retry.
 - **A local `git commit`/`git push` whose added lines the psst scrubber would hide is refused**
   (`lib/commit-guard.ts`; `PI_SECRET_SCAN_OFF=1`). A search's exit 1 with no output reads "no matches".
 - **bash keeps pi's codemode contract**: `structuredContent` on every exit code (a script's `grep`

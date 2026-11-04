@@ -58,9 +58,10 @@ export function createTurnEventHandlers(deps: GoalRuntimeTurnHandlerContext) {
         return;
       }
       if (isAssistantContextOverflow(event.message, getContextWindow(ctx))) {
-        stateController.beginOverflowRecovery(ctx);
+        stateController.beginOverflowRecovery(ctx, event.message.role !== "assistant" || event.message.stopReason !== "stop");
         return;
       }
+      if (event.message.role === "assistant" && event.message.stopReason !== "length") stateController.persistHostOverflowUserReset(false);
       const suppressContinuation = shouldPauseStatusInspectionOnlyContinuation(
         runtimeState.agentRunFromContinuation,
         runtimeState.agentRunToolNames,

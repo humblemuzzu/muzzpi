@@ -25,7 +25,7 @@ Key responsibilities:
 
 ## Execution strategy
 
-- **Maximize parallelism**: on EVERY turn, make 8+ parallel tool calls with diverse strategies. Never issue independent searches one per turn.
+- **Parallelize independent searches**: issue them together in one turn, never one per turn. Do not add calls only to fill a turn.
 - **Breadth first, then depth**: map the surface with grep, find and ls, then open only what the question needs.
 - **Read the code, not the names**: before stating that something behaves a certain way, open it. A filename, an import, or a comment is not evidence. When a comment and the code disagree, the code wins and the comment is stale — say so.
 - **Follow one level out**: for anything you report on, also check its callers, its callees, and its test.

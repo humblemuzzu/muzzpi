@@ -19,6 +19,7 @@ import { loadSecrets, makeScrubber } from "./lib/psst";
 import { gitAction, leakRefusal, scanCommand } from "./lib/commit-guard";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./lib/watchdog";
 import { sampleGroupCpuSeconds } from "./lib/proc-cpu";
+import { heredocTags } from "./lib/remote-command";
 
 const HEAD_LINES = 50;
 const TAIL_LINES = 50;
@@ -215,6 +216,27 @@ function trackBackgroundGroup(pid: number): void {
 /** command lines shown in the call header before eliding; ctrl+o shows the rest */
 const COLLAPSED_CMD_LINES = 3;
 
+interface CommandRow {
+	text: string;
+	folded?: boolean;
+}
+
+/** each heredoc body and its terminator become one row, so the commands around it fit the collapsed header */
+function foldHeredocs(lines: string[]): CommandRow[] {
+	const rows: CommandRow[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		rows.push({ text: lines[i]! });
+		for (const tag of heredocTags(lines[i]!) ?? []) {
+			let end = i + 1;
+			while (end < lines.length && lines[end]!.trim() !== tag) end++;
+			const body = end - i - 1;
+			if (body > 0) rows.push({ text: `… ${body} line${body === 1 ? "" : "s"} to ${tag}`, folded: true });
+			i = Math.min(end, lines.length - 1);
+		}
+	}
+	return rows;
+}
+
 /** grace past the max declared timeout before an orphaned elapsed-ticker self-clears */
 const TICKER_SLACK_MS = 60_000;
 
@@ -383,13 +405,14 @@ export function createBashTool(): ToolDefinition {
 			// — split on it. several rows are safe: Text.render() wraps, TUI counts.
 			const lines = normalizeForDisplay(cmd).split(/\r\n?|\n/);
 			while (lines.length > 1 && lines[lines.length - 1].trim() === "") lines.pop();
-			const shown = context?.expanded ? lines : lines.slice(0, COLLAPSED_CMD_LINES);
-			const hidden = lines.length - shown.length;
+			const all: CommandRow[] = context?.expanded ? lines.map((line) => ({ text: line })) : foldHeredocs(lines);
+			const shown = context?.expanded ? all : all.slice(0, COLLAPSED_CMD_LINES);
+			const hidden = all.length - shown.length;
 
-			const rows = shown.map((line, i) =>
+			const rows = shown.map((row, i) =>
 				i === 0
-					? theme.fg("toolTitle", theme.bold(`$ ${line}`)) + timeoutSuffix
-					: theme.fg("toolTitle", `  ${line}`),
+					? theme.fg("toolTitle", theme.bold(`$ ${row.text}`)) + timeoutSuffix
+					: theme.fg(row.folded ? "muted" : "toolTitle", `  ${row.text}`),
 			);
 			if (hidden > 0) rows.push(theme.fg("muted", `  … +${hidden} more (ctrl+o)`));
 

@@ -70,6 +70,23 @@ describe("what the model reads back", () => {
 			].join("\n"),
 		);
 	});
+
+	test("a note follows its label, on the single and the multiple pick", () => {
+		const text = formatAnswers(
+			[store, { question: "Which tones?" }],
+			[
+				{ picked: ["Redis"], notes: [{ label: "Redis", note: "only for sessions" }] },
+				{ picked: ["Formal", "Short"], typed: "no jargon", notes: [{ label: "Short", note: "max 2 lines" }] },
+			],
+		);
+		expect(text).toBe(
+			[
+				"The user answered:",
+				'- Which store? → Redis; note: "only for sessions"',
+				'- Which tones? → Formal, Short; note: "max 2 lines"; in their own words: "no jargon"',
+			].join("\n"),
+		);
+	});
 });
 
 function tuiCtx(keys: string[]) {
@@ -103,6 +120,13 @@ describe("execute", () => {
 		expect(result.terminate).toBeUndefined();
 		expect(result.details).toMatchObject({ outcome: "answered", answers: [{ picked: ["SQLite"] }] });
 		expect(shown).toEqual([false, true]);
+	});
+
+	test("the picker offers notes, and the note reaches the model with the pick", async () => {
+		const { ctx } = tuiCtx(["\x0e", "only for sessions", "\r", "\r"]);
+		const result = await run(ctx);
+		expect(result.content[0].text).toBe('The user answered:\n- Which store? → Redis; note: "only for sessions"');
+		expect(result.details.answers).toEqual([{ picked: ["Redis"], notes: [{ label: "Redis", note: "only for sessions" }] }]);
 	});
 
 	test("dismissed: the agent is told to stop and the turn ends", async () => {

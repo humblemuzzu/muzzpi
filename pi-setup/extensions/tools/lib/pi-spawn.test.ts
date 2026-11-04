@@ -274,6 +274,30 @@ describe("stall watchdog", () => {
 		else process.env.PI_SPAWN_RELEASE_MS = prevRelease;
 	});
 
+	test("a child in its own process group takes what it started down with it; without one, that outlives it", async () => {
+		const alive = (pid: number) => {
+			try {
+				process.kill(pid, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		const grandchildAfterStall = async (ownProcessGroup: boolean) => {
+			const pidFile = join(dir, `grandchild-${ownProcessGroup}.pid`);
+			const bin = writeStub(`starts-grandchild-${ownProcessGroup}.sh`, [`sleep 300 >/dev/null 2>&1 & echo $! > "${pidFile}"`, "sleep 60"]);
+			await withChild(bin, "1", { ownProcessGroup });
+			const pid = Number(readFileSync(pidFile, "utf-8"));
+			for (let waited = 0; waited < 3_000 && alive(pid); waited += 100) await Bun.sleep(100);
+			return pid;
+		};
+		const grouped = await grandchildAfterStall(true);
+		expect(alive(grouped)).toBe(false);
+		const shared = await grandchildAfterStall(false);
+		expect(alive(shared)).toBe(true);
+		process.kill(shared, "SIGKILL");
+	}, 40000);
+
 	test("kills a child that produces no output at all", async () => {
 		const bin = writeStub("silent.sh", ["sleep 60"]);
 		const run = await withChild(bin, "1");
@@ -620,6 +644,15 @@ describe("the RPC conversation with the child", () => {
 		expect(run.stopReason).toBe("error");
 		expect(run.errorMessage).toBe("No API key for deepseek");
 		expect(run.ms).toBeLessThan(5_000);
+	}, 30000);
+
+	test("a task the child takes as a slash command ends the run at once, with why, instead of waiting for a run that never starts", async () => {
+		const handled = JSON.stringify({ type: "response", id: "prompt-1", command: "prompt", success: true, data: { disposition: "handled" } });
+		const bin = writeStub("handles.sh", ["read prompt", `echo '${handled}'`, "read eof"]);
+		const run = await withChild(bin, "3");
+		expect(run.stopReason).toBe("error");
+		expect(run.errorMessage).toContain("slash command");
+		expect(run.ms).toBeLessThan(2_500);
 	}, 30000);
 
 	test("a child killed mid-tool leaves a conversation that is repaired before anyone continues it", async () => {

@@ -1,51 +1,37 @@
 ---
 name: review
-description: "epistemic standards for evaluation and analysis. load before reviewing code, debugging, reporting findings, or any task where claims must be defensible. enforces trace-or-delete, confidence labeling, falsification."
+description: "Evaluate implementation changes or pull requests for actionable defects, using traced behavior, counterevidence, and severity. Read-only by default. Not a prerequisite for debugging, general investigation, or routine factual answers."
 ---
 
 # review
 
-epistemic standards for producing defensible findings.
+evaluate a specific change against its intended behavior. do not fix it, rewrite
+tests, post comments remotely, or change git state unless separately authorized.
+use only checks compatible with that boundary; report when a useful reproduction
+would require mutation or external effects.
 
-## when to load
+## procedure
 
-- evaluating code, docs, or designs
-- debugging / root cause analysis
-- codebase archaeology
-- any task where you will report findings to others
+1. establish the reviewed revision/diff, intended outcome, and constraints. read
+   applicable project guidance and relevant tests. distinguish pre-existing
+   behavior from regressions introduced by the change.
+2. trace the changed behavior across its boundary: caller → changed code →
+   consumer or observable effect. inspect guards, defaults, ownership, failure
+   paths, and platform assumptions that could invalidate a suspected defect.
+3. prioritize concrete correctness, security, data-loss, compatibility, and
+   operational risks. inspect names/types/abstractions when they conceal a real
+   contract mismatch; do not turn personal style preferences into defects.
+4. for each candidate, state the triggering conditions and consequence. ask what
+   would make it safe, then check that counterexample: an upstream guard, a
+   synchronous operation, an unreachable state, or an explicit requirement.
+5. run the narrowest safe relevant check when available. distinguish static
+   tracing from observed execution. missing tests mean a coverage gap, not proof
+   of a bug; passing tests do not establish behavior they never exercise.
+6. discard refuted candidates. report actionable findings first, followed by
+   consequential uncertainties and verification limits. do not inflate the
+   report to fill a template.
 
-## principles
-
-1. **trace or delete** — every claim traces to code, logs, or data. if you can't show the evidence, delete the claim or label it a hunch.
-   - *prevents: pattern → fact leap* — "this looks like X" silently becomes "this IS X"
-
-2. **facts, not assumptions** — "the code shows X" not "this is probably X". be specific: line numbers, exact conditions, concrete paths.
-   - *prevents: vague language hiding weak evidence* — hedging lets you avoid committing to what you actually know
-
-3. **label confidence** — VERIFIED (traced), HUNCH (pattern recognition, not traced), QUESTION (needs input). never present hunches as findings.
-   - *prevents: false certainty* — unlabeled claims inherit unearned authority
-
-4. **falsify, don't confirm** — design tests that would DISPROVE your hypothesis. ask: "what would make this NOT a bug?"
-   - *prevents: confirmation bias* — you naturally notice supporting evidence and ignore contradictions; tunnel vision locks you into your first theory
-
-## quality criteria
-
-when evaluating contributions, check:
-
-1. **proven correctness** — have you seen it work? not "does the code look right" — have you actually run it?
-2. **types tell the truth** — are you lying to the compiler? do abstractions match their names?
-3. **naming is honest** — would someone reading this in six months be confused?
-4. **edges tested** — what happens on the worst path, not just the happy path?
-5. **self-consistent abstractions** — can you explain it start to finish, and each part in isolation?
-
-slop indicators:
-- missing tests
-- contradictions in abstractions
-- names that lie about what they contain
-
-## applying to findings
-
-before reporting an issue:
+## before reporting an issue
 
 ```
 1. can i cite the exact code location? (line numbers, file paths)
@@ -56,37 +42,39 @@ before reporting an issue:
 
 if any answer is weak, either investigate more or label appropriately.
 
-## report format
+## severity and evidence
 
-```markdown
-## finding: <title>
+assign severity by demonstrated impact and reach, not by alarming vocabulary:
 
-**confidence:** VERIFIED | HUNCH | QUESTION
-**location:** file:line or range
-**evidence:** what the code actually shows
-**falsification attempted:** what would disprove this, did i check?
-```
+- **critical:** immediate containment needed for a reachable catastrophic failure.
+- **high:** blocks core behavior or exposes substantial security/data-loss risk.
+- **medium:** meaningful failure under specific, plausible conditions.
+- **low:** limited impact with a concrete reason to fix.
 
-### counter-example (slop)
+honor a requested project's severity scale instead when one exists. keep severity
+separate from confidence: a high-impact hypothesis remains unverified.
 
-```markdown
-## finding: possible race condition
+each finding should fit in a compact paragraph or short block containing:
 
-**confidence:** VERIFIED  
-**location:** src/cache/invalidator.ts
-**evidence:** the code looks like it might have a race condition because invalidate() calls multiple async functions
-**falsification attempted:** none
-```
+- severity and an action-oriented title;
+- `file:line` (or source URL), triggering conditions, and observable consequence;
+- evidence and confidence: VERIFIED (traced), HUNCH (not traced), or QUESTION;
+- the counterevidence checked and any remaining reproduction limitation.
 
-problems: confidence says VERIFIED but evidence is "looks like" (pattern-match, not trace). no line numbers. no falsification. this is pattern→fact leap.
+keep hunches/questions separate from confirmed defects. finish with checks run
+and gaps. if none survive, say “no actionable findings in the reviewed scope,”
+not “the change is correct.”
 
-### example (correct)
+## contrastive example
 
-```markdown
-## finding: race condition in cache invalidation
+**unsupported:** “high / VERIFIED: race in `invalidator.ts`; it calls several
+async functions.”
 
-**confidence:** VERIFIED
-**location:** src/cache/invalidator.ts:47-52
-**evidence:** `invalidate()` awaits `fetch()` but not `write()`. concurrent calls can read stale data between L47 fetch completing and L52 write persisting. reproduced by adding 50ms delay to write() and calling invalidate() twice in quick succession — second call returns stale value.
-**falsification attempted:** checked if a mutex guards the block (none). checked if write() is synchronous (it's not — returns Promise). confirmed issue by adding delay and observing stale read.
-```
+**evidence-bearing, illustrative:** “medium / VERIFIED by reproduction:
+`src/cache/invalidator.ts:47-52` returns before `write()` settles. when a caller
+reads after awaiting invalidation, it can receive the old value. a delayed-write
+fixture reproduced that ordering. checked for a caller-side await/lock and a
+synchronous write implementation; neither guards this path.”
+
+if only source tracing was done, say so instead of claiming the fixture ran.
+the number of agreeing reviewers is not execution evidence.

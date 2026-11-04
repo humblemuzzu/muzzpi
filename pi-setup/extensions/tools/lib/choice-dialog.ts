@@ -19,6 +19,8 @@ export interface ChoiceQuestion {
 export interface ChoiceAnswer {
 	picked: string[];
 	typed?: string;
+	/** notes on options still picked at submit */
+	notes?: { label: string; note: string }[];
 }
 
 /** one entry per question, `undefined` where it went unanswered */
@@ -34,6 +36,10 @@ export interface ChoiceDialogSpec {
 	digitsPick?: boolean;
 	/** what the user is needed for: sent as a desktop notification and as herdr's blocked label */
 	notify?: string;
+	/** what pi reports it is blocked on (OSC 7501): an approval is a permission, the default a question */
+	blockedKind?: "question" | "permission";
+	/** ctrl+n on an option row attaches a one-line note to it */
+	notes?: boolean;
 }
 
 interface DialogTheme {
@@ -50,7 +56,10 @@ export interface DialogContext {
 	mode?: string;
 	hasUI?: boolean;
 	ui?: {
-		custom?<T>(factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any): Promise<T>;
+		custom?<T>(
+			factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any,
+			options?: { blocked?: { kind: "question" | "permission"; message: string } },
+		): Promise<T>;
 	};
 }
 
@@ -79,6 +88,8 @@ export class ChoiceDialog {
 	private readonly rows: number[];
 	private readonly picked: Set<number>[];
 	private readonly inputs: Input[];
+	private readonly notes: Map<number, string>[];
+	private noting: { option: number; input: Input } | undefined;
 	private armed = false;
 	private hasFocus = false;
 	private cacheWidth = -1;
@@ -95,6 +106,7 @@ export class ChoiceDialog {
 			i === 0 ? Math.min(Math.max(spec.initialRow ?? 0, 0), first.options.length) : 0,
 		);
 		this.picked = spec.questions.map(() => new Set<number>());
+		this.notes = spec.questions.map(() => new Map<number, string>());
 		this.inputs = spec.questions.map(
 			(q) => new Input({ prompt: "", placeholder: oneLine(q.typeLabel), placeholderStyle: (s) => theme.fg("dim", s) }),
 		);
@@ -128,14 +140,23 @@ export class ChoiceDialog {
 
 	private answers(): ChoiceAnswers {
 		return this.questions.map((q, i) => {
-			const picked = [...this.picked[i]!].sort((a, b) => a - b).map((n) => q.options[n]!.label);
+			const order = [...this.picked[i]!].sort((a, b) => a - b);
+			const picked = order.map((n) => q.options[n]!.label);
 			const typed = this.inputs[i]!.getValue().trim();
 			if (picked.length === 0 && !typed) return undefined;
-			return typed ? { picked, typed } : { picked };
+			const notes = order.flatMap((n) => {
+				const note = this.notes[i]!.get(n);
+				return note ? [{ label: q.options[n]!.label, note }] : [];
+			});
+			const answer: ChoiceAnswer = { picked };
+			if (typed) answer.typed = typed;
+			if (notes.length > 0) answer.notes = notes;
+			return answer;
 		});
 	}
 
 	handleInput(data: string): void {
+		if (this.noting) return this.handleNote(this.noting, data);
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			if (this.armed || !this.answers().some(Boolean)) return this.done(undefined);
 			this.armed = true;
@@ -158,6 +179,8 @@ export class ChoiceDialog {
 		if (matchesKey(data, Key.up)) return this.moveRow(-1);
 		if (matchesKey(data, Key.down)) return this.moveRow(1);
 
+		if (this.spec.notes && !this.onTypeRow() && matchesKey(data, Key.ctrl("n"))) return this.openNote();
+
 		if (this.onTypeRow()) {
 			if (matchesKey(data, Key.enter)) return this.commitTyped();
 			this.inputs[this.tab]!.handleInput(data);
@@ -178,6 +201,43 @@ export class ChoiceDialog {
 		this.rows[this.tab] = q.options.length;
 		this.syncFocus();
 		this.inputs[this.tab]!.handleInput(data);
+		this.changed();
+	}
+
+	private openNote(): void {
+		const option = this.rows[this.tab]!;
+		const input = new Input({ prompt: "" });
+		const note = this.notes[this.tab]!.get(option);
+		if (note) input.handleInput(`\x1b[200~${note}\x1b[201~`);
+		input.focused = this.hasFocus;
+		this.noting = { option, input };
+		this.changed();
+	}
+
+	private closeNote(save: boolean): void {
+		const noting = this.noting;
+		if (!noting) return;
+		this.noting = undefined;
+		if (!save) return;
+		const note = oneLine(noting.input.getValue());
+		if (note) this.notes[this.tab]!.set(noting.option, note);
+		else this.notes[this.tab]!.delete(noting.option);
+	}
+
+	private handleNote(noting: { input: Input }, data: string): void {
+		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+			this.closeNote(false);
+			return this.changed();
+		}
+		if (matchesKey(data, Key.enter)) {
+			this.closeNote(true);
+			return this.changed();
+		}
+		if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+			this.closeNote(true);
+			return this.moveRow(matchesKey(data, Key.up) ? -1 : 1);
+		}
+		noting.input.handleInput(data);
 		this.changed();
 	}
 
@@ -239,6 +299,7 @@ export class ChoiceDialog {
 	invalidate(): void {
 		this.cacheWidth = -1;
 		for (const input of this.inputs) input.invalidate();
+		this.noting?.input.invalidate();
 	}
 
 	render(width: number): string[] {
@@ -314,7 +375,14 @@ export class ChoiceDialog {
 			const tick = !q.multiple && picked ? t.fg("success", " ✓") : "";
 			const label = `${n + 1}. ${oneLine(option.label)}`;
 			push(cursor + box + t.fg(selected ? "accent" : "text", label) + tick);
-			if (option.description) wrap(option.description, (s) => t.fg("dim", s), q.multiple ? "       " : "     ");
+			const indent = q.multiple ? "       " : "     ";
+			if (option.description) wrap(option.description, (s) => t.fg("dim", s), indent);
+			if (this.noting?.option === n) {
+				push(indent + t.fg("muted", "note: ") + (this.noting.input.render(Math.max(inner - indent.length - 6, 4))[0] ?? ""));
+			} else {
+				const note = this.notes[i]!.get(n);
+				if (note) wrap(`note: ${note}`, (s) => t.fg("dim", s), indent);
+			}
 		});
 		const typing = row === q.options.length;
 		const input = this.inputs[i]!;
@@ -341,19 +409,30 @@ export class ChoiceDialog {
 
 	private hint(): string {
 		if (this.onReview) return "enter submit · tab/shift+tab go back · esc dismiss";
+		if (this.noting) return "enter save note · esc cancel note · ↑↓ save and leave";
 		const q = this.questions[this.tab]!;
 		if (this.onTypeRow()) {
 			return `enter ${this.hasReview ? "save" : "send"} · ↑ back to the options${this.hasReview ? " · tab next" : ""} · esc dismiss`;
 		}
 		const parts = ["↑↓ move", q.multiple ? "space tick" : "enter choose"];
+		if (this.spec.notes) parts.push(this.notes[this.tab]!.has(this.rows[this.tab]!) ? "ctrl+n edit note" : "ctrl+n note");
 		if (this.hasReview) parts.push("tab next");
 		parts.push("or just type", "esc dismiss");
 		return parts.join(" · ");
 	}
 }
 
+/** each picked label, followed by its note when it has one */
+export function pickedParts(answer: ChoiceAnswer, text: (s: string) => string = (s) => s): string[] {
+	const notes = new Map(answer.notes?.map(({ label, note }) => [label, note]));
+	return answer.picked.map((label) => {
+		const note = notes.get(label);
+		return note ? `${text(label)}; note: "${text(note)}"` : text(label);
+	});
+}
+
 export function describeAnswer(answer: ChoiceAnswer): string {
-	const parts = answer.picked.map((label) => oneLine(label));
+	const parts = pickedParts(answer, oneLine);
 	if (answer.typed) parts.push(`"${answer.typed}"`);
 	return parts.join(", ");
 }
@@ -395,7 +474,9 @@ export function openChoiceDialog(
 	signal?: AbortSignal,
 ): Promise<ChoiceAnswers | undefined> {
 	if (signal?.aborted || !ctx.ui?.custom) return Promise.resolve(undefined);
-	const release = needUser(spec.notify ?? spec.title);
+	const need = spec.notify ?? spec.title;
+	const release = needUser(need);
+	const blocked = { kind: spec.blockedKind ?? "question", message: oneLine(need) };
 	return ctx.ui.custom<ChoiceAnswers | undefined>((tui, theme, _keybindings, done) => {
 		let finished = false;
 		const finish = (answers: ChoiceAnswers | undefined) => {
@@ -407,7 +488,7 @@ export function openChoiceDialog(
 		const onAbort = () => finish(undefined);
 		signal?.addEventListener("abort", onAbort, { once: true });
 		return new ChoiceDialog(spec, tui, theme, finish);
-	}).finally(release);
+	}, { blocked }).finally(release);
 }
 
 export function canShowChoiceDialog(ctx: DialogContext | undefined): boolean {

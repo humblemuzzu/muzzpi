@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { compactContinuationPrompt, continuationGoalIdFromPrompt } from "./prompts.ts";
+import { compactContinuationPrompt, continuationGoalIdFromPrompt, continuationPrompt } from "./prompts.ts";
+import { reconstructGoal } from "./state.ts";
 import {
   recoveryPhaseBlocksContinuation,
   type GoalRecoveryMachineState,
@@ -9,7 +10,7 @@ import { isRecoveryPendingAttention } from "./recovery.ts";
 import { CONTINUATION_RETRY_MS } from "./runtime-config.ts";
 import type { StaleQueuedWorkGuard } from "./stale-queued-work-guard.ts";
 import { guarded } from "./timers.ts";
-import { CUSTOM_ENTRY_TYPE, type ThreadGoal } from "./types.ts";
+import { CUSTOM_ENTRY_TYPE, type SessionEntryLike, type ThreadGoal } from "./types.ts";
 
 interface ContinuationSchedulerDeps {
   pi: Pick<ExtensionAPI, "sendMessage">;
@@ -33,6 +34,8 @@ export function createContinuationScheduler(deps: ContinuationSchedulerDeps) {
   let continuationTimer: ReturnType<typeof setTimeout> | null = null;
   let postCompactContinuationTimer: ReturnType<typeof setTimeout> | null = null;
   let passthroughContinuationInput: { text: string; turnIndex: number | null } | null = null;
+  /** the goal whose next continuation carries the whole objective, because a compaction dropped it */
+  let fullGoalNeededFor: string | null = null;
 
   const clearContinuationTimer = (): void => {
     if (continuationTimer) {
@@ -113,14 +116,33 @@ export function createContinuationScheduler(deps: ContinuationSchedulerDeps) {
     return Boolean(goal?.status === "active" && isRecoveryPendingAttention(deps.getRecoveryState().attention));
   };
 
+  const requireFullGoal = (): void => {
+    fullGoalNeededFor = deps.getGoal()?.goalId ?? null;
+  };
+
+  /** After a restart: a compaction since the last continuation that carried the objective means the next one carries it. */
+  const restoreFullGoalNeed = (branch: readonly SessionEntryLike[]): void => {
+    const compactIndex = branch.findLastIndex((entry) => entry.type === "compaction");
+    fullGoalNeededFor = compactIndex < 0 ? null : reconstructGoal(branch.slice(0, compactIndex)).goal?.goalId ?? null;
+    for (const entry of branch.slice(compactIndex + 1)) {
+      if (fullGoalNeededFor === null) return;
+      if (entry.type !== "custom_message" || entry.customType !== CUSTOM_ENTRY_TYPE) continue;
+      const details = (entry as { details?: { kind?: unknown; goalId?: unknown; full?: unknown } }).details;
+      if (details?.goalId !== fullGoalNeededFor) continue;
+      if (details.full === true || details.kind === "command_start" || details.kind === "command_resume") fullGoalNeededFor = null;
+    }
+  };
+
   const sendContinuation = (goalToContinue: ThreadGoal): void => {
     continuationQueuedFor = goalToContinue.goalId;
+    const full = fullGoalNeededFor === goalToContinue.goalId;
+    if (full) fullGoalNeededFor = null;
     deps.pi.sendMessage(
       {
         customType: CUSTOM_ENTRY_TYPE,
-        content: compactContinuationPrompt(goalToContinue),
+        content: full ? continuationPrompt(goalToContinue) : compactContinuationPrompt(goalToContinue),
         display: false,
-        details: { kind: "continuation", goalId: goalToContinue.goalId },
+        details: { kind: "continuation", goalId: goalToContinue.goalId, ...(full ? { full: true } : {}) },
       },
       { triggerTurn: true, deliverAs: "followUp" },
     );
@@ -252,5 +274,7 @@ export function createContinuationScheduler(deps: ContinuationSchedulerDeps) {
     maybeContinueAfterCurrentEvent,
     maybeContinueAfterPostCompactFallback,
     notePassthroughContinuationInput,
+    requireFullGoal,
+    restoreFullGoalNeed,
   };
 }

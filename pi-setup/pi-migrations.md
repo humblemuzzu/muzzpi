@@ -12,6 +12,43 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## Next pi release (after 1.5.0): known drift on pi `main`, do these in `update-pi.sh`'s order
+
+Read from `origin/main` (unreleased) on 2026-11-04. Re-check against the published **dist**: 1.5.0's dist is
+formatted differently from its tagged source, so a text-patch anchor cannot be predicted from `git show`.
+- `extensions/mcp/index.js` (blocks the update): `mcpNamespace` and `createMcpToolName` moved to
+  `@earendil-works/pi-mcp` (76c040a2a). Take the new stock file, import both from there, drop
+  `createMcpToolName` from the `./tools.js` import, re-apply every `LOCAL PATCH: lazy MCP connect` and
+  `LOCAL PATCH: idle MCP disconnect` hunk. `verify-patches.sh`'s load check fails if an import is left dangling.
+- `core/keybindings.js` (blocks): stock now has `defaultKeys: windowsKeybindings ? ["alt+v", "ctrl+v"]`
+  (37b38e9f6); take stock and re-add only `app.session.pin` and the `pinSession` alias.
+- Speed patches (warn only): `markdown.js` gained `removeHtmlCommentBlocks(tokens)` inside the block
+  `streaming-markdown` replaces (54280c4ff); call it on both the full and the appended path.
+  `interactive-mode.js` needs only a new `stock` sha. Re-check `assistant-message.js` in the new dist.
+- Bundle: `grok-mermaid` became `lovely-mermaid` (aceb1bd12); run `port-harness/bundle-fidelity.mjs <ver>`.
+- Anthropic message threads are on by default on `main`: the keep-alive ping already passes
+  `disableContinuation: true`; check `pingStreamOptions` still reaches `streamSimple` unchanged.
+
+## Upstream sync (2026-11-04) — on 1.5.0, no pi update
+
+- goal: 0.7.7's `waiting` status, compaction-input filter, full objective after a compaction, overflow
+  pauses (no fake user turn). Upstream's own suite against our copy: 275 → 298 of 343, no test that passed
+  before fails (`port-harness/goal-upstream-tests.mjs`). Kept ours: the `<pi_goal_continuation>` envelope and
+  the provider-context rewrite. The short continuation no longer asks for `get_goal` (a turn that only
+  calls it pauses the goal).
+- Sub-agents: a TUI parent's child leads its own process group (live: child pgid = its pid; killing the TUI
+  pi ended the child and its bash `sleep` within 1 s); a task the child runs as a slash command now fails at
+  once instead of stalling 15 minutes.
+- MCP: chrome-devtools-mcp 1.12.0 (security fix 91e112d; flags and env unchanged, live probe opened a page,
+  no unknown-argument warning); `idleTimeout` closes an unused stdio server (live: closed after 29 s at
+  5 s, reconnected on the next call).
+- Herdr: pi's own OSC 7501 reporter replaces `herdr/app/pi-status.ts` (Herdr answers `7501;?`; live:
+  idle → working → blocked "Which color?" → done).
+- Billing canary sends the 38 tool names pi really sent and bisects a refusal (proved on
+  `web_search_exa`/`get_code_context_exa`; `code_review` is no longer flagged).
+- Prompt cache: requests in the user's words and `fromCapture` on compactions; prefix breaks logged to
+  `cache/prefix-breaks.jsonl` (9.5 ms per 4.3 MB request).
+
 ## CPU and memory, ideas from Pi-Bolt (2026-11-02) — on 1.5.0, no pi update
 
 Bench: Pi-Bolt's `bench/` (throwaway home, scripted model, so stock tools, not ours), M4 Pro, Node 22,

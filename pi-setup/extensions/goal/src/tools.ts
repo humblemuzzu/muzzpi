@@ -32,16 +32,16 @@ function createGoalParams(policy: TokenBudgetPolicy) {
 }
 
 const UpdateGoalParams = Type.Object({
-  status: StringEnum(["complete", "blocked"] as const, {
-    description: "Complete only when no required work remains; blocked only when missing input or external work prevents meaningful progress.",
+  status: StringEnum(["complete", "blocked", "waiting"] as const, {
+    description: "Complete only when no required work remains; waiting only while background work that reports back by itself runs; blocked only when missing input or external work prevents meaningful progress.",
   }),
-  reason: Type.Optional(Type.String({ minLength: 1, description: "Required for blocked: explain the missing input or external dependency." })),
+  reason: Type.Optional(Type.String({ minLength: 1, description: "Required for waiting: name the background work. Required for blocked: explain the missing input or external dependency." })),
 });
 
 export interface ToolHost {
   getGoal(): ThreadGoal | null;
   setGoal(goal: ThreadGoal, source: GoalEntrySource, ctx: ExtensionContext): void;
-  updateGoal(source: GoalEntrySource, ctx: ExtensionContext, toolCallId: string, status: "complete" | "blocked", reason?: string): GoalResult;
+  updateGoal(source: GoalEntrySource, ctx: ExtensionContext, toolCallId: string, status: "complete" | "blocked" | "waiting", reason?: string): GoalResult;
 }
 
 function textResult(
@@ -105,13 +105,13 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     name: "update_goal",
     label: "Update Goal",
     description:
-      "Mark the goal complete after an evidence-backed audit, or blocked with a reason when missing input or external work stops progress. A blocked goal stops automatic continuation until an explicit /goal resume.",
+      "Mark the goal complete after an evidence-backed audit, waiting with a reason while background work that reports back by itself runs, or blocked with a reason when missing input or external work stops progress. A waiting goal resumes on new input or that result; a blocked goal only on an explicit /goal resume.",
     promptGuidelines: TOOL_PROMPT_GUIDELINES,
     parameters: UpdateGoalParams,
     executionMode: "sequential",
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.status !== "complete" && params.status !== "blocked") {
-        throwToolError("Status must be complete or blocked.");
+      if (params.status !== "complete" && params.status !== "blocked" && params.status !== "waiting") {
+        throwToolError("Status must be complete, blocked or waiting.");
       }
       const result = host.updateGoal("tool", ctx, toolCallId, params.status, params.reason);
       if (!result.ok || !result.goal) {

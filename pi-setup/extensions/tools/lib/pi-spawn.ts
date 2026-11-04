@@ -21,8 +21,7 @@ import { RepetitionWatch } from "./repetition";
 /*
  * backstop on a headless child: watches RAW stdout/stderr bytes (parsed events
  * ignore the streaming that proves liveness). 900s sits above pi's HTTP idle
- * 300s + retry, so it cannot race a legal bash command. the child is not spawned
- * detached — Ctrl+C must reach it.
+ * 300s + retry, so it cannot race a legal bash command.
  */
 const DEFAULT_STALL_SEC = 900;
 const STALL_TICK_MS = 30_000;
@@ -170,6 +169,13 @@ export interface PiSpawnConfig {
 	repo?: string;
 	/** conversation persistence / continuation. see SpawnSessionConfig. */
 	session?: SpawnSessionConfig;
+	/**
+	 * the child leads its own process group, so stopping it also stops what it
+	 * started (its MCP servers, its own sub-agents). Only for a parent whose
+	 * terminal sends no Ctrl+C (the TUI): `pi -p` relies on the terminal's SIGINT
+	 * reaching the child in the parent's group.
+	 */
+	ownProcessGroup?: boolean;
 	/** sent as a second prompt once the task's run settles without an error. */
 	followUp?: string;
 }
@@ -378,6 +384,23 @@ export interface ChildRun {
 
 const STOP_GRACE_MS = 2_000;
 
+/** process groups of children still running; pi's exit takes them down even when no shutdown ran */
+const liveGroups = new Set<number>();
+let groupExitHook = false;
+
+function trackGroup(pid: number): void {
+	liveGroups.add(pid);
+	if (groupExitHook) return;
+	groupExitHook = true;
+	process.once("exit", () => {
+		for (const group of liveGroups) {
+			try {
+				process.kill(-group, "SIGTERM");
+			} catch {}
+		}
+	});
+}
+
 /** a reply caught repeating itself is aborted and the child asked to go on, this many times before it is stopped */
 const MAX_LOOP_RETRIES = 2;
 const LOOP_RECOVERY =
@@ -385,6 +408,15 @@ const LOOP_RECOVERY =
 const LOOP_GAVE_UP = `sub-agent stopped: its replies got stuck repeating the same text ${MAX_LOOP_RETRIES + 1} times.`;
 const CLOSE_GRACE_MS = 2_000;
 const KILL_GRACE_MS = 5_000;
+const TASK_HANDLED =
+	'the child ran the task as one of its slash commands, so it never started working on it. Rephrase the task so it does not begin with "/".';
+
+/** why the child will not work on a prompt it answered, or undefined when it took it */
+function promptRefusal(event: any): string | undefined {
+	if (!String(event.id).startsWith("prompt-")) return undefined;
+	if (!event.success) return String(event.error ?? "the child refused the task");
+	return event.data?.disposition === "handled" ? TASK_HANDLED : undefined;
+}
 
 function stallMessage(persisted: boolean): string {
 	const minutes = Math.round(stallSec() / 60);
@@ -427,9 +459,11 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		...(routing.meta ? { session: routing.meta } : {}),
 	};
 
+	const ownGroup = Boolean(config.ownProcessGroup) && process.platform !== "win32";
 	const proc = spawn(process.env.PI_BIN || "pi", args, {
 		cwd: config.cwd,
 		shell: false,
+		detached: ownGroup,
 		stdio: ["pipe", "pipe", "pipe"],
 		env: {
 			...process.env,
@@ -441,6 +475,8 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		},
 	});
 	proc.stdin.on("error", () => {});
+	const group = ownGroup && proc.pid !== undefined ? proc.pid : undefined;
+	if (group !== undefined) trackGroup(group);
 
 	const agentModels = config.agentModels ?? loadAgentModels();
 	const prompts = [`Task: ${config.task}`, ...(config.followUp ? [config.followUp] : [])];
@@ -489,11 +525,20 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		releaseScheduled = true;
 		later(forceReleaseMs(), () => release(1));
 	};
+	const signalChild = (signal: NodeJS.Signals) => {
+		if (group !== undefined) {
+			try {
+				process.kill(-group, signal);
+				return;
+			} catch {}
+		}
+		if (!exited) proc.kill(signal);
+	};
 	const terminate = (signal: NodeJS.Signals) => {
 		scheduleRelease();
-		if (exited) return;
-		proc.kill(signal);
-		if (signal === "SIGTERM") later(KILL_GRACE_MS, () => { if (!exited) proc.kill("SIGKILL"); });
+		if (exited && group === undefined) return;
+		signalChild(signal);
+		if (signal === "SIGTERM") later(KILL_GRACE_MS, () => { if (!exited) signalChild("SIGKILL"); });
 	};
 	const failed = () => result.stopReason === "error" || result.stopReason === "aborted";
 	const finish = () => {
@@ -541,9 +586,10 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 				return;
 			}
 			case "response": {
-				if (String(event.id).startsWith("prompt-") && !event.success) {
+				const refusal = promptRefusal(event);
+				if (refusal) {
 					result.stopReason = "error";
-					result.errorMessage = String(event.error ?? "the child refused the task");
+					result.errorMessage = refusal;
 					active = false;
 					for (const held of heldSteers.splice(0)) {
 						steers.get(String(held.id))?.("it refused its task");
@@ -667,6 +713,7 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 	advance();
 
 	const done = closed.then((code) => {
+		if (group !== undefined) liveGroups.delete(group);
 		if (watchdog) clearInterval(watchdog);
 		for (const timer of timers) clearTimeout(timer);
 		if (tmpPromptDir) try { fs.rmSync(tmpPromptDir, { recursive: true, force: true }); } catch {}

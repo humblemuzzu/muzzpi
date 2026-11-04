@@ -59,6 +59,31 @@ describe("bash call header", () => {
 		expect(render({ cmd: "one\n\ntwo", timeout: 10 }, true)).toBe("$ one (timeout 10s)\n  \n  two");
 	});
 
+	const WRITE_THEN_RUN = "cat > f.ts <<'EOF'\nconst a = 1;\nconst b = 2;\nconsole.log(a + b);\nEOF\nbun f.ts";
+
+	it("folds a heredoc body so the command after it stays in view", () => {
+		expect(render({ cmd: WRITE_THEN_RUN, timeout: 10 }).split("\n")).toEqual([
+			"$ cat > f.ts <<'EOF' (timeout 10s)",
+			"  … 3 lines to EOF",
+			"  bun f.ts",
+		]);
+	});
+
+	it("shows the heredoc body when expanded", () => {
+		expect(render({ cmd: WRITE_THEN_RUN, timeout: 10 }, true).split("\n")).toHaveLength(6);
+	});
+
+	it("folds an unterminated heredoc to the end, and leaves `<<` inside quotes alone", () => {
+		expect(render({ cmd: "python3 - <<PY\nprint(1)\nprint(2)", timeout: 10 })).toBe("$ python3 - <<PY (timeout 10s)\n  … 2 lines to PY");
+		expect(render({ cmd: "echo '<<EOF'\nls", timeout: 10 })).toBe("$ echo '<<EOF' (timeout 10s)\n  ls");
+	});
+
+	it("counts what is still hidden after folding", () => {
+		const out = render({ cmd: `${WRITE_THEN_RUN}\necho one\necho two`, timeout: 10 });
+		expect(out.split("\n")).toHaveLength(4);
+		expect(out).toContain("… +2 more (ctrl+o)");
+	});
+
 	it("accepts `command` as well as `cmd`", () => {
 		expect(render({ command: "ls -la", timeout: 10 })).toContain("$ ls -la");
 	});

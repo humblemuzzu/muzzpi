@@ -80,18 +80,59 @@ else
          "cp pi-setup/pi-core-patches/mcp-index.js $PI_DIST/extensions/mcp/index.js"
 fi
 
+# ── pi starts and loads every extension ──
+# The marker greps above pass on a patched file whose imports no longer resolve,
+# and a pi that cannot load one extension still starts without it.
+LOAD_REPORT=$(python3 - "${PI_BIN:-pi}" <<'PY'
+import json, subprocess, sys, tempfile
+request = json.dumps({"type": "get_commands", "id": "verify"}) + "\n"
+try:
+    run = subprocess.run([sys.argv[1], "--mode", "rpc", "--no-session"], input=request, capture_output=True,
+                         text=True, timeout=60, cwd=tempfile.gettempdir())
+except Exception as error:
+    print(f"pi did not start: {error}")
+    raise SystemExit
+failed = [line.strip() for line in run.stderr.splitlines() if "Failed to load extension" in line]
+if failed or run.returncode != 0:
+    print("; ".join(failed) or f"pi exited {run.returncode}: {run.stderr.strip()[:300]}")
+    raise SystemExit
+names = set()
+for line in run.stdout.splitlines():
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("type") == "response" and event.get("id") == "verify":
+        names = {command.get("name") for command in event.get("data", {}).get("commands", [])}
+missing = [name for name in ("mcp", "goal", "agents", "psst", "help") if name not in names]
+if missing:
+    print("commands missing after startup: /" + ", /".join(missing))
+PY
+) || LOAD_REPORT="the load check failed to run"
+if [ -z "$LOAD_REPORT" ]; then
+    pass "pi starts: every extension loads, /mcp /goal /agents /psst /help registered"
+else
+    fail "pi starts: $LOAD_REPORT" \
+         "run pi --mode rpc --no-session </dev/null to see the error; a patched core file whose imports moved must be re-derived on the new stock file"
+fi
+
 # ── MCP: pi's built-in client reads ~/.pi/agent/mcp.json ──
 # A server without a description changes the mcp_servers prompt section when it
 # connects; the adapter's `auth: "oauth"` / `false` fail the built-in's
 # validation, which takes only `auth: { provider }`.
-MCP_REPORT=$(python3 - "$PI_AGENT/mcp.json" "$PI_AGENT/settings.json" <<'PY'
-import json, sys
-mcp, settings = sys.argv[1:3]
+MCP_REPORT=$(python3 - "$PI_AGENT/mcp.json" "$PI_AGENT/settings.json" "$SCRIPT_DIR/mcp.json" <<'PY'
+import json, re, sys
+mcp, settings, repo = sys.argv[1:4]
 problems = []
+pinned = lambda servers: [arg for s in servers.values() for arg in s.get("args", []) if str(arg).startswith("chrome-devtools-mcp")]
 try:
     servers = json.load(open(mcp)).get("mcpServers", {})
     problems += [f"{name} has no description" for name, s in servers.items() if not s.get("description")]
     problems += [f"{name} has the adapter's auth key" for name, s in servers.items() if "auth" in s and not isinstance(s["auth"], dict)]
+    live, wanted = pinned(servers), pinned(json.load(open(repo)).get("mcpServers", {}))
+    problems += [f"{arg} is not an exact version" for arg in live if not re.fullmatch(r"chrome-devtools-mcp@\d+\.\d+\.\d+", arg)]
+    if live != wanted:
+        problems.append(f"chrome-devtools runs {', '.join(live) or 'nothing'}, the repo pins {', '.join(wanted) or 'nothing'}")
 except (OSError, ValueError) as error:
     problems.append(f"cannot read {mcp}: {error}")
 try:
@@ -103,7 +144,7 @@ print("; ".join(problems))
 PY
 ) || MCP_REPORT="the audit script failed"
 if [ -z "$MCP_REPORT" ]; then
-    pass "MCP: built-in client enabled, every server in mcp.json described"
+    pass "MCP: built-in client enabled, every server described, chrome-devtools pinned as in the repo"
 else
     fail "MCP: $MCP_REPORT" \
          "cp pi-setup/mcp.json $PI_AGENT/mcp.json, and drop -builtin:mcp from settings.json extensions"
@@ -243,7 +284,7 @@ fi
 
 # ── our extensions: smear fixes present in the LIVE deployed copies ──
 # install.sh deploys bundles; a .ts left beside one shadows it (pi prefers index.ts)
-# herdr-agent-state.ts (herdr), herdr-app-status.ts (./install.sh herdr-app) and broski-link/ (the Broski bridge) are other installers' TypeScript
+# herdr-agent-state.ts (herdr), broski-link/ (the Broski bridge) and an old herdr-app-status.ts (until ./install.sh herdr-app moves it aside) are other installers' TypeScript
 stale_ts=$(find "$PI_AGENT/extensions" \( -name node_modules -o -name broski-link \) -prune -o -name "*.ts" ! -name herdr-agent-state.ts ! -name herdr-app-status.ts -print 2>/dev/null | head -3)
 if [ -z "$stale_ts" ] && [ -f "$PI_AGENT/extensions/tools/index.js" ]; then
     pass "extensions: deployed as bundles (no TypeScript sources to resolve at startup)"

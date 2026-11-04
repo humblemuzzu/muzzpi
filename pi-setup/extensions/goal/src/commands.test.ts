@@ -12,7 +12,7 @@ function goalWith(status: ThreadGoal["status"]): ThreadGoal {
   return { ...goal, status, ...(status === "blocked" ? { blockedReason: "needs a key" } : {}) };
 }
 
-function harness(start: ThreadGoal | null = null) {
+function harness(start: ThreadGoal | null = null, refuseTurn?: string) {
   let goal = start;
   const notes: [string, string | undefined][] = [];
   const sent: { text: string; options?: unknown }[] = [];
@@ -36,7 +36,11 @@ function harness(start: ThreadGoal | null = null) {
     },
     cancelProviderLimitAutoResume: () => calls.push("cancel-auto"),
     isProviderLimitAutoResumeScheduled: () => false,
-    getGoalStartTurnStrategy: () => "hiddenFollowUp" as any,
+    queueGoalTurn: (queued, kind) => {
+      if (refuseTurn) return { ok: false, message: refuseTurn, goal: queued };
+      hidden.push({ kind, goalId: queued.goalId });
+      return { ok: true, message: "queued", goal: queued };
+    },
     resumeGoalWithContinuation: (id) => {
       calls.push(`resume:${id === goal?.goalId}`);
       return { ok: true, message: "Goal resumed.", goal };
@@ -99,6 +103,18 @@ describe("typed words", () => {
     await fresh.run("pause the deploy until the migration lands");
     expect(fresh.goal()?.objective).toBe("pause the deploy until the migration lands");
     expect(fresh.hidden.length).toBe(1);
+  });
+
+  test("a new goal queues its first turn; when that is refused the user is told why", async () => {
+    const ok = harness();
+    await ok.run("make every test in src/ pass");
+    expect(ok.hidden).toEqual([{ kind: "command_start", goalId: ok.goal()!.goalId }]);
+    expect(ok.notes.at(-1)![1]).toBeUndefined();
+
+    const refused = harness(null, "Goal cannot restart native overflow recovery.");
+    await refused.run("make every test in src/ pass");
+    expect(refused.goal()?.objective).toBe("make every test in src/ pass");
+    expect(refused.notes.at(-1)).toEqual(["Goal cannot restart native overflow recovery.", "warning"]);
   });
 
   test("replacing an open goal asks first; without a screen it says to clear it first", async () => {

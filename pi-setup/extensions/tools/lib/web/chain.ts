@@ -6,7 +6,7 @@
 
 import { ProviderError, type FailureKind } from "./http";
 import type { ProviderHealth } from "./health";
-import type { ProviderId, ProviderResult, SearchProvider, SearchRequest } from "./types";
+import type { Hit, ProviderId, ProviderResult, SearchProvider, SearchRequest } from "./types";
 
 export interface Attempt {
 	provider: ProviderId;
@@ -17,7 +17,7 @@ export interface Attempt {
 }
 
 export interface ChainResult {
-	/** set when a provider returned results, or when every provider that ran found nothing. */
+	/** set when a provider returned results, or when a final provider or every provider that ran found nothing. */
 	provider?: ProviderId;
 	result?: ProviderResult;
 	attempts: Attempt[];
@@ -31,11 +31,41 @@ export interface ChainOptions {
 	timeoutMs: Record<ProviderId, number>;
 	health: ProviderHealth;
 	signal?: AbortSignal;
+	/** ms epoch after which no further provider is tried. */
+	deadlineAt?: number;
+	now?: () => number;
 }
+
+const MIN_PROVIDER_MS = 1000;
 
 const inFlight = new Map<ProviderId, number>();
 
+function hostOf(url: string): string {
+	try {
+		return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+	} catch {
+		return "";
+	}
+}
+
+const inDomain = (host: string, domain: string) => host === domain || host.endsWith(`.${domain}`);
+
+/** providers honour the domain filters unevenly (Parallel drops exclude when include is set), so the answer is checked here. */
+function applyDomainFilters(request: SearchRequest, result: ProviderResult): ProviderResult {
+	const { includeDomains, excludeDomains } = request;
+	if (!includeDomains.length && !excludeDomains.length) return result;
+	const keep = (hit: Hit) => {
+		const host = hostOf(hit.url);
+		return (!includeDomains.length || includeDomains.some((d) => inDomain(host, d))) && !excludeDomains.some((d) => inDomain(host, d));
+	};
+	const hits = result.hits.filter(keep);
+	const dropped = result.hits.length - hits.length;
+	if (!dropped) return result;
+	return { ...result, hits, notes: [...result.notes, `dropped ${dropped} result${dropped === 1 ? "" : "s"} outside the requested domains`] };
+}
+
 export async function searchWithFallback(request: SearchRequest, opts: ChainOptions): Promise<ChainResult> {
+	const now = opts.now ?? Date.now;
 	const attempts: Attempt[] = [];
 	let empty: { provider: ProviderId; result: ProviderResult } | undefined;
 
@@ -63,23 +93,32 @@ export async function searchWithFallback(request: SearchRequest, opts: ChainOpti
 			continue;
 		}
 
-		const started = Date.now();
+		const remaining = opts.deadlineAt === undefined ? Number.POSITIVE_INFINITY : opts.deadlineAt - now();
+		if (remaining < MIN_PROVIDER_MS) {
+			if (opts.signal?.aborted) throw new ProviderError("aborted", "search aborted");
+			attempts.push({ provider: id, outcome: "skipped", kind: "timeout", reason: "the search's total time limit" });
+			break;
+		}
+
+		const started = now();
 		inFlight.set(id, running + 1);
 		try {
-			const result = await provider.search({
+			const answer = await provider.search({
 				request,
 				key,
 				endpoint: opts.endpoints[id],
-				timeoutMs: opts.timeoutMs[id],
+				timeoutMs: Math.min(opts.timeoutMs[id], remaining),
 				signal: opts.signal,
 			});
-			const ms = Date.now() - started;
+			const ms = now() - started;
 			opts.health.clear(id);
+			const result = applyDomainFilters(request, answer);
 			if (result.hits.length) {
 				attempts.push({ provider: id, outcome: "ok", ms });
 				return { provider: id, result, attempts };
 			}
 			attempts.push({ provider: id, outcome: "empty", reason: "no results", ms });
+			if (provider.finalOnEmpty) return { provider: id, result, attempts };
 			empty ??= { provider: id, result };
 		} catch (thrown) {
 			const err = thrown instanceof ProviderError
@@ -92,7 +131,7 @@ export async function searchWithFallback(request: SearchRequest, opts: ChainOpti
 				outcome: "failed",
 				kind: err.kind,
 				reason: err.status ? `HTTP ${err.status}: ${err.message}` : err.message,
-				ms: Date.now() - started,
+				ms: now() - started,
 			});
 		} finally {
 			inFlight.set(id, (inFlight.get(id) ?? 1) - 1);

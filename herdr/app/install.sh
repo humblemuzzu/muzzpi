@@ -142,9 +142,10 @@ else
     warn "Herdr is not open: run this again with it open for the grey focus border"
 fi
 
-mkdir -p "$(dirname "$PI_EXT")"
-cp "$HERE/pi-status.ts" "$PI_EXT"
-ok "pi reports its status to Herdr → $PI_EXT (pi sessions already running need a restart)"
+if [ -f "$PI_EXT" ]; then
+    mv "$PI_EXT" "$PI_EXT.removed-$STAMP"
+    ok "pi reports its status to Herdr itself now; the old reporter is moved aside (restart pi)"
+fi
 
 echo ""
 echo "  Live in the open Herdr window. Every key: herdr/app/README.md"

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import promptCache from "../../prompt-cache";
 import * as piUtils from "../node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/utils.js";
 import { ANTHROPIC_TRIGGER_PHRASES, extendCacheTtl, scrubAnthropicPayload } from "./anthropic-sub";
@@ -10,8 +13,10 @@ import {
 	type CompactionCheck,
 	computeFileLists,
 	type FileOps,
+	finalSummary,
 	formatFileOperations,
 	missingFromCapture,
+	requestsSection,
 	STALE_FILES_NOTE,
 	summaryInstruction,
 	summaryMaxTokens,
@@ -91,6 +96,34 @@ describe("buildSummaryPayload", () => {
 	});
 });
 
+describe("the user's requests in the summary", () => {
+	const user = (text: string) => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
+
+	test("keeps the first and the newest request as typed, not the harness's own prompts", () => {
+		const replaced = [user("build the importer"), { role: "assistant", content: [] }, user('<pi_goal_continuation goal_id="g">keep going'), user("now  add\nretries")];
+		expect(requestsSection(replaced)).toBe("\n\n## Requests in the user's words\nFirst request: build the importer\nLatest request: now add retries");
+		expect(requestsSection([user("only one")])).toBe("\n\n## Requests in the user's words\nFirst request: only one");
+		expect(requestsSection([{ role: "assistant", content: [] }])).toBe("");
+	});
+
+	test("carries the first request over from the previous summary, and caps what it copies", () => {
+		const previous = "## Goal\nx\n\n## Requests in the user's words\nFirst request: build the importer\nLatest request: old";
+		expect(requestsSection([user("fix the flaky test")], previous)).toContain("First request: build the importer\nLatest request: fix the flaky test");
+		const long = requestsSection([user("a".repeat(9_000))]);
+		expect(long.length).toBeLessThan(2_100);
+		expect(long.endsWith("…")).toBe(true);
+	});
+
+	test("a summary that copied the section or the note carries each once, in order", () => {
+		const requests = requestsSection([user("build the importer")]);
+		const echoed = `## Goal\nship${requests}\n\n## Critical Context\n- keep it${STALE_FILES_NOTE}`;
+		const summary = finalSummary(echoed, requests, [], []);
+		expect(summary.split("## Requests in the user's words").length - 1).toBe(1);
+		expect(summary.split(STALE_FILES_NOTE.trim()).length - 1).toBe(1);
+		expect(summary.indexOf("## Critical Context")).toBeLessThan(summary.indexOf("## Requests in the user's words"));
+	});
+});
+
 describe("summaryInstruction", () => {
 	test("uses pi's checkpoint format, the update rules after a summary, and the extra focus", () => {
 		expect(summaryInstruction(false)).toContain("Create a structured context checkpoint summary");
@@ -102,6 +135,7 @@ describe("summaryInstruction", () => {
 			expect(summaryInstruction(previous)).toContain("Distinguish user decisions from assistant proposals or assumptions.");
 			expect(summaryInstruction(previous)).toContain("partial checks into verified correctness");
 			expect(summaryInstruction(previous)).toContain("name every skill that was loaded");
+			expect(summaryInstruction(previous)).toContain("do not summarize those prompts");
 		}
 	});
 
@@ -227,6 +261,7 @@ function loadExtension(reply: Record<string, unknown>, subAgentTools?: string) {
 		else process.env[SUB_AGENT_TOOLS_ENV] = saved;
 	}
 	const sent: unknown[] = [];
+	const options: any[] = [];
 	const model = { provider: "anthropic", id: "claude-haiku-5-5", maxTokens: 128_000, contextWindow: 1_000_000 };
 	const ctx = {
 		hasUI: false,
@@ -234,16 +269,17 @@ function loadExtension(reply: Record<string, unknown>, subAgentTools?: string) {
 		sessionManager: { getSessionId: () => "s1" },
 		modelRegistry: {
 			isUsingOAuth: () => true,
-			streamSimple: (_model: unknown, _context: unknown, options: any) => ({
+			streamSimple: (_model: unknown, _context: unknown, streamOptions: any) => ({
 				result: async () => {
-					sent.push(await options.onPayload());
+					options.push(streamOptions);
+					sent.push(await streamOptions.onPayload());
 					return reply;
 				},
 			}),
 		},
 	};
 	const call = (name: string, event: any) => handlers.get(name)!({ type: name, ...event }, ctx);
-	return { handlers, sent, call, ctx };
+	return { handlers, sent, options, call, ctx };
 }
 
 const kept = { role: "user", content: [{ type: "text", text: "kept" }], timestamp: 3 };
@@ -268,6 +304,36 @@ const compactEvent = (overrides: Record<string, unknown> = {}) => ({
 	...overrides,
 });
 
+describe("prompt-cache extension: prefix breaks", () => {
+	test("logs where a request stopped repeating the last one, and nothing for a turn that only appended", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "prefix-breaks-"));
+		const saved = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = dir;
+		try {
+			const ext = loadExtension({});
+			const send = async (payload: Record<string, unknown>) => {
+				await ext.call("context", { messages: [] });
+				await ext.call("before_provider_request", { payload });
+			};
+			const first = wirePayload();
+			await send(first);
+			const appended = structuredClone(first);
+			(appended.messages as any[]).splice(3, 0, { role: "assistant", content: [{ type: "text", text: "done" }] }, { role: "user", content: [{ type: "text", text: "next" }] });
+			await send(appended);
+			const log = join(dir, "cache", "prefix-breaks.jsonl");
+			expect(existsSync(log)).toBe(false);
+			const edited = structuredClone(appended);
+			(edited.messages as any[])[0].content[0].text = "hi, edited";
+			await send(edited);
+			const lines = readFileSync(log, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+			expect(lines).toEqual([expect.objectContaining({ session: "s1", model: "claude-haiku-5-5", part: "message", index: 0, role: "user", before: 6, after: 6 })]);
+		} finally {
+			if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = saved;
+		}
+	});
+});
+
 describe("prompt-cache extension: compaction", () => {
 	const ok = { role: "assistant", stopReason: "stop", content: [{ type: "thinking", thinking: "x" }, { type: "text", text: "## Goal\nship" }], usage };
 
@@ -290,15 +356,20 @@ describe("prompt-cache extension: compaction", () => {
 		const result = await ext.call("session_before_compact", compactEvent());
 		expect(result).toEqual({
 			compaction: {
-				summary: `## Goal\nship${STALE_FILES_NOTE}\n\n<read-files>\n/r.ts\n</read-files>\n\n<modified-files>\n/e.ts\n</modified-files>`,
+				summary: `## Goal\nship\n\n## Requests in the user's words\nFirst request: old${STALE_FILES_NOTE}\n\n<read-files>\n/r.ts\n</read-files>\n\n<modified-files>\n/e.ts\n</modified-files>`,
 				firstKeptEntryId: "e9",
 				tokensBefore: 9000,
 				usage,
-				details: { readFiles: ["/r.ts"], modifiedFiles: ["/e.ts"] },
+				details: {
+					readFiles: ["/r.ts"],
+					modifiedFiles: ["/e.ts"],
+					fromCapture: { at: expect.any(Number), ttlMs: 3_600_000, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite },
+				},
 			},
 		});
 		const [payload] = ext.sent as any[];
 		expect(payload.max_tokens).toBe(13_107);
+		expect(ext.options[0]).not.toHaveProperty("sessionId");
 		expect(payload.messages.at(-1).content[0].text).toBe(summaryInstruction(false));
 	});
 

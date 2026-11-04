@@ -82,20 +82,44 @@ function compareVersions(a: string, b: string): number {
 
 const isVersion = (v: unknown): v is string => typeof v === "string" && /^\d+(\.\d+){1,3}$/.test(v);
 
+/** the version the Grok CLI installer installs now, as plain text */
+export const GROK_STABLE_URL = "https://x.ai/cli/stable";
+
+const readStableVersion = async (): Promise<string> => {
+	const res = await fetch(GROK_STABLE_URL, { signal: AbortSignal.timeout(5_000) });
+	return res.ok ? res.text() : "";
+};
+
 /**
  * The newest of: the floor a 426 taught us (cached on disk so sub-agents start
- * with it), the installed Grok CLI's version (it auto-updates), the configured
+ * with it), the installed Grok CLI's version (it auto-updates), the installer's
+ * current stable version (for machines without the CLI), the configured
  * fallback. The same file remembers the model that replaced a retired one.
  */
 export class ClientVersion {
+	private stable: string | undefined;
+	private stableRead: Promise<void> | undefined;
+
 	constructor(
 		private readonly cacheFile: string,
 		private readonly fallback: string,
 		private readonly grokHome = grokHomeDir(),
 	) {}
 
+	/** reads the installer's stable version once; a failure only leaves it out */
+	readStable(read: () => Promise<string> = readStableVersion): Promise<void> {
+		this.stableRead ??= read().then(
+			(text) => {
+				const version = text.trim();
+				if (isVersion(version)) this.stable = version;
+			},
+			() => undefined,
+		);
+		return this.stableRead;
+	}
+
 	current(): string {
-		const candidates = [this.fallback, this.readField(path.join(this.grokHome, "version.json"), "version"), this.readField(this.cacheFile, "clientVersion")];
+		const candidates = [this.fallback, this.stable, this.readField(path.join(this.grokHome, "version.json"), "version"), this.readField(this.cacheFile, "clientVersion")];
 		return candidates.filter(isVersion).reduce((best, v) => (compareVersions(v, best) > 0 ? v : best), this.fallback);
 	}
 

@@ -97,6 +97,7 @@ export function createContextProvider(opts: { usdPerCredit: number }): SearchPro
 		label: "Context.dev",
 		keyEnv: "CONTEXT_DEV_API_KEY",
 		maxConcurrent: 2,
+		finalOnEmpty: true,
 		async search(call: ProviderCall): Promise<ProviderResult> {
 			const { body, notes } = contextBody(call);
 			const res = await postJson(call.endpoint, {

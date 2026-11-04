@@ -14,6 +14,7 @@ import {
 	describeAnswer,
 	oneLine,
 	openChoiceDialog,
+	pickedParts,
 } from "./lib/choice-dialog";
 import { getText } from "./lib/tui";
 
@@ -90,7 +91,7 @@ export function formatAnswers(questions: AskQuestion[], answers: ChoiceAnswers):
 	const lines = questions.map((q, i) => {
 		const answer = answers[i];
 		if (!answer) return `- ${q.question} → (no answer)`;
-		const picked = answer.picked.join(", ");
+		const picked = pickedParts(answer).join(", ");
 		const typed = answer.typed ? `in their own words: "${answer.typed}"` : "";
 		return `- ${q.question} → ${[picked, typed].filter(Boolean).join("; ")}`;
 	});
@@ -177,7 +178,7 @@ export function createAskTool(): ToolDefinition {
 			let answers: ChoiceAnswers | undefined;
 			try {
 				answers = canShowChoiceDialog(ctx)
-					? await openChoiceDialog(ctx, { title, questions: choices, notify: questions[0]!.question }, signal)
+					? await openChoiceDialog(ctx, { title, questions: choices, notify: questions[0]!.question, notes: true }, signal)
 					: await askWithBasicDialogs(ctx.ui, choices, signal);
 			} finally {
 				ctx.ui.setWorkingVisible?.(true);

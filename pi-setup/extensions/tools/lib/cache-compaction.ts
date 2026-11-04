@@ -4,6 +4,7 @@
  * re-reading it at full price under a different prompt.
  */
 import { isPlainObject, scrubAnthropicPayload } from "./anthropic-sub";
+import { injectedKind } from "./injected-prompts";
 import { type CapturedRequest, refreshDelayMs } from "./prompt-cache";
 
 export const CACHE_COMPACTION_MAX_AGE_ENV = "PI_CACHE_COMPACTION_MAX_AGE_SEC";
@@ -103,12 +104,61 @@ Project files, recorded evidence, and other relevant artifacts may already be du
 
 Under Critical Context, name every skill that was loaded in this conversation, so it can be loaded again.`;
 
+const GOAL_BOOKKEEPING = `Messages that begin with <pi_goal_continuation are the harness prompting the agent to keep working on its goal. Record the goal's objective and status once; do not summarize those prompts.`;
+
 /** closes every summary: the conversation it replaces is gone, the files are not */
 export const STALE_FILES_NOTE =
 	"\n\nYou wrote this summary earlier in this session. Files referenced in the summary may have changed since; read them again before editing them.";
 
+const REQUESTS_HEADING = "## Requests in the user's words";
+const FIRST_REQUEST = "First request: ";
+const LATEST_REQUEST = "Latest request: ";
+const FIRST_REQUEST_CHARS = 2_000;
+const LATEST_REQUEST_CHARS = 4_000;
+
+function userText(message: unknown): string | undefined {
+	if (!isPlainObject(message) || message.role !== "user") return undefined;
+	const content = message.content;
+	if (typeof content === "string") return content.trim() || undefined;
+	if (!Array.isArray(content)) return undefined;
+	const text = content.flatMap((part) => (isPlainObject(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [])).join("\n").trim();
+	return text || undefined;
+}
+
+function clipText(text: string, max: number): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
+
+/**
+ * The user's own words, which a paraphrasing summary can lose: the first request (kept from the
+ * previous summary across compactions) and the newest one among the messages being replaced.
+ */
+export function requestsSection(replaced: readonly unknown[], previousSummary?: string): string {
+	const asked = replaced.flatMap((message) => {
+		const text = userText(message);
+		return text && !injectedKind(text) ? [text] : [];
+	});
+	const earlier = previousSummary?.split("\n").find((line) => line.startsWith(FIRST_REQUEST))?.slice(FIRST_REQUEST.length);
+	const first = earlier ?? (asked[0] && clipText(asked[0], FIRST_REQUEST_CHARS));
+	if (!first) return "";
+	const latest = asked.at(-1);
+	const lines = [`${FIRST_REQUEST}${first}`];
+	if (latest && clipText(latest, FIRST_REQUEST_CHARS) !== first) lines.push(`${LATEST_REQUEST}${clipText(latest, LATEST_REQUEST_CHARS)}`);
+	return `\n\n${REQUESTS_HEADING}\n${lines.join("\n")}`;
+}
+
+/** The model's summary, without its copies of what this module appends, then the requests, the stale-files note and the file lists. */
+export function finalSummary(modelText: string, requests: string, readFiles: string[], modifiedFiles: string[]): string {
+	const own = modelText
+		.replaceAll(STALE_FILES_NOTE.trim(), "")
+		.replace(new RegExp(`\\n*${REQUESTS_HEADING}\\n[\\s\\S]*?(?=\\n## |$)`), "")
+		.trimEnd();
+	return own + requests + STALE_FILES_NOTE + formatFileOperations(readFiles, modifiedFiles);
+}
+
 export function summaryInstruction(hasPreviousSummary: boolean, customInstructions?: string): string {
-	const prompt = `${NO_CONTINUATION}\n\n${hasPreviousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT}\n\n${CONTINUATION_RULES}`;
+	const prompt = `${NO_CONTINUATION}\n\n${hasPreviousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT}\n\n${CONTINUATION_RULES}\n\n${GOAL_BOOKKEEPING}`;
 	return customInstructions ? `${prompt}\n\nAdditional focus: ${customInstructions}` : prompt;
 }
 

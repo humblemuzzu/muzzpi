@@ -4,7 +4,11 @@
  * will continue the conversation (a turn in progress, or a background agent
  * that will report back).
  */
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { calculateCost, type Model, type Usage } from "@earendil-works/pi-ai";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { isPlainObject } from "./anthropic-sub";
 
 export const HOUR_MS = 3_600_000;
@@ -62,6 +66,67 @@ export function isReplayable(payload: Record<string, unknown>): boolean {
 /** Everything before the last breakpoint is unchanged, so the whole prompt is a cache read. */
 export function pingPayload(payload: Record<string, unknown>): Record<string, unknown> {
 	return { ...payload, max_tokens: 1 };
+}
+
+/**
+ * A replay must not take over the conversation's Anthropic message thread (pi's own cache warmer
+ * sets the same flag); pi 1.5.0 predates the option and drops it.
+ */
+export function pingStreamOptions(capture: CapturedRequest, payload: Record<string, unknown>, signal: AbortSignal) {
+	return { signal, maxRetries: 0, sessionId: capture.sessionId, disableContinuation: true, onPayload: () => payload };
+}
+
+/** A request's cacheable parts as comparable hashes; breakpoints move every turn, so they are left out. */
+export interface PrefixDigest {
+	tools: string;
+	system: string;
+	messages: string[];
+	/** messages up to and including the last one with a breakpoint: the part the cache holds */
+	cached: number;
+}
+
+/** a hash without the breakpoints, and whether there were any; images stand in by size and head */
+function digest(value: unknown): { hash: string; breakpoint: boolean } {
+	let breakpoint = false;
+	const text = JSON.stringify(value ?? null, (key, inner) => {
+		if (key === "cache_control") {
+			breakpoint = true;
+			return undefined;
+		}
+		return key === "data" && typeof inner === "string" && inner.length > 4096 ? `${inner.length}:${inner.slice(0, 64)}` : inner;
+	});
+	return { hash: createHash("sha1").update(text).digest("base64"), breakpoint };
+}
+
+export function prefixDigest(payload: Record<string, unknown>): PrefixDigest {
+	const messages = (Array.isArray(payload.messages) ? payload.messages : []).map(digest);
+	const last = messages.findLastIndex((message) => message.breakpoint);
+	return { tools: digest(payload.tools).hash, system: digest(payload.system).hash, messages: messages.map((m) => m.hash), cached: last + 1 };
+}
+
+export interface PrefixBreak {
+	part: "tools" | "system" | "message";
+	/** the first message that differs from the previous request's */
+	index?: number;
+	role?: string;
+}
+
+/** Where `next` stops repeating `previous`, which is what makes Anthropic rebuild the cache from there. */
+export function prefixBreak(previous: PrefixDigest, next: PrefixDigest, nextMessages: readonly unknown[]): PrefixBreak | undefined {
+	if (previous.tools !== next.tools) return { part: "tools" };
+	if (previous.system !== next.system) return { part: "system" };
+	const index = previous.messages.slice(0, previous.cached).findIndex((message, i) => next.messages[i] !== message);
+	if (index < 0) return undefined;
+	const message = nextMessages[index];
+	return { part: "message", index, role: isPlainObject(message) && typeof message.role === "string" ? message.role : undefined };
+}
+
+/** one line per request whose prefix stopped repeating the previous request's; `cache-report.py` reads it */
+export function logPrefixBreak(record: Record<string, unknown>, file = join(getAgentDir(), "cache", "prefix-breaks.jsonl")): void {
+	try {
+		mkdirSync(dirname(file), { recursive: true });
+		appendFileSync(file, `${JSON.stringify(record)}\n`, { encoding: "utf-8", mode: 0o600 });
+	} catch {}
 }
 
 function price(model: Model<any>, tokens: Partial<Usage>): number {

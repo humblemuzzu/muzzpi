@@ -11,7 +11,7 @@ right. It comes in two forms, and muzzpi sets up each one on its own:
 | read | [`in-ghostty/`](in-ghostty/README.md) | [`app/`](app/README.md) |
 | its settings | `~/.config/herdr/config.toml` + your Ghostty config | `~/.config/herdr-app/` |
 | how ⌘ keys work | Ghostty types herdr's `ctrl+b` + a letter | real ⌘ keys in the app |
-| pi's state comes from | `herdr-agent-state.ts` (herdr installs it) | `herdr-app-status.ts` (`./install.sh herdr-app`) |
+| pi's state comes from | `herdr-agent-state.ts` (herdr installs it) | pi itself (OSC 7501) |
 
 **They share no settings.** A theme, key or sound changed in one never changes
 the other. Install one, the other, or both; each only acts where it runs.

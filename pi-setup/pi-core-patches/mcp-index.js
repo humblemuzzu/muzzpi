@@ -29,6 +29,8 @@
 // Only servers with `direct` tools connect at session start, because the first request declares
 // them. Every other server connects the first time a call needs it (a script naming it, a discovery
 // call, a resource tool) or when /mcp shows or acts on it.
+// LOCAL PATCH: idle MCP disconnect. A server's `idleTimeout` (seconds) closes its transport once
+// nothing has used it that long; its next call connects again.
 // --- END LOCAL PATCH ---
 import { join, resolve } from "node:path";
 import { getAgentDir } from "../../config.js";
@@ -231,6 +233,24 @@ export function createMcpExtension(options = {}) {
         session.abort();
         /** Work registered with `track`: manager actions opening or closing connections, and sign-ins. */
         const backgroundActions = new Set();
+        // LOCAL PATCH: idle MCP disconnect. Requests running and the last use, per connection.
+        const connectionUse = new WeakMap();
+        let idleSweep;
+        const sweepIdle = () => {
+            try {
+                const now = Date.now();
+                for (const server of servers) {
+                    const seconds = server.entry.config.idleTimeout;
+                    const connection = server.connection;
+                    const use = connection && connectionUse.get(connection);
+                    if (!(seconds > 0) || !use || use.running > 0 || connection.state !== "connected" || !connection.client)
+                        continue;
+                    if (now - use.at >= seconds * 1000)
+                        void track(connection.client.close().catch(() => undefined));
+                }
+            }
+            catch { }
+        };
         const track = (work) => {
             const task = work.then(() => undefined, () => undefined);
             backgroundActions.add(task);
@@ -481,6 +501,21 @@ export function createMcpExtension(options = {}) {
                         tokensAtSignIn.delete(connection);
                 },
             });
+            // LOCAL PATCH: idle MCP disconnect. Every call and resource read goes through withClient.
+            const use = { running: 0, at: Date.now() };
+            connectionUse.set(connection, use);
+            const withClient = connection.withClient.bind(connection);
+            connection.withClient = async (run, readOnly) => {
+                use.running++;
+                use.at = Date.now();
+                try {
+                    return await withClient(run, readOnly);
+                }
+                finally {
+                    use.running--;
+                    use.at = Date.now();
+                }
+            };
             server.connection = connection;
             emitChange();
             return connection;
@@ -1009,6 +1044,10 @@ export function createMcpExtension(options = {}) {
             modelRegistry = ctx.modelRegistry;
             session = new AbortController();
             const { signal } = session;
+            // LOCAL PATCH: idle MCP disconnect.
+            clearInterval(idleSweep);
+            idleSweep = setInterval(sweepIdle, 30000);
+            idleSweep.unref?.();
             configuredEntries = loaded.servers;
             const registered = registeredServers();
             overridden = registered.overridden;
@@ -1158,6 +1197,9 @@ export function createMcpExtension(options = {}) {
             reportProblems(ctx, connecting);
         });
         pi.on("session_shutdown", async () => {
+            // LOCAL PATCH: idle MCP disconnect.
+            clearInterval(idleSweep);
+            idleSweep = undefined;
             session.abort();
             const closing = connections();
             servers = [];

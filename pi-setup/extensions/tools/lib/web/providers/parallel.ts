@@ -59,6 +59,7 @@ export function createParallelProvider(): SearchProvider {
 		id: "parallel",
 		label: "Parallel",
 		keyEnv: "PARALLEL_API_KEY",
+		finalOnEmpty: true,
 		async search(call: ProviderCall): Promise<ProviderResult> {
 			const { body, notes } = parallelBody(call);
 			const res = await postJson(call.endpoint, {

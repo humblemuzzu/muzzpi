@@ -231,6 +231,7 @@ export class AgentRuns {
 			thinkingLevel: route.thinking,
 			agentModels: spec.models,
 			session: { id, dir: this.sessionDir },
+			ownProcessGroup: ctx.mode === "tui",
 		});
 		run.nested = nested;
 		this.pump();

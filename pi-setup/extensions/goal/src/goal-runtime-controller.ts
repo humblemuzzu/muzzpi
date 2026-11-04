@@ -13,25 +13,26 @@ import { createGoalRuntimeState } from "./goal-runtime-state.ts";
 import { createGoalRuntimeStatus, type StatusContext } from "./goal-runtime-status.ts";
 import { createGoalStateController } from "./goal-state-controller.ts";
 import { createProviderLimitAutoResumeScheduler } from "./provider-limit-auto-resume.ts";
-import { compactContinuationPrompt } from "./prompts.ts";
+import { continuationPrompt } from "./prompts.ts";
 import { createGoalRecoveryRuntime } from "./recovery-runtime.ts";
 import {
   clearActiveHostOverflowRecovery,
-  goalStartTurnStrategy,
+  recoveryPhaseNeedsUserStartTurn,
   resetRecoveryMachine,
   setRecoveryPausedAttention,
-  type GoalStartTurnStrategy,
 } from "./recovery-machine.ts";
 import { goalWithLiveUsage, updateGoalStatus } from "./state.ts";
 import { registerGoalTools } from "./tools.ts";
-import type { GoalEntrySource, GoalResult, ThreadGoal } from "./types.ts";
+import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "./types.ts";
+
+export type GoalTurnKind = "command_start" | "command_resume";
 
 export interface GoalRuntimeController extends GoalRuntimeEventHandlers {
   getGoalForDisplay(): ThreadGoal | null;
-  getGoalStartTurnStrategy(): GoalStartTurnStrategy;
+  queueGoalTurn(goal: ThreadGoal, kind: GoalTurnKind, ctx: StatusContext): GoalResult;
   setGoal(goal: ThreadGoal, source: GoalEntrySource, ctx: ExtensionContext): void;
   clearGoal(source: GoalEntrySource, ctx: ExtensionContext): void;
-  updateGoal(source: GoalEntrySource, ctx: ExtensionContext, toolCallId: string, status: "complete" | "blocked", reason?: string): GoalResult;
+  updateGoal(source: GoalEntrySource, ctx: ExtensionContext, toolCallId: string, status: "complete" | "blocked" | "waiting", reason?: string): GoalResult;
   cancelProviderLimitAutoResume(goalId: string, ctx: StatusContext): void;
   isProviderLimitAutoResumeScheduled(goalId: string): boolean;
   resumeGoalWithContinuation(goalId: string, source: GoalEntrySource, ctx: StatusContext): GoalResult;
@@ -133,6 +134,21 @@ export function createGoalRuntimeController(pi: ExtensionAPI): GoalRuntimeContro
     },
   });
 
+  /** A goal turn cannot stand in for the user message pi's overflow recovery waits for, so it pauses instead. */
+  const queueGoalTurn = (goal: ThreadGoal, kind: GoalTurnKind, ctx: StatusContext): GoalResult => {
+    if (recoveryPhaseNeedsUserStartTurn(runtimeState.recoveryState.phase)) {
+      const message = "Goal cannot restart native overflow recovery. Reduce context or switch models, then send a genuine user message before /goal resume.";
+      stateController.pauseForRecovery(ctx, message);
+      return { ok: false, message, goal: stateController.getGoal() };
+    }
+    continuation.markContinuationQueued(goal.goalId);
+    pi.sendMessage(
+      { customType: CUSTOM_ENTRY_TYPE, content: continuationPrompt(goal), display: false, details: { kind, goalId: goal.goalId } },
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+    return { ok: true, message: "Goal follow-up queued.", goal };
+  };
+
   const resumeGoalWithContinuation = (
     goalId: string,
     source: GoalEntrySource,
@@ -142,6 +158,9 @@ export function createGoalRuntimeController(pi: ExtensionAPI): GoalRuntimeContro
     if (current?.status === "blocked" && source !== "command") {
       return { ok: false, message: "Blocked goals require explicit /goal resume.", goal: current };
     }
+    if (current?.goalId === goalId && recoveryPhaseNeedsUserStartTurn(runtimeState.recoveryState.phase)) {
+      return queueGoalTurn(current, "command_resume", ctx);
+    }
     const result = updateGoalStatus(current, "active");
     if (!result.ok || !result.goal || result.goal.goalId !== goalId) {
       return result;
@@ -149,12 +168,15 @@ export function createGoalRuntimeController(pi: ExtensionAPI): GoalRuntimeContro
     providerLimitAutoResume.clear();
     if (current?.status === "blocked") {
       stateController.applyGoalTransition({ kind: "set", nextGoal: result.goal, source }, ctx);
+    } else if (current?.status === "waiting") {
+      stateController.resumeWaitingGoal(ctx);
     } else {
       stateController.resumePausedGoal(ctx);
     }
     const resumedGoal = stateController.getGoal();
     if (resumedGoal?.status === "active" && resumedGoal.goalId === goalId) {
-      pi.sendUserMessage(compactContinuationPrompt(resumedGoal), { deliverAs: "followUp" });
+      const queued = queueGoalTurn(resumedGoal, "command_resume", ctx);
+      if (!queued.ok) return queued;
     }
     return result;
   };
@@ -177,7 +199,7 @@ export function createGoalRuntimeController(pi: ExtensionAPI): GoalRuntimeContro
     source: GoalEntrySource,
     ctx: ExtensionContext,
     toolCallId: string,
-    status: "complete" | "blocked",
+    status: "complete" | "blocked" | "waiting",
     reason?: string,
   ): GoalResult => {
     const goal = stateController.getGoal();
@@ -193,7 +215,7 @@ export function createGoalRuntimeController(pi: ExtensionAPI): GoalRuntimeContro
       return validation;
     }
     providerLimitAutoResume.clear();
-    if (status === "blocked") {
+    if (status === "blocked" || status === "waiting") {
       continuation.clearPostCompactContinuationFallback();
     }
     const completedTurnTokens = assistantTurnTokensForToolCall(ctx.sessionManager.getBranch(), toolCallId);
@@ -205,7 +227,7 @@ export function createGoalRuntimeController(pi: ExtensionAPI): GoalRuntimeContro
 
   return {
     getGoalForDisplay: goalForDisplay,
-    getGoalStartTurnStrategy: () => goalStartTurnStrategy(runtimeState.recoveryState.phase),
+    queueGoalTurn,
     setGoal(nextGoal, source, ctx) {
       providerLimitAutoResume.clear();
       stateController.applyGoalTransition({ kind: "set", nextGoal, source }, ctx);
@@ -238,7 +260,7 @@ export function registerGoalRuntimeController(pi: ExtensionAPI, strictGoalPrompt
   });
   registerGoalCommand(pi, {
     getGoal: () => controller.getGoalForDisplay(),
-    getGoalStartTurnStrategy: controller.getGoalStartTurnStrategy.bind(controller),
+    queueGoalTurn: controller.queueGoalTurn.bind(controller),
     setGoal: controller.setGoal.bind(controller),
     clearGoal: controller.clearGoal.bind(controller),
     cancelProviderLimitAutoResume: controller.cancelProviderLimitAutoResume.bind(controller),

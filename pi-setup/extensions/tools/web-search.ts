@@ -14,12 +14,13 @@ import { stringList } from "./lib/params";
 import { argumentPreparer } from "./lib/tool-args";
 import { withPromptPatch } from "./lib/prompt-patch";
 import type { ToolCostDetails } from "./lib/tool-cost";
-import { searchWithFallback, type Attempt } from "./lib/web/chain";
-import { ProviderHealth } from "./lib/web/health";
+import { searchWithFallback, type Attempt, type ChainResult } from "./lib/web/chain";
+import { keyTag, ProviderHealth } from "./lib/web/health";
 import { ProviderError, type FailureKind } from "./lib/web/http";
 import { CONTEXT_ENDPOINT, createContextProvider } from "./lib/web/providers/context";
 import { createDeepSeekProvider, DEEPSEEK_ENDPOINT } from "./lib/web/providers/deepseek";
 import { createParallelProvider, PARALLEL_ENDPOINT } from "./lib/web/providers/parallel";
+import { SearchReuse } from "./lib/web/reuse";
 import {
 	cleanUrl,
 	FRESHNESS,
@@ -40,6 +41,8 @@ export type WebSearchExtConfig = {
 	/** a mode listed here uses its own order instead of `order`. */
 	orderByMode: Partial<Record<SearchMode, ProviderId[]>>;
 	timeoutSecs: Record<ProviderId, number>;
+	/** the whole chain's budget; each provider gets at most what is left of it. */
+	totalTimeoutSecs: number;
 	endpoints: Record<ProviderId, string>;
 	contextUsdPerCredit: number;
 };
@@ -50,12 +53,17 @@ export const CONFIG_DEFAULTS: WebSearchExtConfig = {
 	order: ["context", "deepseek", "parallel"],
 	orderByMode: { fast: ["deepseek", "context", "parallel"] },
 	timeoutSecs: { context: 30, deepseek: 15, parallel: 30 },
+	totalTimeoutSecs: 45,
 	endpoints: { context: CONTEXT_ENDPOINT, deepseek: DEEPSEEK_ENDPOINT, parallel: PARALLEL_ENDPOINT },
 	contextUsdPerCredit: 0,
 };
 
 const MAX_RESULTS_CAP = 50;
 const MAX_LANGUAGES = 5;
+const MAX_TEXT_CHARS = 30_000;
+const CUT_TRAILER = `[results cut at ${MAX_TEXT_CHARS.toLocaleString("en-US")} characters; open a URL above with read_web_page for the full page]`;
+const SEPARATOR_LINES = 3;
+const REUSE_NOTE = "reused the result of an identical search from the last 30 s";
 
 export const prepareWebArguments = argumentPreparer(
 	"web_search",
@@ -106,6 +114,7 @@ function isWebSearchConfig(value: Record<string, unknown>): value is WebSearchEx
 		typeof byMode === "object" && byMode !== null &&
 		Object.entries(byMode).every(([mode, order]) => (SEARCH_MODES as readonly string[]).includes(mode) && isOrder(order)) &&
 		isProviderMap(value.timeoutSecs, isPositiveInt) &&
+		isPositiveInt(value.totalTimeoutSecs) &&
 		isProviderMap(value.endpoints, (e) => typeof e === "string" && /^https?:\/\//.test(e)) &&
 		typeof value.contextUsdPerCredit === "number" && value.contextUsdPerCredit >= 0
 	);
@@ -140,6 +149,7 @@ export interface WebSearchDetails extends ToolCostDetails {
 export interface WebSearchDeps {
 	env?: Record<string, string | undefined>;
 	health?: ProviderHealth;
+	now?: () => number;
 	providers?: Record<ProviderId, SearchProvider>;
 }
 
@@ -205,6 +215,29 @@ export function formatHits(hits: Hit[]): { text: string; headerLineIndices: numb
 	return { text: lines.join("\n"), headerLineIndices };
 }
 
+/** the hits as model text, cut before the first hit that would pass the cap; one oversized first hit is cut inside itself. */
+export function formatCappedHits(hits: Hit[]): { text: string; headerLineIndices: number[] } {
+	const full = formatHits(hits);
+	if (full.text.length <= MAX_TEXT_CHARS) return full;
+	const room = MAX_TEXT_CHARS - CUT_TRAILER.length - 2;
+	const lineStart = [0];
+	for (let i = full.text.indexOf("\n"); i !== -1; i = full.text.indexOf("\n", i + 1)) lineStart.push(i + 1);
+	let body = "";
+	for (let i = full.headerLineIndices.length - 1; i >= 1; i--) {
+		const end = lineStart[full.headerLineIndices[i] - SEPARATOR_LINES] - 1;
+		if (end <= room) {
+			body = full.text.slice(0, end);
+			break;
+		}
+	}
+	if (!body) {
+		const cut = full.text.slice(0, room);
+		body = cut.slice(0, Math.max(cut.lastIndexOf("\n"), 1));
+	}
+	const keptLines = body.split("\n").length;
+	return { text: `${body}\n\n${CUT_TRAILER}`, headerLineIndices: full.headerLineIndices.filter((i) => i < keptLines) };
+}
+
 function hitsToSections(hits: Hit[]): BoxSection[] {
 	return hits.map((hit) => {
 		const lines = [{ text: osc8Link(hit.url, hit.url), highlight: true }];
@@ -229,11 +262,12 @@ export function sourceLine(
 	credits?: { used: number; remaining: number },
 ): string {
 	const served = attempts.find((a) => a.outcome === "ok");
-	const passed = attempts.filter((a) => a !== served && a.outcome !== "ok");
+	const found = served ? [] : attempts.filter((a) => a.outcome === "empty");
+	const passed = attempts.filter((a) => a !== served && a.outcome !== "ok" && !found.includes(a));
 	const spent = credits ? ` (${credits.used} credits, ${credits.remaining.toLocaleString("en-US")} left)` : "";
 	const parts = served
 		? [`via ${providers[served.provider].label} in ${((served.ms ?? 0) / 1000).toFixed(1)}s${spent}`]
-		: ["no provider found results"];
+		: [found.length ? `${found.map((a) => providers[a.provider].label).join(" and ")} found no results` : "no provider found results"];
 	for (const a of passed) {
 		parts.push(a.outcome === "empty" ? `${providers[a.provider].label}: no results` : attemptLine(a, providers[a.provider].label, 140));
 	}
@@ -256,6 +290,8 @@ function errorResult(text: string, details?: WebSearchDetails) {
 
 export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS, deps: WebSearchDeps = {}): ToolDefinition<any> {
 	const providers = deps.providers ?? defaultProviders(config);
+	const now = deps.now ?? Date.now;
+	const reuse = new SearchReuse<ChainResult>((chain) => Boolean(chain.result?.hits.length), now);
 	const timeoutMs = Object.fromEntries(PROVIDER_IDS.map((id) => [id, config.timeoutSecs[id] * 1000])) as Record<ProviderId, number>;
 	let health = deps.health;
 
@@ -318,32 +354,49 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
 
 			const env = deps.env ?? process.env;
 			const order = config.orderByMode[request.mode] ?? config.order;
-			health ??= new ProviderHealth(path.join(getAgentDir(), "cache", "web-search-health.json"));
+			const chainHealth = (health ??= new ProviderHealth(path.join(getAgentDir(), "cache", "web-search-health.json")));
 
-			let chain;
+			const keys: Partial<Record<ProviderId, string>> = Object.fromEntries(
+				order.map((id) => [id, env[providers[id].keyEnv]?.trim() || undefined]),
+			);
+			const reuseKey = JSON.stringify([request, order, order.map((id) => (keys[id] ? keyTag(keys[id]) : null))]);
+
+			let chain: ChainResult;
+			let reused: boolean;
 			try {
-				chain = await searchWithFallback(request, {
-					order,
-					providers,
-					keys: Object.fromEntries(order.map((id) => [id, env[providers[id].keyEnv]?.trim() || undefined])),
-					endpoints: config.endpoints,
-					timeoutMs,
-					health,
+				({ value: chain, reused } = await reuse.run(
+					reuseKey,
+					(shared) =>
+						searchWithFallback(request, {
+							order,
+							providers,
+							keys,
+							endpoints: config.endpoints,
+							timeoutMs,
+							health: chainHealth,
+							signal: shared,
+							deadlineAt: now() + config.totalTimeoutSecs * 1000,
+							now,
+						}),
 					signal,
-				});
+				));
 			} catch (err) {
 				const aborted = err instanceof ProviderError && err.kind === "aborted";
 				return errorResult(aborted ? "web_search aborted" : `web_search failed: ${(err as Error).message}`);
 			}
 
-			const { result, attempts } = chain;
+			const { attempts } = chain;
+			const result =
+				reused && chain.result
+					? { ...chain.result, costUsd: 0, credits: undefined, notes: [...chain.result.notes, REUSE_NOTE] }
+					: chain.result;
 			if (!result) {
 				return errorResult(failureText(attempts, providers), { cost: 0, attempts, notes: [] });
 			}
 
 			const source = sourceLine(attempts, providers, result.credits);
 			const hits = result.hits.map((hit) => ({ ...hit, url: cleanUrl(hit.url) }));
-			const { text, headerLineIndices } = formatHits(hits);
+			const { text, headerLineIndices } = formatCappedHits(hits);
 			const trailer = [source, ...result.notes].map((line) => `[${line}]`).join("\n");
 			const details: WebSearchDetails = {
 				cost: result.costUsd,

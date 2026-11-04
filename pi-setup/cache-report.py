@@ -39,7 +39,7 @@ def read_session(path, since):
             if at is None or at < since:
                 continue
             if entry.get("type") == "compaction":
-                compactions.append(entry.get("tokensBefore") or 0)
+                compactions.append({"tokens": entry.get("tokensBefore") or 0, "capture": (entry.get("details") or {}).get("fromCapture")})
                 continue
             if entry.get("type") == "custom_message" and entry.get("customType") == "agent-result":
                 agent_result = True
@@ -84,6 +84,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--since", help="ISO date, default 7 days ago")
     parser.add_argument("--sessions", nargs="+", default=[os.path.expanduser("~/.pi/agent/sessions"), os.path.expanduser("~/.pi/agent/sessions-sub")])
+    parser.add_argument("--prefix-log", default=os.path.expanduser("~/.pi/agent/cache/prefix-breaks.jsonl"))
     args = parser.parse_args()
     if args.since:
         since = datetime.datetime.fromisoformat(args.since).replace(tzinfo=datetime.timezone.utc).timestamp()
@@ -131,9 +132,27 @@ def main():
 
     breaks = [t for t in turns if t["gap"] is not None and t["gap"] < FIVE_MINUTES and t["prompt"] > 20000 and t["write"] > 0.5 * t["prompt"]]
     print(f"\nrebuilds with a gap under 5 min (the prefix changed, not the TTL): {len(breaks)} turns, {sum(t['write'] for t in breaks):,} tokens")
+    changed = collections.Counter()
+    try:
+        with open(args.prefix_log, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                at = parse_time(record.get("at"))
+                if at is not None and at >= since:
+                    changed[record.get("part") if record.get("part") != "message" else f"a {record.get('role') or 'message'} message"] += 1
+    except OSError:
+        pass
+    if changed:
+        print("  what changed first (prefix-breaks.jsonl): " + ", ".join(f"{name} {n}" for name, n in changed.most_common()))
 
     print(f"\nkeep-alive reads: {len(warms)}, {sum(u.get('cacheRead', 0) for u in warms):,} tokens read, {sum(u.get('cacheWrite', 0) for u in warms):,} written")
-    print(f"compactions: {len(compactions)}" + (f", tokens before: {', '.join(f'{c:,}' for c in sorted(compactions))}" if compactions else ""))
+    print(f"compactions: {len(compactions)}" + (f", tokens before: {', '.join(f'{c:,}' for c in sorted(c['tokens'] for c in compactions))}" if compactions else ""))
+    cached = [c["capture"] for c in compactions if isinstance(c["capture"], dict)]
+    if cached:
+        print(f"  from the prompt cache: {len(cached)}, {sum(c.get('cacheRead', 0) for c in cached):,} tokens read, {sum(c.get('cacheWrite', 0) for c in cached):,} written")
 
 
 if __name__ == "__main__":

@@ -5,13 +5,24 @@ import {
 	buildSummaryPayload,
 	cacheCompactionBlocker,
 	computeFileLists,
-	formatFileOperations,
-	STALE_FILES_NOTE,
+	finalSummary,
+	requestsSection,
 	summaryInstruction,
 	summaryMaxTokens,
 	withPreviousExtensionFiles,
 } from "./tools/lib/cache-compaction";
-import { CACHE_PING_CHANNEL, CACHE_PING_ENTRY, type CachePing, KeepAlive, pingBudget } from "./tools/lib/prompt-cache";
+import {
+	CACHE_PING_CHANNEL,
+	CACHE_PING_ENTRY,
+	type CachePing,
+	KeepAlive,
+	logPrefixBreak,
+	pingBudget,
+	pingStreamOptions,
+	type PrefixDigest,
+	prefixBreak,
+	prefixDigest,
+} from "./tools/lib/prompt-cache";
 import { SUB_AGENT_TOOLS_ENV } from "./tools/lib/sub-agent-prompt";
 
 function report(ctx: ExtensionContext, message: string): void {
@@ -25,6 +36,8 @@ function liveRuns(runs: unknown): number {
 export default function promptCache(pi: ExtensionAPI) {
 	let contextMessages: readonly unknown[] | undefined;
 	let current: ExtensionContext | undefined;
+	const child = Boolean(process.env[SUB_AGENT_TOOLS_ENV]?.trim());
+	let lastPrefix: PrefixDigest | undefined;
 
 	const keepAlive = new KeepAlive({
 		now: Date.now,
@@ -38,9 +51,7 @@ export default function promptCache(pi: ExtensionAPI) {
 			const ctx = current;
 			const model = ctx?.model;
 			if (!ctx || !model || model.id !== capture.modelId || ctx.sessionManager.getSessionId() !== capture.sessionId) return undefined;
-			const reply = await ctx.modelRegistry
-				.streamSimple(model, { messages: [] }, { signal, maxRetries: 0, sessionId: capture.sessionId, onPayload: () => payload })
-				.result();
+			const reply = await ctx.modelRegistry.streamSimple(model, { messages: [] }, pingStreamOptions(capture, payload, signal)).result();
 			return reply.stopReason === "error" || reply.stopReason === "aborted" ? undefined : reply.usage;
 		},
 		warmed: (capture, usage, ttlMs) => {
@@ -52,6 +63,7 @@ export default function promptCache(pi: ExtensionAPI) {
 
 	const forget = () => {
 		contextMessages = undefined;
+		lastPrefix = undefined;
 		keepAlive.forget();
 	};
 	pi.on("session_start", (_event, ctx) => {
@@ -86,6 +98,21 @@ export default function promptCache(pi: ExtensionAPI) {
 			modelId: ctx.model!.id,
 			at: Date.now(),
 		});
+		if (!child) {
+			const digest = prefixDigest(payload);
+			const broke = lastPrefix && prefixBreak(lastPrefix, digest, Array.isArray(payload.messages) ? payload.messages : []);
+			if (broke) {
+				logPrefixBreak({
+					at: new Date().toISOString(),
+					session: ctx.sessionManager.getSessionId(),
+					model: ctx.model!.id,
+					...broke,
+					before: lastPrefix!.messages.length,
+					after: digest.messages.length,
+				});
+			}
+			lastPrefix = digest;
+		}
 		contextMessages = undefined;
 		return undefined;
 	});
@@ -96,7 +123,7 @@ export default function promptCache(pi: ExtensionAPI) {
 		return undefined;
 	});
 
-	if (process.env[SUB_AGENT_TOOLS_ENV]?.trim()) return;
+	if (child) return;
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		const model = ctx.model;
@@ -148,14 +175,19 @@ export default function promptCache(pi: ExtensionAPI) {
 				return undefined;
 			}
 			const { readFiles, modifiedFiles } = computeFileLists(withPreviousExtensionFiles(preparation.fileOps, event.branchEntries));
+			const requests = requestsSection([...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], preparation.previousSummary);
 			report(ctx, `Compacted from the prompt cache: ${response.usage.cacheRead} tokens read, ${response.usage.cacheWrite} written.`);
 			return {
 				compaction: {
-					summary: text.replaceAll(STALE_FILES_NOTE.trim(), "").trimEnd() + STALE_FILES_NOTE + formatFileOperations(readFiles, modifiedFiles),
+					summary: finalSummary(text, requests, readFiles, modifiedFiles),
 					firstKeptEntryId: preparation.firstKeptEntryId,
 					tokensBefore: preparation.tokensBefore,
 					usage: response.usage,
-					details: { readFiles, modifiedFiles },
+					details: {
+						readFiles,
+						modifiedFiles,
+						fromCapture: { at: capture.at, ttlMs: keepAlive.lifetimeMs, cacheRead: response.usage.cacheRead, cacheWrite: response.usage.cacheWrite },
+					},
 				},
 			};
 		} catch (error) {

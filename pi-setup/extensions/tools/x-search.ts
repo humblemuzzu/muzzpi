@@ -78,6 +78,7 @@ const SORTS = ["latest", "top"] as const;
 const MAX_LIMIT = 10;
 const MAX_HANDLES = 20;
 const NO_RESULTS = "NO RESULTS";
+const NO_LOGIN = "x_search needs the Grok CLI's login and there is none (~/.grok/auth.json). Ask the user to run `grok login` in a shell, then try again.";
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const COLLAPSED_EXCERPTS: Excerpt[] = [{ focus: "head", context: 6 }];
 
@@ -381,6 +382,8 @@ function errorResult(text: string) {
 
 export interface XSearchDeps {
 	tokens?: TokenSource[];
+	/** where the Grok CLI keeps its login; ~/.grok by default */
+	grokHome?: string;
 	version?: ClientVersion;
 	posts?: Pick<HydrateOptions, "fxtwitterUrl" | "syndicationUrl">;
 }
@@ -494,7 +497,8 @@ function copiedBody(req: XRequest, res: ProxyResult, details: XSearchDetails): s
 
 export function createXSearchTool(config: XSearchExtConfig = X_CONFIG_DEFAULTS, deps: XSearchDeps = {}): ToolDefinition<any> {
 	let version = deps.version;
-	const tokens = deps.tokens ?? [grokCliLogin()];
+	const tokens = deps.tokens ?? [grokCliLogin({ grokHome: deps.grokHome })];
+	const loggedIn = () => deps.tokens !== undefined || hasGrokLogin(deps.grokHome);
 
 	return {
 		name: "x_search",
@@ -539,8 +543,12 @@ export function createXSearchTool(config: XSearchExtConfig = X_CONFIG_DEFAULTS, 
 		async execute(_toolCallId, params, signal) {
 			const req = buildXRequest(params as Record<string, unknown>);
 			if (typeof req === "string") return errorResult(req);
+			if (!loggedIn()) return errorResult(NO_LOGIN);
 
-			version ??= new ClientVersion(path.join(getAgentDir(), "cache", "x-search.json"), config.clientVersion);
+			if (!version) {
+				version = new ClientVersion(path.join(getAgentDir(), "cache", "x-search.json"), config.clientVersion);
+				await version.readStable();
+			}
 			const started = Date.now();
 			const query = String((params as Record<string, unknown>).query ?? "");
 			const ask = async (instructions: string): Promise<ProxyResult | undefined> => {
@@ -636,9 +644,9 @@ export function createXSearchTool(config: XSearchExtConfig = X_CONFIG_DEFAULTS, 
 	};
 }
 
-/** the tool as registered; null when disabled in ext-config or when there is no Grok CLI login to use. */
+/** the tool as registered; null only when disabled in ext-config. Without a Grok CLI login each call says how to log in. */
 export function createConfiguredXSearchTool(): ToolDefinition<any> | null {
 	const { enabled, config } = getEnabledExtensionConfig("x-search", X_CONFIG_DEFAULTS, { schema: X_CONFIG_SCHEMA });
-	if (!enabled || !hasGrokLogin()) return null;
+	if (!enabled) return null;
 	return withPromptPatch(createXSearchTool(config));
 }

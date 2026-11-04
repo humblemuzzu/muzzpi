@@ -10,6 +10,7 @@ import {
 	listVaultEntries,
 	saveSecret,
 	setActiveTags,
+	UNREADABLE_VAULT,
 	type VaultEntry,
 	type VaultLocation,
 } from "./lib/psst";
@@ -22,6 +23,10 @@ function vaultPlace(vault: VaultLocation): string {
 	const home = os.homedir();
 	const dir = vault.dir.startsWith(home) ? `~${vault.dir.slice(home.length)}` : vault.dir;
 	return `${dir} (${vault.global ? "global" : "this project"})`;
+}
+
+export function unreadableVaultNote(vault: VaultLocation): string {
+	return `${vaultPlace(vault)}: ${UNREADABLE_VAULT}. Nothing from it is offered to the agent or hidden from output.`;
 }
 
 function plural(n: number, one: string, many = `${one}s`): string {
@@ -209,6 +214,7 @@ export function registerPsstCommand(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			const vault = findVault();
 			if (!vault) return ctx.ui.notify(NO_VAULT, "info");
+			if (vault.configOnly) return ctx.ui.notify(unreadableVaultNote(vault), "warning");
 			const { word, rest } = splitArgs(args);
 			if (!word) return menu(ctx, vault);
 			const found = findWord(words, word);
