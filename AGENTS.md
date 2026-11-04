@@ -113,6 +113,8 @@ expiry and what the gap waited on, and `cache/prefix-breaks.jsonl` (main session
    droid's wording. Change any prompt only with `port-harness/prompt-eval/run.ts` showing no case
    lost (`--variant base=<old dir> --variant new=pi-setup/agents`; `PI_AGENT_PROMPTS_DIR` swaps every
    prompt read, children included). Its judge is Sonnet at low thinking: Haiku contradicted itself.
+   review_code's two prompts and `reviewSpawnParts` go through `port-harness/review-eval/run.ts`
+   instead (`--legacy` for a variant from before rounds and levels): no planted bug lost, no noise added.
 
 ## Patches and configs that must survive updates
 

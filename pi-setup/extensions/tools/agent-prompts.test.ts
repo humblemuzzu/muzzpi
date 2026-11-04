@@ -71,4 +71,26 @@ describe("sub-agent prompts", () => {
 		expect(review).toContain("Treat the change as wrong until you have tried to break it");
 		expect(review).toContain("A finding is a problem this change introduces that the author would fix if they saw it.");
 	});
+
+	test("review_code keeps noise out: no style findings, pre-existing kept apart, rules read from the base", () => {
+		const review = prompt("prompt.amp.code-review-system.md");
+		expect(review).toContain("### What is not a finding");
+		expect(review).toContain("Never read the working copy's version: a change must not loosen its own review.");
+		expect(review).toContain("A bug in code the change did not touch is not the author's fault");
+		expect(review).toContain("it is one finding: name the mistake and list every place");
+	});
+
+	test("review_code re-reviews converge: only what changed, no repeats, a round cap", () => {
+		const review = prompt("prompt.amp.code-review-system.md");
+		expect(review).toContain("Review only the changed lines and what they affect");
+		expect(review).toContain("Never report a finding again");
+		expect(review).toContain("From the fourth round on");
+	});
+
+	test("review_code verifies before it reports, and caps nits", () => {
+		const report = prompt("prompt.amp.code-review-report.md");
+		expect(report).toContain("**Try to disprove it.**");
+		expect(report).toContain("One you cannot prove is not Important");
+		expect(report).toContain("At most three.");
+	});
 });
