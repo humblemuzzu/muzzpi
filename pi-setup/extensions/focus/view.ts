@@ -7,7 +7,7 @@
  */
 
 import type { Message } from "@mariozechner/pi-ai";
-import { Input, Key, matchesKey, truncateToWidth, type Component, type Focusable, type TuiMouseEvent, type TuiMouseEventResult } from "@mariozechner/pi-tui";
+import { Input, Key, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type TuiMouseEvent, type TuiMouseEventResult } from "@mariozechner/pi-tui";
 import { fitHint } from "../agents-ui/frame";
 import { SPINNER } from "../agents-ui/rows";
 import { TranscriptRenderer } from "../agents-ui/transcript";
@@ -16,6 +16,9 @@ import { oneLine } from "../tools/lib/choice-dialog";
 import { formatDuration } from "../tools/lib/sub-agent-render";
 import { answerLines, count, markdownLines, markRow, plainLines, processLines, turnRow, type Working } from "./content";
 import { answerOf, MARK_LABEL, matches, searchWords, type Mark, type SessionView, type Turn } from "./session-view";
+
+/** pi's theme: the view also paints the prompt's background */
+export type Painter = Styler & { bg(color: string, text: string): string };
 
 export interface LiveState {
 	running: boolean;
@@ -98,7 +101,7 @@ export class FocusView implements Component, Focusable {
 	private docCache: { key: string; lines: string[] } | undefined;
 
 	constructor(
-		private readonly theme: Styler,
+		private readonly theme: Painter,
 		private readonly host: FocusHost,
 		memory?: FocusMemory,
 	) {
@@ -346,12 +349,12 @@ export class FocusView implements Component, Focusable {
 	}
 
 	private title(rest: string): string {
-		return `${this.theme.fg("accent", this.theme.bold("◆ focus"))}${rest ? this.theme.fg("dim", `  ${rest}`) : ""}`;
+		return `${this.theme.fg("dim", "◆ ")}${this.theme.fg("muted", "focus")}${rest ? this.theme.fg("dim", `  ${rest}`) : ""}`;
 	}
 
 	private tabRow(names: readonly string[], active: number, right: string, width: number): string {
 		const { theme } = this;
-		const tabs = names.map((name, index) => (index === active ? theme.fg("accent", theme.bold(name)) : theme.fg("muted", name))).join("   ");
+		const tabs = names.map((name, index) => theme.fg(index === active ? "text" : "dim", name)).join("   ");
 		return justify(tabs, right ? theme.fg("dim", right) : "", width, 12).line;
 	}
 
@@ -407,10 +410,18 @@ export class FocusView implements Component, Focusable {
 		return lines;
 	}
 
-	/** wrapped once per prompt and width, not again for every streamed token of the answer */
+	/**
+	 * The prompt on the shade the main chat gives your messages, so it never reads as part of the answer. Wrapped
+	 * once per prompt and width, not again for every streamed token of the answer.
+	 */
 	private promptLines(turn: Turn, width: number): string[] {
 		const key = `${turn.id}|${width}`;
-		if (this.promptCache?.key !== key) this.promptCache = { key, lines: plainLines(turn.prompt, width).map((line) => this.theme.fg("text", line)) };
+		if (this.promptCache?.key !== key) {
+			const { theme } = this;
+			const text = plainLines(turn.prompt, Math.max(1, width - 2)).map((line) => ` ${theme.fg("userMessageText", line)}`);
+			const shade = (line: string) => theme.bg("userMessageBg", line + " ".repeat(Math.max(0, width - visibleWidth(line))));
+			this.promptCache = { key, lines: ["", ...text, ""].map(shade) };
+		}
 		return this.promptCache.lines;
 	}
 

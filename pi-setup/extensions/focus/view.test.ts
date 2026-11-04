@@ -43,7 +43,7 @@ function sample() {
 	return s;
 }
 
-function harness(s = sample(), options: { rows?: number; memory?: FocusMemory } = {}) {
+function harness(s = sample(), options: { rows?: number; memory?: FocusMemory; theme?: typeof theme } = {}) {
 	let rows = options.rows ?? 30;
 	const live: LiveState = { running: false, startedAt: 0, message: undefined, compacting: false, frame: 0, version: 0 };
 	const editor = { text: "", typed: [] as string[], focused: false, handleInput(data: string) {
@@ -68,7 +68,7 @@ function harness(s = sample(), options: { rows?: number; memory?: FocusMemory } 
 		reuse: (turn) => (calls.reused.push(turn.prompt), "reused"),
 		close: () => calls.closed++,
 	};
-	const view = new FocusView(theme, host, options.memory);
+	const view = new FocusView(options.theme ?? theme, host, options.memory);
 	view.focused = true;
 	return {
 		s,
@@ -118,6 +118,40 @@ describe("it covers pi's chat area exactly", () => {
 });
 
 describe("the turn screen reads like the chat", () => {
+	test("the header stays quiet: no bold, the title muted, the open tab plain text and the others dim", () => {
+		const h = harness();
+		const [title, tabs] = h.view.render(100);
+		expect(title).toStartWith(`${theme.fg("dim", "◆ ")}${theme.fg("muted", "focus")}`);
+		expect(tabs).toContain(theme.fg("text", "Answer"));
+		expect(tabs).toContain(theme.fg("dim", "Process"));
+		for (const line of [title, tabs]) expect(line).not.toContain("\u001b[1m");
+		h.keys(TAB);
+		expect(h.view.render(100)[1]).toContain(theme.fg("text", "Process"));
+	});
+
+	test("your prompt sits on the main chat's message shade, edge to edge; the answer has none", () => {
+		const BG = "\u001b[48;5;236m";
+		const shaded = { ...theme, bg: (color: string, text: string) => (color === "userMessageBg" ? `${BG}${text}\u001b[49m` : text) };
+		const s = session();
+		s.prompt(`short line\n${"wrap me ".repeat(20)}`);
+		s.reply("The **answer** starts here.");
+		for (const tab of [[], [TAB]]) {
+			const h = harness(s, { theme: shaded });
+			h.keys(...tab);
+			const lines = h.view.render(60);
+			const prompt = lines.filter((line) => line.includes(BG));
+			expect(prompt.length).toBeGreaterThanOrEqual(5);
+			for (const line of prompt) expect(visibleWidth(line)).toBe(60);
+			expect(strip(prompt[0]!).trim()).toBe("");
+			expect(strip(prompt[1]!)).toStartWith(" short line");
+			expect(strip(prompt.at(-1)!).trim()).toBe("");
+			const first = lines.indexOf(prompt[0]!);
+			expect(lines.slice(first, first + prompt.length)).toEqual(prompt);
+			expect(strip(lines[first - 1]!)).toBe("You asked");
+			if (tab.length === 0) expect(lines.find((line) => strip(line).includes("starts here"))).not.toContain(BG);
+		}
+	});
+
 	test("your prompt opens the page and scrolls away with it; the answer follows", () => {
 		const s = session();
 		s.prompt(Array.from({ length: 30 }, (_, i) => `prompt line ${i}`).join("\n"));
