@@ -17,6 +17,7 @@ import { isLocalProvider } from "./tools/lib/local-providers";
 import { isReadOnlyBash } from "./tools/lib/read-only-bash";
 import {
 	buildSubAgentPrompt,
+	isFastWorkerModel,
 	parseToolList,
 	SUB_AGENT_TOOLS_ENV,
 } from "./tools/lib/sub-agent-prompt";
@@ -54,6 +55,7 @@ export default function (pi: ExtensionAPI) {
 
 	const harnessDocs = readAgentPrompt(`prompt.harness-docs.${HARNESS}.md`) || "";
 	const rules = readAgentPrompt("rules.amp.md").trim();
+	const fastWorkerRules = readAgentPrompt("rules.worker-fast.md").trim();
 	const piDir = piPackageDir();
 	const agentModels = describeAgentModels(loadAgentModels());
 
@@ -72,6 +74,7 @@ export default function (pi: ExtensionAPI) {
 		if (childTools && parseToolList(childTools).length > 0) {
 			options.customPrompt = buildSubAgentPrompt(IDENTITY, childTools, isReadOnlyBash());
 			if (rules) options.sections.rules = rules;
+			if (fastWorkerRules && isFastWorkerModel(ctx.model)) options.sections.worker = fastWorkerRules;
 			addShared();
 			return;
 		}

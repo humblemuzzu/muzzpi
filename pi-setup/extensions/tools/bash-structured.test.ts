@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { createBashTool } from "./bash";
+import { createBashTool, exitNote } from "./bash";
 import { STRUCTURED_MAX_BYTES } from "./lib/full-output";
 
 const tool = createBashTool() as any;
@@ -21,6 +21,24 @@ describe("bash structuredContent (codemode contract)", () => {
 		expect(r.structuredContent).toMatchObject({ output: "found-nothing\n", truncated: false, exit_code: 3 });
 		expect(r.structuredContent.full_output_path).toBeUndefined();
 		expect(typeof r.structuredContent.wall_time_seconds).toBe("number");
+	});
+
+	test("a search that found nothing says so instead of looking like a failure", async () => {
+		const r = await run("printf 'a\\nb\\n' | grep zzz");
+		expect(r.content[0].text).toContain("exit code 1: no matches");
+		expect(r.isError).toBe(true);
+		expect(r.structuredContent.exit_code).toBe(1);
+	});
+
+	test("exit notes name the usual meaning of 1, 126 and 127, and nothing else", () => {
+		expect(exitNote("rg foo src", 1, false)).toContain("no matches");
+		expect(exitNote("LC_ALL=C /usr/bin/grep -r x .", 1, false)).toContain("no matches");
+		expect(exitNote("git grep needle", 1, false)).toContain("no matches");
+		expect(exitNote("grep x f || echo none", 1, false)).toBe("exit code 1");
+		expect(exitNote("rg foo src", 1, true)).toBe("exit code 1");
+		expect(exitNote("npm test", 1, false)).toBe("exit code 1");
+		expect(exitNote("nosuchtool", 127, false)).toContain("command not found");
+		expect(exitNote("./x.sh", 126, false)).toContain("not executable");
 	});
 
 	test("output excludes the `$ cmd` header the model sees", async () => {

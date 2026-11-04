@@ -49,6 +49,7 @@ const PROMPT_PARAMS = ["prompt", "task", "instructions", "query", "question"] as
 const DESCRIPTION_PARAMS = ["description", "title", "summary"] as const;
 
 export interface DelegateConfig {
+	systemPrompt?: string;
 	models?: AgentModels;
 	runs?: AgentRuns;
 }
@@ -109,7 +110,12 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 					returnImages: true,
 					models,
 					params,
-					spawn: { task: prompt.value, builtinTools: BUILTIN_TOOLS, extensionTools: EXTENSION_TOOLS },
+					spawn: {
+						task: prompt.value,
+						builtinTools: BUILTIN_TOOLS,
+						extensionTools: EXTENSION_TOOLS,
+						systemPromptBody: config.systemPrompt,
+					},
 				},
 				toolCallId,
 				ctx,

@@ -15,7 +15,8 @@ import { evaluateReadOnlyCommand, isReadOnlyBash, readOnlyRefusal } from "./lib/
 import { resolveToAbsolute } from "./read";
 import { OutputBuffer, headTailChars } from "./lib/output-buffer";
 import { FullOutput, MAX_FILE_BYTES } from "./lib/full-output";
-import { loadSecrets } from "./lib/psst";
+import { loadSecrets, makeScrubber } from "./lib/psst";
+import { gitAction, leakRefusal, scanCommand } from "./lib/commit-guard";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./lib/watchdog";
 import { sampleGroupCpuSeconds } from "./lib/proc-cpu";
 
@@ -131,6 +132,25 @@ function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
 
 function stripBackground(cmd: string): string {
 	return cmd.replace(/\s*&\s*$/, "");
+}
+
+const SEARCH_PROGRAMS = new Set(["grep", "egrep", "fgrep", "rg", "ag"]);
+
+/** the program the command line runs last, past `VAR=x` prefixes; exit 1 from a search there means "no match" */
+function lastProgram(command: string): string {
+	const stage = command.split(/\|\||&&|;|\|/).at(-1) ?? "";
+	const words = stage.trim().split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+	const first = (words[0] ?? "").replace(/^.*\//, "");
+	return first === "git" && words[1] === "grep" ? "grep" : first;
+}
+
+export function exitNote(command: string, code: number, hasOutput: boolean): string {
+	if (code === 127) return "exit code 127: command not found. The program may not be installed or not on PATH.";
+	if (code === 126) return "exit code 126: found but not executable. Check its permissions.";
+	if (code === 1 && !hasOutput && SEARCH_PROGRAMS.has(lastProgram(command))) {
+		return "exit code 1: no matches. A search that finds nothing exits 1; this is not a failure.";
+	}
+	return `exit code ${code}`;
 }
 
 function isGitCommand(cmd: string): boolean {
@@ -576,6 +596,13 @@ export function createBashTool(): ToolDefinition {
 				}
 			}
 
+			if (gitAction(command)) {
+				const found = await scanCommand(command, effectiveCwd, await makeScrubber());
+				if (found) {
+					return { content: [{ type: "text" as const, text: leakRefusal(found.action, found.leaks) }], isError: true } as any;
+				}
+			}
+
 			const sessionId = ctx.sessionManager.getSessionId();
 			command = injectGitTrailers(command, sessionId);
 
@@ -908,7 +935,7 @@ async function runCommand(
 			};
 
 			if (code !== 0) {
-				result += `\n\nexit code ${code}`;
+				result += `\n\n${exitNote(command, code, outputText.trim().length > 0)}`;
 				resolve({
 					content: [{ type: "text" as const, text: result }],
 					isError: true,

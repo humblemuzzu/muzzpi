@@ -14,6 +14,7 @@ import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./watchdog";
 import { loadAgentModels, modelViolation, type AgentModels } from "./agent-models";
 import { repairInterrupted, savedSessionModel, subAgentSessionFile } from "./session-repair";
 import { CACHE_PING_ENTRY } from "./prompt-cache";
+import { RepetitionWatch } from "./repetition";
 
 // --- stall watchdog ---
 
@@ -315,12 +316,16 @@ export function zeroUsage(): UsageStats {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
 }
 
+/** points every prompt read at another folder, so a prompt eval can run old and new text on the same code */
+export const AGENT_PROMPTS_DIR_ENV = "PI_AGENT_PROMPTS_DIR";
+
 /**
  * read an agent prompt .md file, strip frontmatter, return body.
- * looks in ~/.pi/agent/agents/{filename}.
+ * looks in ~/.pi/agent/agents/{filename}, or in $PI_AGENT_PROMPTS_DIR when set.
  */
 export function readAgentPrompt(filename: string): string {
-	const promptPath = path.join(os.homedir(), ".pi", "agent", "agents", filename);
+	const dir = process.env[AGENT_PROMPTS_DIR_ENV]?.trim() || path.join(os.homedir(), ".pi", "agent", "agents");
+	const promptPath = path.join(dir, filename);
 	try {
 		const content = fs.readFileSync(promptPath, "utf-8");
 		if (content.startsWith("---")) {
@@ -372,6 +377,12 @@ export interface ChildRun {
 }
 
 const STOP_GRACE_MS = 2_000;
+
+/** a reply caught repeating itself is aborted and the child asked to go on, this many times before it is stopped */
+const MAX_LOOP_RETRIES = 2;
+const LOOP_RECOVERY =
+	"Your last reply got stuck repeating the same text, so it was stopped. Continue the task from where you were, without repeating that text.";
+const LOOP_GAVE_UP = `sub-agent stopped: its replies got stuck repeating the same text ${MAX_LOOP_RETRIES + 1} times.`;
 const CLOSE_GRACE_MS = 2_000;
 const KILL_GRACE_MS = 5_000;
 
@@ -444,6 +455,10 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 	let settledCleanly = false;
 	let stopRequested = false;
 	let stalled = false;
+	const repetition = new RepetitionWatch();
+	let resampling = false;
+	let loops = 0;
+	let looped = false;
 	let wrongModel: string | undefined;
 	let exited = false;
 	let released = false;
@@ -498,10 +513,33 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		send({ type: "prompt", id: `prompt-${++commandCount}`, message: next });
 	};
 
+	const stopChild = (): boolean => {
+		if (stopRequested || finishing || released) return false;
+		stopRequested = true;
+		send({ type: "abort" });
+		later(STOP_GRACE_MS, () => { if (!finishing) terminate("SIGTERM"); });
+		return true;
+	};
+	const onLoop = () => {
+		if (++loops > MAX_LOOP_RETRIES) {
+			looped = true;
+			stopChild();
+			return;
+		}
+		resampling = true;
+		send({ type: "abort" });
+	};
+
 	const processLine = (line: string) => {
 		let event: any;
 		try { event = JSON.parse(line); } catch { return; }
 		switch (event.type) {
+			case "message_update": {
+				const update = event.assistantMessageEvent;
+				const streamed = update?.type === "text_delta" || update?.type === "thinking_delta" ? update.delta : undefined;
+				if (typeof streamed === "string" && !resampling && !stopRequested && repetition.feed(streamed, update.type)) onLoop();
+				return;
+			}
 			case "response": {
 				if (String(event.id).startsWith("prompt-") && !event.success) {
 					result.stopReason = "error";
@@ -532,6 +570,12 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 				return;
 			case "agent_settled":
 				active = false;
+				if (resampling) {
+					resampling = false;
+					result.stopReason = undefined;
+					result.errorMessage = undefined;
+					prompts.unshift(LOOP_RECOVERY);
+				}
 				advance();
 				return;
 			case "tool_execution_start":
@@ -545,6 +589,8 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 				}
 				return;
 			case "message_start":
+				repetition.reset();
+				break;
 			case "message_end":
 				break;
 			default:
@@ -632,6 +678,11 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 			result.exitCode = 1;
 			result.stopReason = "aborted";
 		}
+		if (looped) {
+			result.exitCode = 1;
+			result.stopReason = "error";
+			result.errorMessage = LOOP_GAVE_UP;
+		}
 		if (stalled) {
 			result.exitCode = 1;
 			result.stopReason = "stalled";
@@ -665,13 +716,7 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 				else heldSteers.push(command);
 			});
 		},
-		stop() {
-			if (stopRequested || finishing || released) return false;
-			stopRequested = true;
-			send({ type: "abort" });
-			later(STOP_GRACE_MS, () => { if (!finishing) terminate("SIGTERM"); });
-			return true;
-		},
+		stop: stopChild,
 		kill() {
 			terminate("SIGKILL");
 		},

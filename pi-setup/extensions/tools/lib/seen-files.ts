@@ -29,6 +29,11 @@ export function markSeen(session: string, file: string): void {
 	}
 }
 
+/** whether this session has read or written the file at all */
+export function hasSeen(session: string, file: string): boolean {
+	return seen.has(key(session, file));
+}
+
 /** when the file was modified and when this session last saw it, if it changed since. */
 export function changedSinceSeen(session: string, file: string): { seenAt: number; modifiedAt: number } | undefined {
 	const entry = seen.get(key(session, file));

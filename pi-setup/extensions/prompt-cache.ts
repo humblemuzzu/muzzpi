@@ -6,6 +6,7 @@ import {
 	cacheCompactionBlocker,
 	computeFileLists,
 	formatFileOperations,
+	STALE_FILES_NOTE,
 	summaryInstruction,
 	summaryMaxTokens,
 	withPreviousExtensionFiles,
@@ -150,7 +151,7 @@ export default function promptCache(pi: ExtensionAPI) {
 			report(ctx, `Compacted from the prompt cache: ${response.usage.cacheRead} tokens read, ${response.usage.cacheWrite} written.`);
 			return {
 				compaction: {
-					summary: text + formatFileOperations(readFiles, modifiedFiles),
+					summary: text.replaceAll(STALE_FILES_NOTE.trim(), "").trimEnd() + STALE_FILES_NOTE + formatFileOperations(readFiles, modifiedFiles),
 					firstKeptEntryId: preparation.firstKeptEntryId,
 					tokensBefore: preparation.tokensBefore,
 					usage: response.usage,

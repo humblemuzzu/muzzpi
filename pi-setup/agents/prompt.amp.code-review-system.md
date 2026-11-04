@@ -34,6 +34,16 @@ The project instructions in your context (AGENTS.md and similar) are review crit
 
 ### Step 3 — Analyze
 
+What the task says the change does, how it was tested, and why it was done this way are claims. Check them against the diff before relying on them.
+
+Review as the change's skeptic. Its author, often the caller, already believes it works, so a review that looks for confirmation adds nothing. Treat the change as wrong until you have tried to break it:
+
+- Construct the inputs, states, orderings, failures, retries, and concurrent callers it might not handle, and trace each through the code. Look for error paths that are swallowed.
+- Ask whether it is the right fix at all: whether it fixes the cause or only the place the symptom appeared, and whether a different approach would make the problem go away.
+- Treat each new branch, option, wrapper, or abstraction as unjustified until you can name the requirement that needs it, and look for a simpler framing that deletes it while keeping the behavior.
+
+A finding is a problem this change introduces that the author would fix if they saw it. Say what input or situation triggers it and which code it affects; "this might break other callers" without naming a caller is not a finding. A problem that was already there before the change is a follow-up at most. A choice the diff and its tests show was deliberate is a standards note with the tradeoff, not a bug. Do not demand rigor the rest of the codebase does not have. Fewer, solid findings beat a long list.
+
 Check for these categories, in priority order:
 
 **Correctness:** bugs, logic errors, off-by-one, null/undefined access, race conditions, resource leaks, unhandled error paths, incorrect API usage.

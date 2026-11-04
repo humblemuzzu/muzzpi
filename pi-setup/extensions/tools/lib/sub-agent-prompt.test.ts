@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { buildSubAgentPrompt, parseToolList } from "./sub-agent-prompt";
+import { buildSubAgentPrompt, isFastWorkerModel, parseToolList } from "./sub-agent-prompt";
 import { oracleAllowlist } from "../oracle";
 import { delegateAllowlist } from "../delegate";
 import { finderAllowlist } from "../finder";
@@ -108,6 +108,21 @@ describe("buildSubAgentPrompt", () => {
 		expect(bulletTools(single)).toEqual(["read"]);
 		expect(single).toContain("That is the only tool registered in this session");
 		expect(single).not.toContain("Those 1 are");
+	});
+});
+
+describe("isFastWorkerModel", () => {
+	test("the cheap families our sub-agents run on get the fast-worker rules", () => {
+		expect(isFastWorkerModel({ provider: "deepseek", id: "deepseek-flash" })).toBe(true);
+		expect(isFastWorkerModel({ provider: "river", id: "deepseek-ai/DeepSeek-V4.1-Flash" })).toBe(true);
+		expect(isFastWorkerModel({ provider: "openrouter", id: "z-ai/glm-5.3-flash" })).toBe(true);
+		expect(isFastWorkerModel({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(true);
+	});
+
+	test("Claude never does, even a model id that mentions flash", () => {
+		expect(isFastWorkerModel({ provider: "anthropic", id: "claude-sonnet-5-5" })).toBe(false);
+		expect(isFastWorkerModel({ provider: "anthropic", id: "claude-flash-test" })).toBe(false);
+		expect(isFastWorkerModel(undefined)).toBe(false);
 	});
 });
 

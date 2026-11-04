@@ -474,6 +474,22 @@ describe("readAgentPrompt", () => {
 		const out = Bun.spawnSync([process.execPath, "-e", script], { env: { ...process.env, HOME: home } });
 		expect(JSON.parse(out.stdout.toString())).toEqual(["body text", "body text\nsecond line", ""]);
 	});
+
+	test("PI_AGENT_PROMPTS_DIR replaces the deployed folder, so an eval can swap every prompt at once", () => {
+		const home = join(dir, "home-override");
+		const variant = join(dir, "variant-prompts");
+		mkdirSync(join(home, ".pi", "agent", "agents"), { recursive: true });
+		mkdirSync(variant, { recursive: true });
+		writeFileSync(join(home, ".pi", "agent", "agents", "p.md"), "deployed");
+		writeFileSync(join(variant, "p.md"), "variant");
+		const script =
+			`import { readAgentPrompt } from ${JSON.stringify(join(import.meta.dir, "pi-spawn.ts"))};` +
+			`console.log(JSON.stringify([readAgentPrompt("p.md"), readAgentPrompt("only-deployed.md")]));`;
+		const run = (env: Record<string, string>) =>
+			JSON.parse(Bun.spawnSync([process.execPath, "-e", script], { env: { ...process.env, HOME: home, ...env } }).stdout.toString());
+		expect(run({ PI_AGENT_PROMPTS_DIR: variant })).toEqual(["variant", ""]);
+		expect(run({ PI_AGENT_PROMPTS_DIR: "" })).toEqual(["deployed", ""]);
+	});
 });
 
 describe("abort signal", () => {
@@ -522,6 +538,22 @@ describe("the RPC conversation with the child", () => {
 		expect(argv.slice(0, 2)).toEqual(["--mode", "rpc"]);
 		expect(argv.some((a) => a.includes("look around"))).toBe(false);
 		expect(result.messages.at(-1)?.role).toBe("assistant");
+	}, 30000);
+
+	test("a reply stuck repeating itself is aborted and the child asked to go on", async () => {
+		const result = await withFake(() => piSpawn({ cwd: dir, model, task: "LOOP once", session: session("rpc-loop") }));
+		expect(result.exitCode).toBe(0);
+		const sent = commands("rpc-loop");
+		expect(sent.map((c) => c.type)).toEqual(["prompt", "abort", "prompt"]);
+		expect(sent[2].message).toContain("stuck repeating the same text");
+		expect(result.messages.at(-1)?.content).toEqual([{ type: "text", text: expect.stringContaining("Continue the task") }]);
+	}, 30000);
+
+	test("a child that keeps looping is stopped with an error that says so", async () => {
+		const result = await withFake(() => piSpawn({ cwd: dir, model, task: "LOOP ALWAYS", session: session("rpc-loop-always") }));
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain("stuck repeating the same text 3 times");
+		expect(commands("rpc-loop-always").filter((c) => c.type === "abort")).toHaveLength(3);
 	}, 30000);
 
 	test("a resume may run on the model its conversation was saved on, even one outside agent-models.json", async () => {

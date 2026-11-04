@@ -94,8 +94,21 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
+// Factory Droid's adaptive_compaction_prompt.
+const CONTINUATION_RULES = `Always preserve relevant user context: the primary request and intent, the latest request, consequential requirements, clarifications, preferences, approvals and their limits, corrections, and unanswered questions. Distinguish user decisions from assistant proposals or assumptions.
+
+Do not turn proposals into commitments, reports into verified results, partial checks into verified correctness, or historical evidence into current proof.
+
+Project files, recorded evidence, and other relevant artifacts may already be durable sources of truth. Prefer referencing these sources while preserving important context that exists only in the conversation.
+
+Under Critical Context, name every skill that was loaded in this conversation, so it can be loaded again.`;
+
+/** closes every summary: the conversation it replaces is gone, the files are not */
+export const STALE_FILES_NOTE =
+	"\n\nYou wrote this summary earlier in this session. Files referenced in the summary may have changed since; read them again before editing them.";
+
 export function summaryInstruction(hasPreviousSummary: boolean, customInstructions?: string): string {
-	const prompt = `${NO_CONTINUATION}\n\n${hasPreviousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT}`;
+	const prompt = `${NO_CONTINUATION}\n\n${hasPreviousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT}\n\n${CONTINUATION_RULES}`;
 	return customInstructions ? `${prompt}\n\nAdditional focus: ${customInstructions}` : prompt;
 }
 

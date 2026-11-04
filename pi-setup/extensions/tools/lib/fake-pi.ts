@@ -4,8 +4,9 @@
  * `--model` it was given, with "answer: <message>". a message holding
  * `SLEEP <seconds>` runs that long first; `FAIL` ends the run with a provider
  * error; `TOOL <path>` reports a write; `PREFLIGHT <seconds>` delays the run's
- * start. like pi, a steer joins the running run (before a run starts it starts
- * one of its own) and an abort ends it.
+ * start; `LOOP` streams a reply that repeats itself until aborted (`LOOP ALWAYS`:
+ * every later run too). like pi, a steer joins the running run (before a run
+ * starts it starts one of its own) and an abort ends it.
  */
 
 import { appendFileSync, mkdirSync } from "node:fs";
@@ -22,6 +23,7 @@ const emit = (event: unknown) => process.stdout.write(`${JSON.stringify(event)}\
 log({ argv, holder: process.env.PI_SUBAGENT_ID });
 
 let running: { steers: string[]; finish: (stopReason: string) => void } | undefined;
+let alwaysLoop = false;
 
 function assistant(text: string, stopReason: string) {
 	return {
@@ -43,7 +45,15 @@ function run(message: string) {
 
 function begin(message: string) {
 	emit({ type: "agent_start" });
-	const seconds = Number(/SLEEP (\d+(?:\.\d+)?)/.exec(message)?.[1] ?? 0);
+	if (message.includes("LOOP ALWAYS")) alwaysLoop = true;
+	const loop = alwaysLoop || message.includes("LOOP");
+	if (loop) {
+		emit({ type: "message_start", message: assistant("", "stop") });
+		for (let i = 0; i < 60; i++) {
+			emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "I will check the config file again. " } });
+		}
+	}
+	const seconds = loop ? 30 : Number(/SLEEP (\d+(?:\.\d+)?)/.exec(message)?.[1] ?? 0);
 	const tool = /TOOL (\S+)/.exec(message)?.[1];
 	if (tool) {
 		emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "write", args: { path: tool, content: "x" } });

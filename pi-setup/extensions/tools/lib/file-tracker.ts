@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import { markSeen } from "./seen-files";
 import { moveToTrash } from "./trash";
 
 /** PI_FILE_CHANGES_DIR moves the records: tests keep theirs out of the real ones with it. */
@@ -260,6 +261,7 @@ export function revertChange(sessionId: string, toolCallId: string, changeId: st
 		// the parent may have been removed since; recreate it before writing.
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		fs.writeFileSync(filePath, change.before, "utf-8");
+		markSeen(sessionId, filePath);
 		if (change.beforeMode !== undefined) {
 			try {
 				fs.chmodSync(filePath, change.beforeMode);
@@ -385,6 +387,7 @@ export function reapplyChange(
 	if (existsAfter) {
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		fs.writeFileSync(filePath, change.after, "utf-8");
+		markSeen(sessionId, filePath);
 		if (change.afterMode !== undefined) {
 			try {
 				fs.chmodSync(filePath, change.afterMode);

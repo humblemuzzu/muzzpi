@@ -396,6 +396,16 @@ function matchLines(content: string, needle: string): string {
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { hour12: false });
 
+/** A file this session read or wrote, changed on disk since: editing from the old view could undo someone's work. */
+function assertUnchangedSinceSeen(session: string, file: string): void {
+	const changed = changedSinceSeen(session, file);
+	if (!changed) return;
+	throw new Error(
+		`nothing was changed: ${file} was modified on disk since you last saw it (read at ${clock(changed.seenAt)}, changed at ${clock(changed.modifiedAt)}), ` +
+			"by the user, another agent, or a command. The file changed after you last read it. Read it again before editing it, so your change does not undo theirs.",
+	);
+}
+
 function explain(error: unknown, edits: Edit[], before: string | undefined, file: string, session: string): Error {
 	const original = error instanceof Error ? error : new Error(String(error));
 	if (before === undefined) return original;
@@ -448,6 +458,7 @@ export function createEditTool(): ToolDefinition {
 
 			return withWriteLock(target, signal, async () => {
 				const current = await readIfExists(target).catch(() => undefined);
+				if (current !== undefined) assertUnchangedSinceSeen(ctx.sessionManager.getSessionId(), target);
 				const requested: Edit[] = Array.isArray(input.edits) ? input.edits : [];
 				const escapes = current === undefined ? { edits: requested, notes: [] } : resolveEscapes(requested, toLF(current), target);
 				const edits = escapes.edits;
@@ -515,6 +526,7 @@ export function createWriteTool(): ToolDefinition {
 					writeFile: async (p: string, content: string) => {
 						assertAllowed("write", p, cwd);
 						const before = await readIfExists(p);
+						if (before !== undefined) assertUnchangedSinceSeen(ctx.sessionManager.getSessionId(), p);
 						if (before === content) {
 							unchanged = true;
 							markSeen(ctx.sessionManager.getSessionId(), p);

@@ -85,7 +85,8 @@ re-reads the entry (`max_tokens: 1`) at 90% of its TTL (the payload's label or t
 `cacheWrite1h` receipt, the shorter), never past 95%, never for an idle session, until the reads
 cost one rebuild. Reads are `cache-ping` entries: `/stats` and a child's run usage count them, the
 child stall watchdog does not. **Keep pi's `cacheWarming` off**: it would double the reads. Compaction
-(parent only) replays the capture plus a summary instruction; any doubt runs pi's own. Models
+(parent only) replays the capture plus a summary instruction (pi's checkpoint format plus droid's
+continuation rules, `cache-compaction.ts`); any doubt runs pi's own, which lacks those rules. Models
 compact above 970k (`compaction.modelOverrides`, reserve = window − 970k). `cache-report.py` shows what was rebuilt after
 expiry and what the gap waited on; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter per request.
 
@@ -101,13 +102,17 @@ expiry and what the gap waited on; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan
    instead (psst does).
 2. `tools/lib/sub-agent-prompt.ts` — **sub-agents** get a short generated prompt naming exactly
    their tools, driven by `PI_SUBAGENT_TOOLS`, which `pi-spawn.ts` sets from the same array it
-   builds `--tools` from. The child's agent prompt arrives as `--append-system-prompt`.
-3. **Each fact has one home.** A tool's call shapes and when-to-use live in its own description
-   (children see those too); the template carries only cross-tool routing. Do not copy tool
-   descriptions into the template or into `promptGuidelines` — every copy is paid on every request.
+   builds `--tools` from. The child's agent prompt arrives as `--append-system-prompt` (delegate's is
+   `agent.amp.delegate.md`); a child on a fast family (`isFastWorkerModel`) adds `rules.worker-fast.md`.
+3. **Each fact has one home.** A tool's call shapes and when-to-use live in its own description;
+   the template carries only cross-tool routing. Every copy is paid on every request.
 4. **Nothing in the prompt or tool schemas may change mid-session.** A changed prefix re-writes the
    whole prompt cache; `interpolate.ts` memoizes the workspace listing for that reason, and the
    sub-agent model list is built once at load.
+5. **Prompt text is measured, not argued.** The engineering sections are amp's (official-modes) and
+   droid's wording. Change any prompt only with `port-harness/prompt-eval/run.ts` showing no case
+   lost (`--variant base=<old dir> --variant new=pi-setup/agents`; `PI_AGENT_PROMPTS_DIR` swaps every
+   prompt read, children included). Its judge is Sonnet at low thinking: Haiku contradicted itself.
 
 ## Patches and configs that must survive updates
 
@@ -390,8 +395,9 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
 - **The spawn graph is acyclic and pinned by `tool-contract.test.ts`:** the only agent→agent edge is
   `delegate → finder`, depth ≤ 2. chad has no `chad`/`delegate` (a swarm that spawns swarms is a
   fork bomb) and no `oracle`/`finder`/`librarian` (it already has their tools).
-- **Don't use `--no-tools`** for sub-agents: it empties the registry and
-  nothing can be re-activated.
+- **Don't use `--no-tools`** for sub-agents: it empties the registry; nothing can be re-activated.
+- **A child reply that repeats itself** (`lib/repetition.ts`, droid's thresholds; symbol-only units
+  ignored) is aborted and re-prompted, twice at most; the third time the child is stopped.
 - **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub, prompt-cache) via
   `--no-extensions -e`, plus `-e builtin:codemode` when their tools include `codemode` (a script
   reaches only the child's tools; `--no-extensions` drops pi's built-ins too). An extension a child
@@ -419,7 +425,9 @@ naming the first differing line, column and code point. `\uXXXX` sent as text
 is decoded only when that alone makes oldText match, refused in prose files
 without escapes; `[REDACTED]` is never written over a real value; a control
 character the file never had is refused. UTF-8 text only; no `replace_all`,
-delete or move (`trash <path>` / `git mv` in bash).
+delete or move (`trash <path>` / `git mv` in bash). **A file this session read or wrote that changed
+on disk since (`seen-files.ts`) is refused until read again**; undo/redo and `format_file` (only when
+the file had not drifted) count as seeing it.
 
 **Both go out non-strict (`constrainedSampling: false`)**: pi's `strict: "prefer"`
 makes Anthropic garble Claude's non-ASCII (pi #10074). Never copy pi's value
@@ -469,6 +477,8 @@ Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables), `PI_
 - Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild holds stdout. The
   child is **not** spawned `detached` (Ctrl+C must reach it). 900s sits above pi's HTTP idle (300s)
   + retry; re-check those before shrinking it.
+- **A local `git commit`/`git push` whose added lines the psst scrubber would hide is refused**
+  (`lib/commit-guard.ts`; `PI_SECRET_SCAN_OFF=1`). A search's exit 1 with no output reads "no matches".
 - **bash keeps pi's codemode contract**: `structuredContent` on every exit code (a script's `grep`
   miss is data, not a throw); timeout/idle/abort/signal stay errors. The `tool_result` scrub hook
   must return `structuredContent` too — `content` alone makes pi drop it.

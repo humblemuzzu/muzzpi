@@ -661,4 +661,46 @@ describe("edit: the file changed after it was read", () => {
 		const message = await refusal(edit({ path: f, old_string: "b = 3;", new_string: "x" }));
 		expect(message).not.toContain("changed after you last read it");
 	});
+
+	const changeBehindTheAgent = (f: string, content: string) => {
+		fs.writeFileSync(abs(f), content);
+		const later = new Date(Date.now() + 5000);
+		fs.utimesSync(abs(f), later, later);
+	};
+
+	test("an edit that still matches is refused too: it would be made from a stale view", async () => {
+		const f = fixture("a = 1;\nb = 2;\n");
+		await readTool.execute("r", { path: f }, undefined, undefined, ctx);
+		changeBehindTheAgent(f, "a = 1;\nb = 2;\nc = 3; // the user's new line\n");
+		const message = await refusal(edit({ path: f, old_string: "a = 1;", new_string: "a = 10;" }));
+		expect(message).toContain("nothing was changed");
+		expect(message).toContain("Read it again before editing it");
+		expect(read(f)).toBe("a = 1;\nb = 2;\nc = 3; // the user's new line\n");
+	});
+
+	test("reading it again clears the refusal", async () => {
+		const f = fixture("a = 1;\n");
+		await readTool.execute("r", { path: f }, undefined, undefined, ctx);
+		changeBehindTheAgent(f, "a = 1;\nb = 2;\n");
+		await refusal(edit({ path: f, old_string: "a = 1;", new_string: "a = 10;" }));
+		await readTool.execute("r2", { path: f }, undefined, undefined, ctx);
+		await edit({ path: f, old_string: "a = 1;", new_string: "a = 10;" });
+		expect(read(f)).toBe("a = 10;\nb = 2;\n");
+	});
+
+	test("write over a file that changed since it was read is refused", async () => {
+		const f = fixture("first\n");
+		await readTool.execute("r", { path: f }, undefined, undefined, ctx);
+		changeBehindTheAgent(f, "someone else's version\n");
+		const message = await refusal(write({ path: f, content: "mine\n" }));
+		expect(message).toContain("The file changed after you last read it");
+		expect(read(f)).toBe("someone else's version\n");
+	});
+
+	test("a file this session never read is not gated", async () => {
+		const f = fixture("x = 1;\n");
+		changeBehindTheAgent(f, "x = 2;\n");
+		await edit({ path: f, old_string: "x = 2;", new_string: "x = 3;" });
+		expect(read(f)).toBe("x = 3;\n");
+	});
 });

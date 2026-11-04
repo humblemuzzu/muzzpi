@@ -112,7 +112,11 @@ export default function (pi: ExtensionAPI) {
 		models,
 		runs,
 	}));
-	pi.registerTool(createDelegateTool({ models, runs }));
+	pi.registerTool(createDelegateTool({
+		systemPrompt: readAgentPrompt("agent.amp.delegate.md"),
+		models,
+		runs,
+	}));
 	// chad is delegate's read-only counterpart: no edit/write, and its bash
 	// runs under the read-only policy in lib/read-only-bash.ts.
 	pi.registerTool(createChadTool({

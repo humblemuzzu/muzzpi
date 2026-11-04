@@ -18,6 +18,18 @@
  */
 export const SUB_AGENT_TOOLS_ENV = "PI_SUBAGENT_TOOLS";
 
+/**
+ * The model families amp gives a short, tagged worker prompt instead of its long
+ * Claude one (official-modes deepseek-v4.1-flash.ts, glm-53-flash.ts). Their
+ * children get `rules.worker-fast.md` as an extra section.
+ */
+const FAST_WORKER_MODEL = /deepseek|glm|kimi|qwen|minimax|flash/i;
+
+export function isFastWorkerModel(model: { provider?: string; id?: string } | undefined): boolean {
+	if (!model || model.provider === "anthropic") return false;
+	return FAST_WORKER_MODEL.test(`${model.provider ?? ""}/${model.id ?? ""}`);
+}
+
 /** split the env value into tool names, dropping blanks and stray whitespace. */
 export function parseToolList(csv: string): string[] {
 	return csv

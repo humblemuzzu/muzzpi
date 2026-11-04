@@ -22,6 +22,7 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { saveChange, simpleDiff } from "./lib/file-tracker";
 import { withFileLock } from "./lib/mutex";
+import { changedSinceSeen, hasSeen, markSeen } from "./lib/seen-files";
 import { resolveWithVariants } from "./read";
 import { osc8Link, renderBoxedText } from "./lib/box-format";
 import { getText } from "./lib/tui";
@@ -200,6 +201,8 @@ export function createFormatFileTool(): ToolDefinition {
 				}
 
 				const before = fs.readFileSync(resolved, "utf-8");
+				const sessionId = ctx.sessionManager.getSessionId();
+				const seenBefore = hasSeen(sessionId, resolved) && changedSinceSeen(sessionId, resolved) === undefined;
 
 				const result = spawnSync(formatter.command, [...formatter.prefix, ...formatter.formatter.args(resolved)], {
 					encoding: "utf-8",
@@ -229,8 +232,6 @@ export function createFormatFileTool(): ToolDefinition {
 					} as any;
 				}
 
-				// track for undo_edit
-				const sessionId = ctx.sessionManager.getSessionId();
 				const diff = simpleDiff(resolved, before, after);
 				saveChange(sessionId, toolCallId, {
 					uri: `file://${resolved}`,
@@ -240,6 +241,7 @@ export function createFormatFileTool(): ToolDefinition {
 					isNewFile: false,
 					timestamp: Date.now(),
 				});
+				if (seenBefore) markSeen(sessionId, resolved);
 
 				return {
 					content: [

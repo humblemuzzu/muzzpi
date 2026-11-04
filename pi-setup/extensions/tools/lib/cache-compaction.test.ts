@@ -12,6 +12,7 @@ import {
 	type FileOps,
 	formatFileOperations,
 	missingFromCapture,
+	STALE_FILES_NOTE,
 	summaryInstruction,
 	summaryMaxTokens,
 	withPreviousExtensionFiles,
@@ -97,6 +98,11 @@ describe("summaryInstruction", () => {
 		expect(summaryInstruction(true)).toContain("PRESERVE all existing information from the previous summary");
 		expect(summaryInstruction(false, "the API")).toEndWith("\n\nAdditional focus: the API");
 		expect(summaryInstruction(false)).toContain("Do NOT call any tools.");
+		for (const previous of [false, true]) {
+			expect(summaryInstruction(previous)).toContain("Distinguish user decisions from assistant proposals or assumptions.");
+			expect(summaryInstruction(previous)).toContain("partial checks into verified correctness");
+			expect(summaryInstruction(previous)).toContain("name every skill that was loaded");
+		}
 	});
 
 	test("carries no Claude-plan trigger phrase", () => {
@@ -284,7 +290,7 @@ describe("prompt-cache extension: compaction", () => {
 		const result = await ext.call("session_before_compact", compactEvent());
 		expect(result).toEqual({
 			compaction: {
-				summary: "## Goal\nship\n\n<read-files>\n/r.ts\n</read-files>\n\n<modified-files>\n/e.ts\n</modified-files>",
+				summary: `## Goal\nship${STALE_FILES_NOTE}\n\n<read-files>\n/r.ts\n</read-files>\n\n<modified-files>\n/e.ts\n</modified-files>`,
 				firstKeptEntryId: "e9",
 				tokensBefore: 9000,
 				usage,
@@ -294,6 +300,15 @@ describe("prompt-cache extension: compaction", () => {
 		const [payload] = ext.sent as any[];
 		expect(payload.max_tokens).toBe(13_107);
 		expect(payload.messages.at(-1).content[0].text).toBe(summaryInstruction(false));
+	});
+
+	test("a summary that copied the stale-files note from the last one still carries it once", async () => {
+		const echoed = { ...ok, content: [{ type: "text", text: `## Goal\nship${STALE_FILES_NOTE}` }] };
+		const ext = loadExtension(echoed);
+		await ext.call("context", { messages: [old, kept] });
+		await ext.call("before_provider_request", { payload: wirePayload() });
+		const result = await ext.call("session_before_compact", compactEvent());
+		expect(result.compaction.summary.split(STALE_FILES_NOTE.trim()).length - 1).toBe(1);
 	});
 
 	test("falls back to pi's compaction whenever the replay cannot be trusted", async () => {
