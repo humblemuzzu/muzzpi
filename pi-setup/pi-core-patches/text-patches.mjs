@@ -168,6 +168,8 @@ export function inspect(patch, pkg) {
 	if (result === undefined) return { state: "drift", file, detail: "an edit does not match the stock file once" };
 	if (text === result) return { state: "applied", file };
 	if (text === stock) return { state: "stock", file, stock, result };
+	// an earlier version of our own edit, over the stock copy kept beside it
+	if (stock === stockCopy && text.includes(MARK)) return { state: "stale", file, stock, result };
 	return { state: "drift", file, detail: "neither the stock file nor this patch's result" };
 }
 
@@ -175,7 +177,7 @@ function apply(pkg) {
 	let failed = 0;
 	for (const patch of PATCHES) {
 		const found = inspect(patch, pkg);
-		if (found.state === "stock") {
+		if (found.state === "stock" || found.state === "stale") {
 			writeFileSync(`${found.file}.stock`, found.stock);
 			const tmp = `${found.file}.muzzpi-${process.pid}`;
 			writeFileSync(tmp, found.result);

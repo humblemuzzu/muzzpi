@@ -528,6 +528,9 @@ text is never modified).
    cursor: editor labels (`flattenLabelText`), widget rows (`flattenSegmentText`) and any truncated
    summary must flatten. Multi-row `renderCall` output is fine.
 
+The width patch's single-cell fast path must count exactly what `graphemeWidth` counts: a code it
+covers that `__clusterAdvance` counts 2 goes in `__twoCellPictographs` (`width-fast-path.test.ts` fails otherwise).
+
 If it returns: `apply-pi-tui-width-patch.mjs --check` first, then
 `pi-setup/render-repro/`, then hunt for a control char in a single-line string.
 

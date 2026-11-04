@@ -64,6 +64,14 @@ describe("text patches", () => {
 		expect(inspect(PATCH, updated).detail).toContain("not the stock file");
 	});
 
+	test("a file holding an earlier version of our edit is patched again from its stock copy", () => {
+		const pkg = fakePi("const a = 1;\nconst b = 5; // LOCAL PATCH (muzzpi)\n");
+		writeFileSync(join(pkg, "dist", "x.js.stock"), STOCK);
+		expect(inspect(PATCH, pkg)).toMatchObject({ state: "stale", result: patched(PATCH, STOCK) });
+		writeFileSync(join(pkg, "dist", "x.js"), "const a = 1;\nconst b = 5;\n");
+		expect(inspect(PATCH, pkg).state).toBe("drift");
+	});
+
 	test("an edit whose text appears twice is refused rather than guessed", () => {
 		const twice = "const b = 2;\nconst b = 2;\n";
 		expect(patched({ ...PATCH, stock: sha256(twice) }, twice)).toBeUndefined();

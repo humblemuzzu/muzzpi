@@ -49,6 +49,31 @@ formatted differently from its tagged source, so a text-patch anchor cannot be p
 - Prompt cache: requests in the user's words and `fromCapture` on compactions; prefix breaks logged to
   `cache/prefix-breaks.jsonl` (9.5 ms per 4.3 MB request).
 
+## Width fast path; the rest of Pi-Bolt's render work measured (2026-11-04) — on 1.5.0
+
+- **Kept: single-cell fast path** (`apply-pi-tui-width-patch.mjs`, second step, own marker; Pi-Bolt
+  `1405819fe`): `asciiVisibleWidth` also counts Latin, punctuation, arrows, maths, box drawing, blocks and
+  shapes, and `truncateToWidth` returns text that fits as is. Pi-Bolt's ranges as shipped undercount 16
+  pictographs our `__clusterAdvance` counts 2 (© ® ↔…↙ ↩ ↪ ▪ ▫ ▶ ◀ ◻ ◼): they stay on the general path.
+  2,000 styled rows: truncate box rows 38.5 → 0.42 ms, coloured ASCII 37.6 → 0.32 ms, width of box rows
+  31.8 → 0.39 ms. `width-fast-path.test.ts`: all 65,536 BMP characters in 3 contexts and 20,000 random
+  lines give identical width/truncate/wrap/slice; it fails on Pi-Bolt's ranges. An older pi-tui without the
+  anchors keeps the general path.
+- **Dropped: reusing a Container's last line array** (our take on `0d82dbd94`). 98% of renders hit, yet
+  6 interleaved rounds of long_transcript: CPU −3.5% (1,000 entries) / −6% (4,000), instructions per frame
+  +13% / +18%, memory at 4,000 +102 MB. A streaming frame still renders every component of the transcript:
+  in the answer's profile at 4,000 entries 87% of busy time is that walk, not the copying. Only Pi-Bolt's
+  change reporting (`09f96cc3f`→`e552ff21f`, ~2,500 lines, replaces `streaming-markdown`) removes it.
+- **Memory at 4,000 entries is garbage, not a leak**: live heap 117 MB (60 MB of it the conversation's
+  text), heap in use 127 → 448 MB while an answer streams, back down after a full collection. Same cause:
+  each frame builds the whole transcript's line arrays again.
+- **Not done**: `42c2eab76` (finishing visible rows: ~2% of a streaming frame's time); `6f9de1b24`,
+  `24d079015` (1.5.0 already reuses blocks and the write row's highlighting); `08d3c1c8f` (Node 26
+  stringifies a 3.4 MB request in 2.9 ms; the cache was slower); `e17775b85`, `75c3920c4`, `05edc781e`
+  (off for our hooks, Bun-only, or only for pi's own read/ls/grep/find).
+- `text-patches.mjs` re-applies a file holding an earlier version of our edit from its `.stock` copy
+  (state `stale`) instead of reporting drift, so a changed edit reaches installed machines.
+
 ## CPU and memory, ideas from Pi-Bolt (2026-11-02) — on 1.5.0, no pi update
 
 Bench: Pi-Bolt's `bench/` (throwaway home, scripted model, so stock tools, not ours), M4 Pro, Node 22,

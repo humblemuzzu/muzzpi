@@ -26,7 +26,51 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const CHECK_ONLY = process.argv.includes("--check");
-const MARKER = "LOCAL PATCH";
+const MARKER = "function __clusterAdvance(";
+export const FAST_MARKER = "LOCAL PATCH: single-cell fast path";
+
+// Speed only. Every code below counts 1 in the patched graphemeWidth() whatever is beside it; the pictographs in
+// these ranges count 2 there (__clusterAdvance), so they are left to the general path.
+const FAST_PATH_CODE = `// ${FAST_MARKER}: Latin, punctuation, arrows, maths, box drawing,
+// blocks and shapes are measured without segmenting, as graphemeWidth() measures each.
+const __twoCellPictographs = new Set([0xa9, 0xae, 0x2194, 0x2195, 0x2196, 0x2197, 0x2198, 0x2199, 0x21a9, 0x21aa, 0x25aa, 0x25ab, 0x25b6, 0x25c0, 0x25fb, 0x25fc]);
+function __singleCell(code) {
+    return ((code >= 0xa0 && code <= 0x2ff && code !== 0xad) ||
+        (code >= 0x2010 && code <= 0x2027) ||
+        (code >= 0x2190 && code <= 0x22ff) ||
+        (code >= 0x2500 && code <= 0x25fc)) && !__twoCellPictographs.has(code);
+}
+`;
+export const FAST_EDITS = [
+    [
+        "function asciiVisibleWidth(str) {",
+        `${FAST_PATH_CODE}function asciiVisibleWidth(str) {`,
+    ],
+    [
+        "            i += length;\n        }\n        else {\n            return -1;\n        }\n    }\n    return width;\n}",
+        "            i += length;\n        }\n        else if (__singleCell(code)) {\n            width++;\n            i++;\n        }\n        else {\n            return -1;\n        }\n    }\n    return width;\n}",
+    ],
+    [
+        "    if (isPrintableAscii(text)) {\n        if (text.length <= maxWidth) {",
+        `    // ${FAST_MARKER}: text that fits is returned as it is, as the general path below returns it
+    const simpleWidth = asciiVisibleWidth(text);
+    if (simpleWidth !== -1 && simpleWidth <= maxWidth) {
+        return pad ? text + " ".repeat(maxWidth - simpleWidth) : text;
+    }
+    if (isPrintableAscii(text)) {
+        if (text.length <= maxWidth) {`,
+    ],
+];
+
+/** utils.js with the fast path, or undefined when an anchor is missing or not unique (an older pi-tui). */
+export function withFastPath(src) {
+    for (const [from, to] of FAST_EDITS) {
+        const at = src.indexOf(from);
+        if (at < 0 || src.indexOf(from, at + 1) >= 0) return undefined;
+        src = src.slice(0, at) + to + src.slice(at + from.length);
+    }
+    return src;
+}
 
 const CLUSTER_ADVANCE_CODE = `
 // LOCAL PATCH: per-codepoint cursor advance a terminal performs for a cluster.
@@ -145,8 +189,17 @@ function findPiTuiCopies() {
 }
 
 function patchFile(file) {
-    let src = fs.readFileSync(file, "utf8");
-    if (src.includes(MARKER)) return "already-patched";
+    const original = fs.readFileSync(file, "utf8");
+    let src = original.includes(MARKER) ? original : addClusterAdvance(original);
+    if (!src.includes(MARKER)) return src;
+    // an older pi-tui without the anchors keeps the general path: correct, only slower
+    if (!src.includes(FAST_MARKER)) src = withFastPath(src) ?? src;
+    if (src === original) return "already-patched";
+    fs.writeFileSync(file, src);
+    return "patched";
+}
+
+function addClusterAdvance(src) {
     if (!src.includes("function graphemeWidth(segment)")) return "no-graphemeWidth";
     if (!src.includes("eastAsianWidth")) return "no-eastAsianWidth";
 
@@ -170,36 +223,39 @@ function patchFile(file) {
         "\n$1// LOCAL PATCH: conservative width — see __clusterAdvance below\n$1return Math.max(width, __clusterAdvance(segment));\n}",
     );
 
-    src = src.slice(0, fnStart) + fn + CLUSTER_ADVANCE_CODE + src.slice(fnEnd + 2);
-    fs.writeFileSync(file, src);
-    return "patched";
+    return src.slice(0, fnStart) + fn + CLUSTER_ADVANCE_CODE + src.slice(fnEnd + 2);
 }
 
-const copies = findPiTuiCopies();
-if (copies.length === 0) {
-    console.error("ERROR: no pi-tui dist/utils.js found — did pi move?");
-    process.exit(1);
-}
-let failures = 0;
-for (const file of copies) {
-    const version = (() => {
-        try {
-            return JSON.parse(fs.readFileSync(path.join(file, "../../package.json"), "utf8")).version;
-        } catch { return "?"; }
-    })();
-    if (CHECK_ONLY) {
-        const patched = fs.readFileSync(file, "utf8").includes(MARKER);
-        console.log(`${patched ? "PATCHED " : "UNPATCHED"} v${version}  ${file}`);
-        if (!patched) failures++;
-        continue;
+function main() {
+    const copies = findPiTuiCopies();
+    if (copies.length === 0) {
+        console.error("ERROR: no pi-tui dist/utils.js found — did pi move?");
+        process.exit(1);
     }
-    const result = patchFile(file);
-    console.log(`${result.padEnd(16)} v${version}  ${file}`);
-    if (result !== "patched" && result !== "already-patched") failures++;
+    let failures = 0;
+    for (const file of copies) {
+        const version = (() => {
+            try {
+                return JSON.parse(fs.readFileSync(path.join(file, "../../package.json"), "utf8")).version;
+            } catch { return "?"; }
+        })();
+        if (CHECK_ONLY) {
+            const src = fs.readFileSync(file, "utf8");
+            const patched = src.includes(MARKER) && (src.includes(FAST_MARKER) || withFastPath(src) === undefined);
+            console.log(`${patched ? "PATCHED " : "UNPATCHED"} v${version}  ${file}`);
+            if (!patched) failures++;
+            continue;
+        }
+        const result = patchFile(file);
+        console.log(`${result.padEnd(16)} v${version}  ${file}`);
+        if (result !== "patched" && result !== "already-patched") failures++;
+    }
+    if (failures > 0) {
+        console.error(CHECK_ONLY
+            ? `\n${failures} unpatched cop${failures === 1 ? "y" : "ies"} — run without --check`
+            : `\n${failures} cop${failures === 1 ? "y" : "ies"} FAILED to patch — upstream utils.js changed; re-derive the patch (see AGENTS.md)`);
+        process.exit(1);
+    }
 }
-if (failures > 0) {
-    console.error(CHECK_ONLY
-        ? `\n${failures} unpatched cop${failures === 1 ? "y" : "ies"} — run without --check`
-        : `\n${failures} cop${failures === 1 ? "y" : "ies"} FAILED to patch — upstream utils.js changed; re-derive the patch (see AGENTS.md)`);
-    process.exit(1);
-}
+
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) main();
