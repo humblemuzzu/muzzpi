@@ -12,7 +12,7 @@ export const RETIRED_COMMANDS: Readonly<Record<string, string>> = {
 	"psst-tag": "/psst tags",
 	studio: "/theme",
 	palette: "/help (or Ctrl+Shift+P)",
-	mentions: "/help, which lists every @mention",
+	mentions: "plain words in your message, like \"ask the oracle\"",
 	"create-goal": "/goal strict <task>",
 };
 

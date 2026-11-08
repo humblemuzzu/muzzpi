@@ -4,7 +4,7 @@
  * Matching, line endings, BOM handling and the write itself are pi's
  * (createEditToolDefinition / createWriteToolDefinition, injected file
  * operations). This file adds only what pi does not do: undo_edit records,
- * permissions.json, the file lock shared with bash / format_file / undo_edit
+ * permissions.json, the file lock shared with bash / undo_edit
  * (and, across processes, with other sub-agents),
  * Claude's field names, and errors that say what to do next.
  */

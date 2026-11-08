@@ -1,7 +1,7 @@
 /**
- * What /help cannot read from pi itself: each extension's shortcut keys and
- * the @mentions. Extensions do not share module state, so /help asks over
- * pi.events and each extension answers with its own facts, synchronously.
+ * What /help cannot read from pi itself: each extension's shortcut keys.
+ * Extensions do not share module state, so /help asks over pi.events and each
+ * extension answers with its own facts, synchronously.
  */
 
 export const HELP_CHANNEL = "muzzpi:help";
@@ -12,15 +12,8 @@ export interface HelpShortcut {
 	key: string;
 }
 
-export interface HelpMention {
-	/** as typed, with the @ */
-	text: string;
-	description: string;
-}
-
 export interface HelpCollector {
 	shortcut(entry: HelpShortcut): void;
-	mention(entry: HelpMention): void;
 }
 
 interface HelpEvents {
@@ -34,7 +27,7 @@ interface HelpHost {
 
 function isCollector(data: unknown): data is HelpCollector {
 	const value = data as Partial<HelpCollector> | null;
-	return typeof value?.shortcut === "function" && typeof value.mention === "function";
+	return typeof value?.shortcut === "function";
 }
 
 /** Answers every /help request with `answer`; pi drops the listener itself when the session ends. */
@@ -46,15 +39,12 @@ export function contributeHelp(pi: HelpHost, answer: (help: HelpCollector) => vo
 
 export interface CollectedHelp {
 	shortcuts: Map<string, string>;
-	mentions: HelpMention[];
 }
 
 export function collectHelp(events: HelpEvents): CollectedHelp {
 	const shortcuts = new Map<string, string>();
-	const mentions = new Map<string, HelpMention>();
 	events.emit(HELP_CHANNEL, {
 		shortcut: ({ command, key }: HelpShortcut) => shortcuts.set(command, key),
-		mention: (entry: HelpMention) => mentions.set(entry.text, entry),
 	} satisfies HelpCollector);
-	return { shortcuts, mentions: [...mentions.values()] };
+	return { shortcuts };
 }

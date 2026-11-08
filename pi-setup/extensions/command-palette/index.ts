@@ -63,7 +63,7 @@ export default function helpExtension(pi: ExtensionAPI) {
 	}
 
 	pi.registerCommand("help", {
-		description: "Every muzzpi command, shortcut and @mention in one searchable list",
+		description: "Every muzzpi command, shortcut and skill in one searchable list",
 		handler: async (_args, ctx) => open(ctx),
 	});
 

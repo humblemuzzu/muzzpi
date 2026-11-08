@@ -92,13 +92,9 @@ describe("help channel", () => {
 	test("every extension's answer is collected; a later answer for the same command wins", () => {
 		const pi = bus();
 		contributeHelp(pi, (help) => help.shortcut({ command: "stats", key: "ctrl+shift+s" }));
-		contributeHelp(pi, (help) => {
-			help.mention({ text: "@oracle", description: "expert advisor" });
-			help.shortcut({ command: "stats", key: "ctrl+shift+t" });
-		});
+		contributeHelp(pi, (help) => help.shortcut({ command: "stats", key: "ctrl+shift+t" }));
 		const help = collectHelp(pi.events);
 		expect([...help.shortcuts]).toEqual([["stats", "ctrl+shift+t"]]);
-		expect(help.mentions).toEqual([{ text: "@oracle", description: "expert advisor" }]);
 	});
 
 	test("junk on the channel is ignored", () => {

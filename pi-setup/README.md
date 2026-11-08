@@ -34,8 +34,8 @@ node pi-setup/pi-core-patches/apply-pi-tui-width-patch.mjs --check   # exit 0 = 
 
 ### Extensions
 
-pi auto-discovers every `.ts` in `extensions/` — there is no "present but disabled" state; to
-disable one, delete it or move it out of `extensions/`. An extension can still ship its own
+`install.sh` bundles each one into a single `.js` in `~/.pi/agent/extensions/`, where pi loads it;
+there is no "present but disabled" state: to disable one, delete it or move it out of `extensions/`. An extension can still ship its own
 off switch (`you-should-know/` starts off and waits for `/ysk on`), but nothing at the
 loader level turns one off.
 
@@ -44,15 +44,19 @@ loader level turns one off.
 | `editor/` | Custom box-drawing bordered editor with labels (context %, cost, model, git branch), enlarged prompt bar, inline `[image #N]` clipboard-paste, and a cache line below the box (hit %, read/write totals, and a TTL countdown where the provider declares one) |
 | `tools/` | Full replacement tool suite. See below. |
 | `system-prompt.ts` | Injects the full Amp system prompt with runtime template vars (parent sessions); a sub-agent instead gets a short generated prompt naming exactly its own `--tools` allowlist |
-| `mentions.ts` | `@commit/<sha>` resolution + agent directives (`@oracle`, `@finder`, `@codereview`, `@chad`, `@task` → `delegate`); `/help` lists them |
-| `session-name.ts` | Auto-generates session names from the first message (Claude Haiku) |
+| `anthropic-sub.ts` | Keeps Claude Max requests billed to the plan: scrubs the trigger phrases, sets the 1h/5m prompt-cache TTL, explains a refusal |
+| `prompt-cache.ts` | Keeps the Claude prompt cache warm while a turn or a background agent runs, and compacts from the cache |
+| `session-name.ts` | Auto-generates session names from the first message (DeepSeek Flash) |
 | `stats/` | `/stats` or `Ctrl+Shift+S` — usage analytics over every pi, Claude Code, Codex and OpenCode session on the machine, deduplicated across them: cost, tokens, cache hits and busts, models, tools, sub-agents, projects and commits, work rhythm, and a yearly-review card, with ▲/▼ vs the previous window, `h`/`p`/`o` harness, project and provider filters, a model leaderboard, cache-bust log and context pressure. Costs the harness did not record are priced from pi's own model catalog. `/stats` alone opens a menu; `/stats 7d` opens the view at a range, `/stats export [range]` writes markdown, `/stats budget <usd>` sets a monthly budget with a linear projection, `/stats widget on` shows today's spend under the editor |
+| `focus/` | `/focus`, `Ctrl+Shift+H` — the chat area shows only your prompts and the agent's answers, every prompt searchable |
+| `goal/` | `/goal` and the goal tools — a long-running goal, audited before it is marked done (vendored pi-codex-goal) |
+| `ideas/` | `/idea` — park an idea per project; `/idea` alone lists them |
 | `md-export.ts` | `/md` — exports this chat to readable markdown (clipboard or file); its menu picks tool calls, thinking, branch or whole session and how many turns |
 | `notify.ts` | Desktop notification when the agent finishes (OSC 777) |
-| `command-palette/` | `/help` or `Ctrl+Shift+P` — every command, shortcut, @mention and skill in one searchable list; enter runs ours and types pi's own into the prompt |
+| `command-palette/` | `/help` or `Ctrl+Shift+P` — every command, shortcut and skill in one searchable list; enter runs ours and types pi's own into the prompt |
 | `agents-ui/` | The background agents on screen: a dock above the editor while any run (`↓` on an empty editor to manage, `s` steer, `c` continue, `x` stop, `X` twice stops all), a full-screen view of one agent's conversation where typing steers or continues it (`Enter`, or `/agents <id>`), and `/agents` / `Ctrl+Shift+A` for the whole list |
 | `local-model.ts` | `/local` — start/stop the llama.cpp router and load/unload its model, without blocking pi |
-| `deepseek-peak/` | `/deepseek` — a peak/off-peak pricing clock in the editor border; `/deepseek off` is remembered |
+| `deepseek-peak/` | `/deepseek` — a peak/off-peak pricing clock in the editor border (Chinese public holidays are off-peak); `/deepseek off` is remembered. Its rules also price every DeepSeek reply made in peak hours at 2× |
 | `guardrails/` | Comment gate on `edit` / `write` (the behaviour rules themselves ship in the system prompt, not here) |
 | `theme-studio/` | `/theme`, `Ctrl+Shift+K` — live-preview a pi theme and the Ghostty theme/font/size; Esc reverts, Enter keeps; `/theme <name>` switches the pi theme directly |
 | `you-should-know/` | `/ysk` — a side agent on `deepseek-flash` that flags what you might have missed, and inlines what each sub-agent actually did as evidence. **Off until `/ysk on`**; under a cent per check (0.8¢ averaged over 14), and `/ysk status` shows what it has cost |
@@ -62,10 +66,10 @@ loader level turns one off.
 The `tools/` extension replaces pi's built-ins and adds new tools:
 
 **Replaced built-ins**: `read`, `ls`, `grep`, `find` (registers as `find`), `bash` — all with
-mutex locking, secret scrubbing, permission rules, and sub-agent compact modes.
+mutex locking, secret scrubbing and permission rules; sub-agents get the same read limits.
 `edit` / `write` are pi's own tools wrapped with undo tracking, permission rules, the shared
 file lock, Claude's field names and clearer errors (`edit-write.ts`).
-`format_file`, `skill`, `undo_edit` / `redo_edit` round out the replacements.
+`skill` and `undo_edit` / `redo_edit` round out the replacements.
 
 **Dedicated sub-agents** — each runs on the model and thinking level `agent-models.json` names
 for it; a call can pass `model` / `thinking` to override:
@@ -76,9 +80,12 @@ for it; a call can pass `model` / `thinking` to override:
 - `review_code` — bug review that verifies each finding, keeps nits and pre-existing bugs apart, re-reviews only what changed, and has quick / standard / deep levels
 - `delegate` — full resumable sub-agent for parallel independent work
 - `read_web_page` — static web page reader; `prompt` / `objective` spawn a Q&A / excerpt child
-- `read_session` — past-session reader
 
-**Other tools:** `search_sessions`, `screenshot`, `web_search` (Parallel AI).
+**Other tools:** `agents` (list, stop or wait for background agents), `read_session` (one reader
+model, no tools, reads a whole past session with secrets redacted), `search_sessions`, `screenshot`,
+`web_search` (Context.dev, then DeepSeek, then Parallel), `x_search` (X through the Grok CLI login),
+`ask` (questions to you in a picker), `codemode` (pi's built-in, on by default), and the goal tools
+`get_goal` / `create_goal` / `update_goal`.
 
 **New GitHub tools** (GitHub API): `read_github`, `search_github`, `list_directory_github`,
 `glob_github`, `list_repositories`, `commit_search`, `diff`
@@ -108,7 +115,7 @@ explains a refusal in plain words. Tool names stay as they are. Check it any tim
 anthropic-sub, default `claude-opus-5-5`), `deepseek/deepseek-flash` and
 `deepseek/deepseek-v4-pro` (`$DEEPSEEK_API_KEY`), `river/deepseek-ai/DeepSeek-V4.1-Flash`
 (`$RIVER_API_KEY`; same weights, flat 20% under DeepSeek's off-peak rate, no peak surcharge), and
-two openrouter models.
+one openrouter model (`z-ai/glm-5.3-flash`).
 
 | Provider | Access |
 |---|---|
@@ -133,8 +140,8 @@ and `install.sh` does not create them.
 
 ### Settings
 - Default provider/model: `anthropic` / `claude-opus-5-5` (thinking high)
-- Theme: gruvbox · Thinking: high · Compaction: **enabled** (pi's native LLM compaction)
-- Steering/follow-up: all · Quiet startup
+- Theme: gruvbox · Thinking: high · Compaction: **enabled**, read from the prompt cache by `prompt-cache.ts` (pi's own when in doubt)
+- Steering/follow-up: all · Quiet startup: header only
 
 ### Permissions
 - Blocks `git add -A` / `git add .` (forces explicit staging)
@@ -163,26 +170,34 @@ pi-setup/
 ├── mcp.json                    # MCP servers for pi's built-in client (~/.pi/agent/mcp.json)
 ├── build-extensions.ts         # Bundles each extension into one .js (run by install.sh)
 ├── verify-patches.sh           # Read-only audit of every patch/config
-├── extensions/                 # extensions + tools/ suite
+├── slim-sessions.ts            # Shrinks session files: drops images or slims kept sub-agent chats (--dry first)
+├── llama-local.sh              # Starts the llama.cpp router /local uses
+├── cache-diag.py  cache-report.py  edit-scoreboard.py   # prompt-cache and edit diagnostics
+├── extensions/                 # 19 extensions; tools/ holds the 31 tools (tests: bun test)
 │   ├── editor/                 # Custom TUI editor + cache line
 │   ├── command-palette/        # /help, Ctrl+Shift+P
 │   ├── agents-ui/              # background-agent dock, list and full-screen view
 │   ├── theme-studio/           # /theme — live theme + Ghostty preview
-│   ├── deepseek-peak/          # /deepseek — peak/off-peak clock
+│   ├── deepseek-peak/          # /deepseek — peak/off-peak clock and peak-hour pricing
+│   ├── focus/                  # /focus — prompts and answers only
+│   ├── goal/                   # /goal and the goal tools
+│   ├── ideas/                  # /idea — parked ideas
 │   ├── guardrails/             # edit/write comment gate
 │   ├── you-should-know/        # /ysk — side agent (off until asked)
-│   ├── tools/                  # custom tools + shared lib/ (tests run here: bun test)
+│   ├── tools/                  # custom tools + shared lib/
 │   ├── stats/                  # /stats — usage analytics dashboard
-│   ├── system-prompt.ts  mentions.ts  session-name.ts
+│   ├── system-prompt.ts  session-name.ts  anthropic-sub.ts  prompt-cache.ts
 │   └── md-export.ts  notify.ts  local-model.ts
 ├── agents/                     # system prompt, rules, sub-agent prompts
 ├── themes/                     # pi themes
-├── pi-skills/                  # pi-level skills (→ ~/.pi/agent/skills/); currently empty
 ├── config-skills/              # config skills (→ ~/.config/agents/skills/)
-├── pi-core-patches/            # 4 patched pi core files + the pi-tui width patch; patches.sh lists them
+├── pi-core-patches/            # 6 patched pi core files, the pi-tui width patch, the speed patches; patches.sh lists them
 ├── pi-bundle/                  # build-pi-bundle.mjs: pi's bundle recipe run on the patched files
+├── searchd/                    # the Rust index behind find and grep
+├── port-harness/               # benchmarks, prompt and review evals, the Claude-plan canary
+├── render-repro/               # reproduces TUI width smears
 ├── pi-migrations.md            # Per-update record. Read before updating pi
-├── 2026-*.md                   # Investigations: migrations, the bdsqqq port, MCP, cache, login
+├── 2026-*.md                   # Investigations: the Claude login, the prompt-cache drain
 └── README.md                   # This file
 ```
 

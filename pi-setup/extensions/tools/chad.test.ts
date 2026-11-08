@@ -17,7 +17,7 @@ describe("chad allowlist: read-only by construction", () => {
 	test("carries NO mutation tool of any kind", () => {
 		// the whole safety argument rests on this list. `bash` is present but
 		// gated by lib/read-only-bash.ts; everything here writes unconditionally.
-		for (const tool of ["edit", "write", "format_file", "undo_edit", "redo_edit"]) {
+		for (const tool of ["edit", "write", "undo_edit", "redo_edit"]) {
 			expect(allowlist).not.toContain(tool);
 		}
 	});

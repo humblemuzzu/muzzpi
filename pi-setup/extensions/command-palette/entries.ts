@@ -13,9 +13,9 @@ export interface BuiltinCommand {
 	description: string;
 }
 
-const SECTION_ORDER: readonly HelpSection[] = ["muzzpi", "pi", "prompts", "mentions", "skills"];
+const SECTION_ORDER: readonly HelpSection[] = ["muzzpi", "pi", "prompts", "skills"];
 
-/** Every command, prompt, skill and @mention this session has, in the order /help lists them. */
+/** Every command, prompt and skill this session has, in the order /help lists them. */
 export function buildEntries(commands: readonly CommandInfo[], builtins: readonly BuiltinCommand[], help: CollectedHelp): HelpEntry[] {
 	const entries: HelpEntry[] = [];
 	for (const command of commands) {
@@ -33,9 +33,6 @@ export function buildEntries(commands: readonly CommandInfo[], builtins: readonl
 	for (const builtin of builtins) {
 		entries.push({ section: "pi", name: `/${builtin.name}`, description: builtin.description, action: { kind: "type", text: `/${builtin.name}` } });
 	}
-	for (const mention of help.mentions) {
-		entries.push({ section: "mentions", name: mention.text, description: mention.description, action: { kind: "append", text: `${mention.text} ` } });
-	}
 	const rank = (entry: HelpEntry) => SECTION_ORDER.indexOf(entry.section);
 	return entries.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
@@ -45,8 +42,7 @@ export function editorTextFor(entry: HelpEntry, draft: string): string | undefin
 	const { action } = entry;
 	if (action.kind === "run") return undefined;
 	if (action.kind === "type") return draft.trim() ? undefined : action.text;
-	if (action.kind === "prefix") return `${action.text}${draft.trimStart()}`;
-	return draft.trim() ? `${draft.trimEnd()} ${action.text}` : action.text;
+	return `${action.text}${draft.trimStart()}`;
 }
 
 /** What enter will do, said under the list. */
@@ -54,6 +50,5 @@ export function describeAction(entry: HelpEntry): string {
 	const { action } = entry;
 	if (action.kind === "run") return `enter runs ${entry.name}`;
 	if (action.kind === "type") return `enter puts ${action.text} in the prompt; press enter again to run it`;
-	if (action.kind === "prefix") return `enter starts your message with ${entry.name}`;
-	return `enter adds ${entry.name} to your message`;
+	return `enter starts your message with ${entry.name}`;
 }

@@ -34,7 +34,7 @@ export interface Case {
 }
 
 const EXTENSIONS = path.join(os.homedir(), ".pi", "agent", "extensions");
-const WRITERS = new Set(["edit", "write", "undo_edit", "redo_edit", "format_file"]);
+const WRITERS = new Set(["edit", "write", "undo_edit", "redo_edit"]);
 
 /**
  * Sonnet on low thinking answers one YES/NO question about a text; never sees the case's intent.

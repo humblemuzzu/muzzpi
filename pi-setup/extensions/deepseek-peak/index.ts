@@ -23,6 +23,8 @@ import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/comm
 import { prefsFile, readPrefs, writePrefs } from "../tools/lib/prefs";
 import {
 	EFFECTIVE_FROM_MS,
+	HOLIDAYS_KNOWN_THROUGH,
+	PEAK_MULTIPLIER,
 	PEAK_WINDOWS_UTC,
 	PRICES,
 	computeState,
@@ -95,12 +97,15 @@ function buildReport(now: Date, ctx: ExtensionContext | null): string {
 	}
 
 	lines.push(``);
-	lines.push(`   peak hours (2× price) — weekdays only`);
+	lines.push(`   peak hours (2× price) — weekdays only, never on a Chinese public holiday`);
 	PEAK_WINDOWS_UTC.forEach(([s, e], i) => {
 		const utc = `${String(s).padStart(2, "0")}:00–${String(e).padStart(2, "0")}:00 UTC`;
 		lines.push(`     ${utc}   =  ${windows[i]} ${tz}`);
 	});
-	lines.push(`   weekends (Beijing Sat/Sun) are entirely off-peak.`);
+	lines.push(`   weekends (Beijing Sat/Sun) and Chinese public holidays are entirely off-peak.`);
+	if (now.getUTCFullYear() > HOLIDAYS_KNOWN_THROUGH) {
+		lines.push(`   ⚠ holidays are listed only through ${HOLIDAYS_KNOWN_THROUGH}: add the State Council's notice for ${now.getUTCFullYear()} to deepseek-peak/peak.ts.`);
+	}
 
 	lines.push(``);
 	lines.push(`   $ per 1M tokens        cache-hit   cache-miss   output`);
@@ -110,7 +115,7 @@ function buildReport(now: Date, ctx: ExtensionContext | null): string {
 			`     ${pad} off-peak   ${p.cacheHit.toFixed(3).padStart(8)}   ${p.cacheMiss.toFixed(2).padStart(10)}   ${p.output.toFixed(2).padStart(6)}`,
 		);
 		lines.push(
-			`     ${" ".repeat(9)} peak       ${(p.cacheHit * 2).toFixed(3).padStart(8)}   ${(p.cacheMiss * 2).toFixed(2).padStart(10)}   ${(p.output * 2).toFixed(2).padStart(6)}`,
+			`     ${" ".repeat(9)} peak       ${(p.cacheHit * PEAK_MULTIPLIER).toFixed(3).padStart(8)}   ${(p.cacheMiss * PEAK_MULTIPLIER).toFixed(2).padStart(10)}   ${(p.output * PEAK_MULTIPLIER).toFixed(2).padStart(6)}`,
 		);
 	}
 

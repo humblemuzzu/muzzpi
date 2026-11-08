@@ -24,7 +24,6 @@ const SECTION_TITLE: Record<HelpSection, string> = {
 	muzzpi: "muzzpi",
 	pi: "pi",
 	prompts: "prompts",
-	mentions: "@mentions · add one to your message",
 	skills: "skills · start a message with one",
 };
 
@@ -46,7 +45,7 @@ function typed(data: string): string | undefined {
 	return [...data].every((ch) => ch >= " " && ch !== "\x7f") ? data : undefined;
 }
 
-/** /help: every command, shortcut, @mention and skill, searchable; enter runs or types the highlighted one. */
+/** /help: every command, shortcut and skill, searchable; enter runs or types the highlighted one. */
 export class HelpView implements Focusable {
 	focused = false;
 	private search = "";
@@ -162,7 +161,7 @@ export class HelpView implements Focusable {
 		const rule = (left: string, right: string) => border(`${left}${"─".repeat(inner)}${right}`);
 
 		const cursor = this.focused ? `${CURSOR_MARKER}${t.fg("accent", "▏")}` : t.fg("dim", "▏");
-		const placeholder = this.search ? "" : t.fg("dim", "search commands, shortcuts and @mentions");
+		const placeholder = this.search ? "" : t.fg("dim", "search commands, shortcuts and skills");
 		const lines = [rule("╭", "╮"), row(` ${t.fg("accent", "❯")} ${t.fg("text", oneLine(this.search))}${cursor}${placeholder}`), rule("├", "┤")];
 
 		if (this.shown.length === 0) {

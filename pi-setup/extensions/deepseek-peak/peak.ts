@@ -8,12 +8,12 @@
  * way this can be wrong is if the system clock itself is wrong, and a time API
  * would not fix that for any other program on the machine either.
  *
- * SOURCE OF THE NUMBERS (2026-09-10):
- *   https://api-docs.deepseek.com/quick_start/pricing — DeepSeek-V4.1-Flash
+ * SOURCE OF THE NUMBERS (2026-11-08):
+ *   https://api-docs.deepseek.com/quick_start/pricing.md — DeepSeek-V4.1-Flash
  *   (`deepseek-flash`) off-peak: cache-hit $0.003, cache-miss $0.15,
- *   output $0.6 per 1M tokens. Peak = 2× off-peak. Peak hours still
- *   01:00-04:00 and 06:00-10:00 UTC Mon–Fri; weekends (Beijing Sat/Sun)
- *   remain all off-peak. V4 Pro retires 2026-09-14 12:00 Beijing.
+ *   output $0.6 per 1M tokens. Peak = 2× off-peak. Peak hours
+ *   01:00-04:00 and 06:00-10:00 UTC Mon–Fri, "excluding Chinese public
+ *   holidays"; weekends and those holidays are off-peak in full.
  *
  * Corroborated independently: those windows are Beijing (UTC+8) 09:00-12:00
  * and 14:00-18:00, i.e. Chinese office hours — 01+8=09, 04+8=12, 06+8=14,
@@ -38,6 +38,31 @@ const MS_HOUR = 60 * MS_MIN;
 
 /** Beijing is UTC+8 with no DST — the weekend rule is defined in Beijing time. */
 const BEIJING_OFFSET_MS = 8 * MS_HOUR;
+
+/**
+ * China's public-holiday rest days, as Beijing dates, from the State Council's
+ * notices of 2025-11-04 (2026) and 2026-11-05 (2027). Each November the next
+ * year's notice must be added here, or its holidays read as peak.
+ */
+const CHINA_HOLIDAYS: ReadonlyArray<readonly [first: string, last: string]> = [
+	["2026-01-01", "2026-01-03"],
+	["2026-02-15", "2026-02-23"],
+	["2026-04-04", "2026-04-06"],
+	["2026-05-01", "2026-05-05"],
+	["2026-06-19", "2026-06-21"],
+	["2026-09-25", "2026-09-27"],
+	["2026-10-01", "2026-10-07"],
+	["2027-01-01", "2027-01-03"],
+	["2027-02-05", "2027-02-13"],
+	["2027-04-03", "2027-04-05"],
+	["2027-05-01", "2027-05-05"],
+	["2027-06-09", "2027-06-09"],
+	["2027-09-15", "2027-09-15"],
+	["2027-10-01", "2027-10-07"],
+];
+
+/** the last year whose holidays are listed; past it, holidays cannot be told from workdays */
+export const HOLIDAYS_KNOWN_THROUGH = 2027;
 
 export type Phase = "pre-launch" | "peak" | "off-peak";
 
@@ -67,8 +92,21 @@ function isBeijingWeekend(now: Date): boolean {
 	return day === 0 || day === 6;
 }
 
+export function isChinaHoliday(now: Date): boolean {
+	const date = new Date(now.getTime() + BEIJING_OFFSET_MS).toISOString().slice(0, 10);
+	return CHINA_HOLIDAYS.some(([first, last]) => date >= first && date <= last);
+}
+
+/** what DeepSeek charges in peak hours, as a multiple of its off-peak rates */
+export const PEAK_MULTIPLIER = 2;
+
+/** the multiple of off-peak rates a request made at `at` is billed at: flat before the scheme began */
+export function priceMultiplierAt(at: Date): number {
+	return at.getTime() >= EFFECTIVE_FROM_MS && isPeakAt(at) ? PEAK_MULTIPLIER : 1;
+}
+
 export function isPeakAt(now: Date): boolean {
-	if (now.getTime() >= WEEKEND_OFFPEAK_FROM_MS && isBeijingWeekend(now)) {
+	if (now.getTime() >= WEEKEND_OFFPEAK_FROM_MS && (isBeijingWeekend(now) || isChinaHoliday(now))) {
 		return false;
 	}
 	const t = msOfUtcDay(now);
@@ -106,7 +144,7 @@ export function computeState(now: Date = new Date()): PeakState {
 		phase: peak ? "peak" : "off-peak",
 		msUntilChange: nextMs - now.getTime(),
 		next: peak ? "off-peak" : "peak",
-		multiplier: peak ? 2 : 1,
+		multiplier: peak ? PEAK_MULTIPLIER : 1,
 	};
 }
 

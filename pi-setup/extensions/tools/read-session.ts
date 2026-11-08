@@ -12,6 +12,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { emptyAgentModels, mainRoute, modelParams, resolveRoute, type AgentModels, type ThinkingLevel } from "./lib/agent-models";
 import { scrubAnthropicPayload } from "./lib/anthropic-sub";
+import { peakPriced } from "./lib/deepseek-cost";
 import { zeroUsage, type UsageStats } from "./lib/pi-spawn";
 import { makeScrubber } from "./lib/psst";
 import { RepetitionWatch } from "./lib/repetition";
@@ -111,7 +112,8 @@ async function ask(reader: Reader, text: string, onText?: (text: string) => void
 					controller.abort();
 				}
 			}
-			const message: AssistantMessage = await stream.result();
+			const reply: AssistantMessage = await stream.result();
+			const message = peakPriced(reply, reader.model) ?? reply;
 			addUsage(reader.usage, message);
 			if (!looped || reader.signal?.aborted) return message;
 			if (attempt >= LOOP_RETRIES) return { ...message, stopReason: "error", errorMessage: `the reader's reply kept repeating itself (${attempt + 1} tries)` };

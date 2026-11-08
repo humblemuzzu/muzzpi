@@ -235,7 +235,7 @@ fi
 
 # None of these block the install; each one turns off one feature. The tools
 # come from Homebrew, so they are named once, with one line that installs them.
-[ -n "${DEEPSEEK_API_KEY:-}" ] || warn "DEEPSEEK_API_KEY not set: chad, finder, librarian, read_session and read_web_page fall back to your main model (edit agent-models.json to change)"
+[ -n "${DEEPSEEK_API_KEY:-}" ] || warn "DEEPSEEK_API_KEY not set: chad, finder, librarian, read_session, read_web_page and session naming fall back to your main model (agent-models.json picks the agents' models), and /ysk cannot run"
 [ -n "${CONTEXT_DEV_API_KEY:-}${DEEPSEEK_API_KEY:-}${PARALLEL_API_KEY:-}" ] || warn "no web search key set (CONTEXT_DEV_API_KEY, DEEPSEEK_API_KEY or PARALLEL_API_KEY): web_search will refuse until one is"
 [ -s "$HOME/.grok/auth.json" ] || warn "no Grok CLI login (~/.grok/auth.json): x_search stays off until you run grok login"
 missing=""
@@ -269,7 +269,7 @@ run mkdir -p "$CONFIG_SKILLS"
 info "Building and installing extensions..."
 EXT_LIVE="$PI_AGENT/extensions"
 EXT_OLD="$EXT_LIVE$BACKUP_SUFFIX"
-RETIRED_EXTENSIONS="subagent-inspector cache-compaction.js"
+RETIRED_EXTENSIONS="subagent-inspector cache-compaction.js mentions.js"
 if [ -d "$EXT_LIVE" ]; then
     run mv "$EXT_LIVE" "$EXT_OLD"
     warn "Backed up extensions to $(basename "$EXT_OLD")"

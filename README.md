@@ -7,8 +7,8 @@ that research, review and build in parallel. Web, GitHub and screenshot tools.
 Edits you can undo. A TUI built for all-day sessions. And a pi that starts as
 fast as stock, with every patch inside.
 
-**36** tools · **6** sub-agents · **19** MCP servers · **14** skills ·
-**0.27 s** to a ready prompt · on stock pi **1.3.0**
+**35** tools · **6** sub-agents · **20** MCP servers · **14** skills ·
+**0.24 s** to start with every extension · on stock pi **1.5.0**
 
 ```bash
 git clone https://github.com/humblemuzzu/muzzpi.git && cd muzzpi
@@ -32,11 +32,11 @@ The last 30 days, one machine:
 
 | | |
 |---|---|
-| Sessions | **196**, on 29 of the 30 days |
-| Tool calls | **18,905** |
-| Sub-agent runs | **1,016**: delegate 479 · chad 249 · read_web_page 103 · review_code 100 · oracle 23 · librarian 21 · read_session 21 · finder 20 |
-| Screenshots | 270 |
-| Web searches | 99 |
+| Sessions | **148**, on all 30 days |
+| Tool calls | **28,396** |
+| Sub-agent runs | **1,154**: delegate 557 · chad 405 · review_code 91 · read_web_page 66 · librarian 21 · oracle 7 · finder 7 |
+| Screenshots | 412 |
+| Web searches | 77 |
 
 Every number in this README comes from the repo, those sessions, or a benchmark
 on an M4 Pro (48 GB, macOS 27).
@@ -51,7 +51,10 @@ on an M4 Pro (48 GB, macOS 27).
 | `pi --version` | 269 ms | **111 ms** |
 | Memory per pi process | 163 MB | **138 MB** |
 
-Medians of 11–15 runs, alternated between versions so load hits both equally.
+Medians of 11–15 runs, alternated between versions so load hits both equally,
+measured on pi 1.3.0 with 17 extensions. On pi 1.5.0 with all 19
+([`perf-baseline.ts`](pi-setup/port-harness/perf-baseline.ts), median of 11): a full
+start takes 236 ms and a sub-agent 190 ms.
 
 - **pi's own build recipe, on our patched files.** pi ships a fast prebuilt
   copy of itself, but it was built before any patch, so a patched pi had to run
@@ -62,8 +65,8 @@ Medians of 11–15 runs, alternated between versions so load hits both equally.
   when pi changes its recipe.
 - **MCP servers connect when first used.** Stock pi connects every server at
   startup; its own prebuilt copy takes 733 ms to start with this setup.
-- **Each extension ships as one prebuilt file.** Sub-agents load the 4 they need,
-  not all 17.
+- **Each extension ships as one prebuilt file.** Sub-agents load the 5 they need,
+  not all 19.
 - **Every transcript row caches its render.** A 700k-token session types at
   10 ms per keystroke; it was 180.
 - **Long replies and long sessions stay light.** A streaming reply is lexed
@@ -155,7 +158,6 @@ Pick by what you need back:
   command that mutates. Finding out is chad; doing is delegate.
 - **No fork bombs.** Only delegate can start another agent (finder). A chad swarm cannot spawn a swarm.
 - **A stalled child is killed, never left hanging**: 900 s without output.
-- `@oracle`, `@chad`, `@finder`, `@codereview`, `@task` in a message force that agent.
 
 ## 02 · Edits you can take back
 
@@ -195,12 +197,12 @@ Pick by what you need back:
   sub-agent answer in full, secrets redacted first.
 - **`ask`** puts the agent's open questions to you in a picker.
 
-## 05 · Codemode and 19 MCP servers
+## 05 · Codemode and 20 MCP servers
 
 **codemode** runs one script that makes dozens of tool calls, and reaches the
 MCP servers too: Chrome DevTools (isolated, telemetry off), Cloudflare, Paper,
-Astro. 6 are on by default and connect only when a script names them; `/mcp`
-turns on the other 13.
+Astro, Xcode builds. 7 are on by default and connect only when a script names
+them; `/mcp` turns on the other 13.
 
 ## 06 · Claude Max, billed to the plan
 
@@ -228,7 +230,7 @@ mentions a token stays readable.
 
 - A box-drawn editor with model, context and git branch on the border, and a
   cache line under it: hit rate, reads, writes.
-- `/help` lists every command, shortcut and @mention in one searchable list and
+- `/help` lists every command, shortcut and skill in one searchable list and
   runs what you pick. Every command typed on its own opens a small menu that says
   where things stand and what each choice does; words after it are suggested as
   you type, and settings you change are remembered across sessions.
@@ -238,13 +240,14 @@ mentions a token stays readable.
 - `/theme`: preview pi themes **and** your Ghostty theme, font, cursor and
   opacity live. Esc reverts, Enter keeps.
 - A dock for the agents running in the background and a full-screen view of any one's conversation, pinned sessions,
-  auto-named sessions, desktop notifications, a DeepSeek peak-price clock.
+  sessions named by DeepSeek Flash, desktop notifications, and a DeepSeek peak-price
+  clock; DeepSeek replies made in peak hours are costed at its 2× rate.
 - Hindi, Bengali and emoji cannot smear the screen: pi-tui is patched to never
   undercount a character's width.
 
 | Command | Key | Does |
 |---|---|---|
-| `/help` | `Ctrl+Shift+P` | every command, shortcut and @mention, searchable; enter runs it |
+| `/help` | `Ctrl+Shift+P` | every command, shortcut and skill, searchable; enter runs it |
 | `/stats` | `Ctrl+Shift+S` | usage dashboard, reports, a monthly budget |
 | `/theme` | `Ctrl+Shift+K` | live theme and Ghostty preview; `/theme <name>` switches straight away |
 | `/hud` | `Ctrl+Shift+I` | more detail under the prompt |
@@ -269,7 +272,7 @@ mentions a token stays readable.
 
 | | |
 |---|---|
-| Files | `read` · `edit` · `write` · `undo_edit` · `redo_edit` · `grep` · `find` · `ls` · `format_file` |
+| Files | `read` · `edit` · `write` · `undo_edit` · `redo_edit` · `grep` · `find` · `ls` |
 | Shell | `bash` · `codemode` |
 | Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `review_code` · `agents` |
 | Web | `web_search` · `x_search` · `read_web_page` |
@@ -281,9 +284,9 @@ mentions a token stays readable.
 
 ## Stock pi vs muzzpi
 
-| | stock pi 1.3 | muzzpi |
+| | stock pi 1.5 | muzzpi |
 |---|---|---|
-| Tools on by default | 4: `read`, `bash`, `edit`, `write` | 34 |
+| Tools on by default | 4: `read`, `bash`, `edit`, `write` | 35 |
 | Sub-agents | none, by design | 6, each on its own model |
 | Edits | `edit` + `write` | the same tools, plus undo across restarts, permission rules, a comment gate |
 | Bash | timeout optional | timeout required, hung commands killed |
@@ -291,11 +294,11 @@ mentions a token stays readable.
 | Web, GitHub, screen | none | built in |
 | Secrets in tool output | sent as is | scrubbed |
 | Search | `rg` per call | an index: milliseconds across `~` and the whole Mac |
-| Start | 0.16 s with no extensions | 0.21 s with all 17 |
+| Start | 0.16 s with no extensions | 0.24 s with all 19 |
 
 ## How it stays working
 
-pi moves fast. 17 releases, from 0.82 to 1.3, each have a written
+pi moves fast. 19 releases, from 0.82 to 1.5, each have a written
 [migration record](pi-setup/pi-migrations.md); muzzpi started on 0.67.
 
 ```bash
@@ -373,7 +376,7 @@ missing:
 | | turns on |
 |---|---|
 | `/login anthropic` in pi | Claude, the default model |
-| `DEEPSEEK_API_KEY` | cheap sub-agents (chad, finder, librarian, read_session, read_web_page); without it they run on your main model |
+| `DEEPSEEK_API_KEY` | cheap sub-agents (chad, finder, librarian, read_web_page), `read_session` and session names, which run on your main model without it; `/ysk` needs it |
 | `RIVER_API_KEY` | DeepSeek V4.1 Flash via River, cheaper in DeepSeek's peak hours |
 | `CONTEXT_DEV_API_KEY`, `DEEPSEEK_API_KEY`, `PARALLEL_API_KEY` | `web_search`, which uses whichever are set, in that order |
 | `grok login` (Grok CLI, SuperGrok or X Premium+) | `x_search` |
@@ -403,11 +406,11 @@ muzzpi/
 ├── install.sh              ./install.sh pi | ghostty | herdr-ghostty | herdr-app
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
-│   ├── extensions/         19 extensions; tools/ holds the 32 tools
+│   ├── extensions/         19 extensions; tools/ holds the 31 tools
 │   ├── agents/             system prompt, working rules, sub-agent prompts
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do
-│   ├── pi-core-patches/    4 patched pi files + the pi-tui width patch
+│   ├── pi-core-patches/    6 patched pi files, the pi-tui width patch, the speed patches
 │   ├── pi-bundle/          pi's build recipe, run on the patched files
 │   ├── searchd/            the search index daemon behind find and grep
 │   ├── config-skills/      14 skills

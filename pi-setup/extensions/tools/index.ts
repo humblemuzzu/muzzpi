@@ -2,7 +2,7 @@
  * tools extension — custom tool implementations for pi.
  *
  * replaces pi's built-in tools with versions that add:
- * - file mutex locking (edit, write, bash, format_file, undo_edit)
+ * - file mutex locking (edit, write, bash, undo_edit)
  * - file change tracking for undo_edit (disk-persisted, branch-aware)
  *
  * file changes persist to ~/.pi/file-changes/{sessionId}/ as JSON files
@@ -10,20 +10,18 @@
  * 30 s after start). branch awareness comes from the conversation
  * tree — tool call IDs in assistant messages are inherently branch-scoped.
  *
- * PI_READ_COMPACT=1 switches read/ls to tighter limits for sub-agents.
  * shared infrastructure lives in ./lib/.
  */
 
 import type { ExtensionAPI, Skill } from "@mariozechner/pi-coding-agent";
 import { matchesKey } from "@mariozechner/pi-tui";
-import { createReadTool, NORMAL_LIMITS, COMPACT_LIMITS } from "./read";
+import { createReadTool, NORMAL_LIMITS } from "./read";
 import { createLsTool } from "./ls";
 import { createEditTool, createWriteTool } from "./edit-write";
 import { createGrepTool } from "./grep";
 import { createGlobTool } from "./glob";
 import { createBashTool } from "./bash";
 import { createRedoEditTool, createUndoEditTool } from "./undo-edit";
-import { createFormatFileTool } from "./format-file";
 import { createSkillTool } from "./skill";
 import { isLocalProvider } from "./lib/local-providers";
 import { createScreenshotTool } from "./screenshot";
@@ -68,9 +66,9 @@ import { registerRetiredCommands } from "./retired-commands";
 import { requestApproval } from "./lib/approval";
 import { setBlockedReporter } from "./lib/choice-dialog";
 import { describeMcpCall, destructiveMcpReason, mcpCallOf } from "./lib/destructive-mcp";
+import { peakPriced } from "./lib/deepseek-cost";
 
 export default function (pi: ExtensionAPI) {
-	const limits = process.env.PI_READ_COMPACT ? COMPACT_LIMITS : NORMAL_LIMITS;
 	// read once: the schema enums and the resolver must agree for the whole session.
 	const models = loadAgentModels();
 	const runs = new AgentRuns({
@@ -80,8 +78,8 @@ export default function (pi: ExtensionAPI) {
 		record: (entry) => pi.appendEntry(AGENT_RUN_ENTRY, entry),
 	});
 
-	pi.registerTool(createReadTool(limits));
-	pi.registerTool(createLsTool(limits));
+	pi.registerTool(createReadTool(NORMAL_LIMITS));
+	pi.registerTool(createLsTool(NORMAL_LIMITS));
 	// same names as pi's built-ins, so these replace them.
 	pi.registerTool(createEditTool());
 	pi.registerTool(createWriteTool());
@@ -92,7 +90,6 @@ export default function (pi: ExtensionAPI) {
 	// redo is only safe because it refuses when the file moved on since the
 	// undo; see the invalidation check in undo-edit.ts.
 	pi.registerTool(createRedoEditTool());
-	pi.registerTool(createFormatFileTool());
 	let skills: readonly Skill[] = [];
 	pi.on("before_agent_start", (event) => {
 		skills = event.systemPromptOptions.skills ?? [];
@@ -216,6 +213,14 @@ export default function (pi: ExtensionAPI) {
 			ctx.signal,
 		);
 		return answer.approved ? undefined : { block: true, reason: answer.message, terminate: answer.stop };
+	});
+
+	// children load this extension too, so their replies are priced before the parent sums them
+	pi.on("message_end", (event, ctx) => {
+		const message = event.message;
+		if (message.role !== "assistant") return undefined;
+		const priced = peakPriced(message, ctx.modelRegistry.find(message.provider, message.model));
+		return priced ? { message: priced } : undefined;
 	});
 
 	// ── psst secret management hooks ──────────────────────────

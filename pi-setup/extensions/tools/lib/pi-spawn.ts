@@ -467,7 +467,6 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		stdio: ["pipe", "pipe", "pipe"],
 		env: {
 			...process.env,
-			PI_READ_COMPACT: "1",
 			...(config.session ? { [HOLDER_ENV]: config.session.id } : {}),
 			// the same list as --tools: system-prompt.ts names exactly these to the child
 			...(requestedTools.length > 0 ? { [SUB_AGENT_TOOLS_ENV]: requestedTools.join(",") } : {}),

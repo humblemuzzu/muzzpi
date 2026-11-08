@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { completeWords, findWord, splitArgs, type Word } from "../tools/lib/command-args";
 import { canShowMenu, type MenuItem, menuAsText, showMenu } from "../tools/lib/command-menu";
+import { peakPriced } from "../tools/lib/deepseek-cost";
 import { contributeHelp } from "../tools/lib/help-channel";
 import { YSK_PROMPT_PREFIX } from "../tools/lib/injected-prompts";
 import {
@@ -247,7 +248,7 @@ export default function (pi: ExtensionAPI) {
 			"stating the takeaway, then a plain-English explainer of at most 120 words.",
 			"Output only the explanation.",
 		].join("\n");
-		const result = await ctx.modelRegistry.complete(
+		const reply = await ctx.modelRegistry.complete(
 			model,
 			{
 				messages: [
@@ -257,6 +258,7 @@ export default function (pi: ExtensionAPI) {
 			},
 			{ signal, sessionId: ctx.sessionManager.getSessionId() },
 		);
+		const result = peakPriced(reply, model) ?? reply;
 		logCheck({ ts: new Date().toISOString(), outcome: "explained", cost: result.usage.cost.total });
 		return textOf(result) || note.line;
 	};
@@ -390,11 +392,12 @@ export default function (pi: ExtensionAPI) {
 					timestamp: Date.now(),
 				},
 			];
-			const result = await ctx.modelRegistry.complete(
+			const reply = await ctx.modelRegistry.complete(
 				model,
 				{ messages },
 				{ signal: controller.signal, sessionId: ctx.sessionManager.getSessionId() },
 			);
+			const result = peakPriced(reply, model) ?? reply;
 			usage = {
 				input: result.usage.input,
 				cacheRead: result.usage.cacheRead,

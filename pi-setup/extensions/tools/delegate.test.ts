@@ -20,10 +20,10 @@ describe("delegate tool allowlist", () => {
 		}
 	});
 
-	test("keeps the mutation toolset: read, grep, find, ls, bash, edit, write, format_file, skill, finder", () => {
+	test("keeps the mutation toolset: read, grep, find, ls, bash, edit, write, skill, finder", () => {
 		for (const tool of [
 			"read", "grep", "find", "ls", "bash",
-			"edit", "write", "format_file", "skill", "finder",
+			"edit", "write", "skill", "finder",
 		]) {
 			expect(allowlist).toContain(tool);
 		}

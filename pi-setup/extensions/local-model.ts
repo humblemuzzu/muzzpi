@@ -38,7 +38,6 @@ Tools (schemas also in the API):
 - write — create or overwrite a whole file
 - grep / find / ls — search and list
 - undo_edit / redo_edit — revert or redo last edit
-- format_file — prettier/biome
 - skill — load a named skill
 - web_search / read_web_page — web; x_search — posts on X
 - screenshot — screen/window/url capture

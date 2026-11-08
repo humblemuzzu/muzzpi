@@ -515,7 +515,7 @@ function contextAlert(percent: number): Alert {
 }
 
 /** Tools that can change the working tree, so the diff summary refreshes after them. */
-const WRITING_TOOLS = new Set(["edit", "write", "bash", "undo_edit", "redo_edit", "format_file"]);
+const WRITING_TOOLS = new Set(["edit", "write", "bash", "undo_edit", "redo_edit"]);
 const CHANGES_DEBOUNCE_MS = 1500;
 
 const HUD_SHORTCUT = "ctrl+shift+i";

@@ -1,5 +1,5 @@
 /**
- * per-path async mutex shared by edit, write, bash, format_file and undo_edit.
+ * per-path async mutex shared by edit, write, bash and undo_edit.
  *
  * keyed by resolved absolute path — two relative paths pointing to the same
  * file share one lock. pi's edit/write also take pi's own mutation queue

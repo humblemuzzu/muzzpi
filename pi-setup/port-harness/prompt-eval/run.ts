@@ -111,7 +111,6 @@ function piArgs(c: Case, variantDir: string, workspace: string): { args: string[
 	const promptFile = `${workspace}.agent.md`;
 	fs.writeFileSync(promptFile, interpolatePromptVars(body, workspace, { sessionId: "eval" }));
 	env.PI_SUBAGENT_TOOLS = child.tools.join(",");
-	env.PI_READ_COMPACT = "1";
 	if (child.readOnlyBash) env.PI_BASH_READ_ONLY = "1";
 	return {
 		args: [...base, "--model", child.model, "--thinking", "low", "--tools", child.tools.join(","), "--append-system-prompt", promptFile],

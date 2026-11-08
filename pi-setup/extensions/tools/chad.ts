@@ -32,7 +32,7 @@ import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-
 import { firstLine } from "./lib/sub-agent-render";
 
 /*
- * NO mutation tool of any kind: no edit, no write, no format_file, no undo_edit.
+ * NO mutation tool of any kind: no edit, no write, no undo_edit.
  * `bash` is present but runs under the read-only policy.
  *
  * `screenshot` is in — grok sees images. `oracle`/`finder`/`librarian` are out

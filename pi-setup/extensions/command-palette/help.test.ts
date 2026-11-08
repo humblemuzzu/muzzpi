@@ -9,7 +9,7 @@ import { HelpView } from "./palette";
 import type { HelpEntry } from "./types";
 
 const plain = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
-const help = { shortcuts: new Map([["stats", "ctrl+shift+s"]]), mentions: [{ text: "@oracle", description: "expert advisor" }] };
+const help = { shortcuts: new Map([["stats", "ctrl+shift+s"]]) };
 const commands = [
 	{ name: "stats", description: "Usage and spend", source: "extension", sourceInfo: { source: "local" } },
 	{ name: "help", description: "this list", source: "extension", sourceInfo: { source: "local" } },
@@ -30,18 +30,16 @@ describe("entries", () => {
 			"pi /mcp",
 			"pi /model",
 			"prompts /fix-tests",
-			"mentions @oracle",
 			"skills /skill:git",
 		]);
 	});
 
-	test("extension commands run; pi's own are typed; skills and prompts start the message; mentions are added", () => {
+	test("extension commands run; pi's own are typed; skills and prompts start the message", () => {
 		const by = (name: string) => entries.find((e) => e.name === name)!;
 		expect(by("/stats")).toMatchObject({ key: "ctrl+shift+s", action: { kind: "run", command: "stats" } });
 		expect(by("/mcp").action).toEqual({ kind: "run", command: "mcp" });
 		expect(by("/model").action).toEqual({ kind: "type", text: "/model" });
 		expect(by("/skill:git").action).toEqual({ kind: "prefix", text: "/skill:git " });
-		expect(by("@oracle").action).toEqual({ kind: "append", text: "@oracle " });
 	});
 
 	test("a draft is never typed over", () => {
@@ -49,8 +47,6 @@ describe("entries", () => {
 		expect(editorTextFor(by("/model"), "")).toBe("/model");
 		expect(editorTextFor(by("/model"), "half a thought")).toBeUndefined();
 		expect(editorTextFor(by("/skill:git"), "  commit this")).toBe("/skill:git commit this");
-		expect(editorTextFor(by("@oracle"), "review the plan ")).toBe("review the plan @oracle ");
-		expect(editorTextFor(by("@oracle"), "")).toBe("@oracle ");
 		expect(editorTextFor(by("/stats"), "")).toBeUndefined();
 	});
 
@@ -58,7 +54,6 @@ describe("entries", () => {
 		const by = (name: string) => entries.find((e) => e.name === name)!;
 		expect(describeAction(by("/stats"))).toBe("enter runs /stats");
 		expect(describeAction(by("/model"))).toBe("enter puts /model in the prompt; press enter again to run it");
-		expect(describeAction(by("@oracle"))).toBe("enter adds @oracle to your message");
 	});
 });
 
@@ -85,7 +80,6 @@ describe("the view", () => {
 		const lines = open().view.render(80);
 		const text = lines.join("\n");
 		expect(text).toContain(" muzzpi");
-		expect(text).toContain(" @mentions · add one to your message");
 		expect(lines.find((l) => l.includes("/stats"))!.trimEnd().endsWith("ctrl+shift+s │")).toBe(true);
 		expect(text).toContain("enter runs /agents");
 		for (const line of lines) expect(visibleWidth(line)).toBe(80);

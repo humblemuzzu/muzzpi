@@ -17,7 +17,6 @@
     "~/.pi/agent/extensions/theme-studio",
     "~/.pi/agent/extensions/stats",
     "~/.pi/agent/extensions/notify.js",
-    "~/.pi/agent/extensions/mentions.js",
     "~/.pi/agent/extensions/anthropic-sub.js",
     "~/.pi/agent/extensions/prompt-cache.js",
     "~/.pi/agent/extensions/goal",

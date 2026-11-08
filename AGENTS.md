@@ -64,7 +64,10 @@ Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
 
 `/model` shows only `settings.json` `enabledModels`; the rest of the catalog
 stays hidden. DeepSeek's `deepseek-flash` always serves its newest release, so it
-needs no update; `models.json` only sets its off-peak cost.
+needs no update; `models.json` only sets its off-peak cost. pi prices every reply at that one rate, so
+tools' `message_end` hook (`lib/deepseek-cost.ts`, children load it too) re-prices a DeepSeek reply made
+in peak hours at 2× (`deepseek-peak/peak.ts` `priceMultiplierAt`); a direct `modelRegistry` call gets no
+`message_end`, so `read_session` and `/ysk` call `peakPriced` themselves, and so must any new one.
 
 **Claude-plan billing.** An OAuth request whose system prompt holds the phrases
 in `tools/lib/anthropic-sub.ts` bills as extra usage (here a 400). **Tool names count too**:
@@ -244,15 +247,14 @@ holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
 | `system-prompt.ts` | parent template / sub-agent generated prompt |
 | `anthropic-sub.ts` | Claude-plan billing: scrubs the trigger phrases, the 1h/5m cache TTL, warns on a refusal, `PI_ANTHROPIC_PAYLOAD_LOG` feeds `cache-diag.py`. Parent and children |
 | `prompt-cache.ts` | the cache keep-alive and compaction read from the cache (see Prompt cache). Keep-alive in parent and children, compaction parent only; `PI_CACHE_COMPACTION_MAX_AGE_SEC` overrides compaction's age limit |
-| `mentions.ts` | @mentions + agent directives |
-| `session-name.ts` | auto session naming (haiku, deliberately; a direct model call, not a sub-agent) |
+| `session-name.ts` | auto session naming on DeepSeek Flash, thinking off (`ctx.modelRegistry.complete`; the main model without a DeepSeek key) |
 | `stats/` | `/stats`, Ctrl+Shift+S — analytics over pi, Claude Code, Codex and OpenCode sessions + git. Per-harness ledgers in `<agent dir>/cache/stats` keep sessions whose source is gone (Claude prunes after 30 days): never delete them casually. Bump `ledger.ts` `VERSION` when a parser's output changes. OpenCode is read via the `sqlite3` CLI, read-only. Nothing may reach the model: no tools, no `sendMessage`. The widget reads pi's ledger only, never a cold parse |
 | `notify.ts` | OSC 777 desktop notifications |
 | `md-export.ts` | `/md` session → markdown |
-| `command-palette/` | `/help`, Ctrl+Shift+P: every command, shortcut, @mention and skill; enter runs ours, types pi's own into the editor |
+| `command-palette/` | `/help`, Ctrl+Shift+P: every command, shortcut and skill; enter runs ours, types pi's own into the editor |
 | `theme-studio/` | `/theme`, Ctrl+Shift+K — live pi + Ghostty theme/font/cursor/opacity preview. Esc reverts, Enter keeps. Writes the Ghostty config at `PI_STUDIO_GHOSTTY_CONFIG` or the default path |
 | `editor/` | box-drawn editor, clipboard image paste, one meta row below (cache, `setStatus` texts, diff); `/hud` / Ctrl+Shift+I opens the detail view. Labels take `priority` (narrow drops lowest) and `when: "idle"\|"detail"`. Values stay plain text (the user reads them); colour only for an alert |
-| `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent) |
+| `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent). Chinese public holidays are off-peak: `peak.ts` `CHINA_HOLIDAYS` needs each November's State Council notice |
 | `agents-ui/` | the background agents on screen: a dock under the editor (one grey line; `/agents dock line\|full\|off`), `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
 | `guardrails/` | comment gate on `edit` / `write` |
@@ -294,13 +296,13 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
 - **A `context` handler never returns a changed list**: pi then folds the system messages into one
   (`restoreSystemMessages`) and the cache is re-written. Edit `event.messages` in place for one
   request; store a lasting change as a `context_edit` from `turn_end` (goal) or a
-  `before_agent_start` message (mentions).
+  `before_agent_start` message.
 - **Clipboard paste** loads pi's `dist/utils/clipboard-image.js` on the first paste,
   not at startup; if it is missing, leave `onPasteImage` unset (pi's path-insert).
 - **Slash commands:** typed alone one opens `lib/command-menu.ts`; words go through
   `command-args.ts` (unknown word = error; no suggestion equals the typed text, or enter accepts it
   instead of sending); a setting a command changes is saved (new ones in `lib/prefs.ts`); retired
-  names stay in `tools/retired-commands.ts`; shortcuts and @mentions reach `/help` only through
+  names stay in `tools/retired-commands.ts`; shortcuts reach `/help` only through
   `contributeHelp`. pi: `ui.input` never shows its placeholder (`askText`),
   `setEditorText` does not repaint, `sendUserMessage` runs a command only with
   `expandPromptTemplates: true`, and a command handler is awaited before the next prompt.
@@ -431,8 +433,7 @@ is decoded only when that alone makes oldText match, refused in prose files
 without escapes; `[REDACTED]` is never written over a real value; a control
 character the file never had is refused. UTF-8 text only; no `replace_all`,
 delete or move (`trash <path>` / `git mv` in bash). **A file this session read or wrote that changed
-on disk since (`seen-files.ts`) is refused until read again**; undo/redo and `format_file` (only when
-the file had not drifted) count as seeing it.
+on disk since (`seen-files.ts`) is refused until read again**; undo/redo count as seeing it.
 
 **Both go out non-strict (`constrainedSampling: false`)**: pi's `strict: "prefer"`
 makes Anthropic garble Claude's non-ASCII (pi #10074). Never copy pi's value
@@ -461,7 +462,7 @@ back; drop the override only once pi stops sending Claude strict.
 - **`lib/mutex.ts` orders writes inside one process; `lib/file-lock.ts` is the cross-process layer**
   (one lock file per realpath in `~/.pi/agent/locks`, holding pid and time; stale when the pid is
   dead or after 60 s; 10 s wait, then an error naming the holder, `PI_SUBAGENT_ID` for a child).
-  Only edit/write take it: bash, format_file and undo_edit can still race a sub-agent.
+  Only edit/write take it: bash and undo_edit can still race a sub-agent.
 - Undo records live 7 days after a session's last edit (`pruneOldChanges`); tests set `PI_FILE_CHANGES_DIR`.
 
 ### bash — nothing runs unbounded
@@ -585,14 +586,6 @@ of its own, so a package's `skills: []` hides its skills from both.
 
 Ports with author prefixes (**`c-`**, **`mat-`**, **`dm-`**) had Claude-Code/Cursor
 machinery mapped to pi tools or cut; every subagent they spawn is read-only.
-
-## Agent mention directives
-
-`@oracle @finder @codereview @task @chad` → hidden `display: false` directive to call that tool
-(`codereview` → `review_code`, `task` → `delegate`); `@commit/<sha>` adds context the same way,
-stored once after the user's message (`before_agent_start`), never re-injected from `context`.
-**Keep the explicit `import "./tools/lib/mentions/agent-source.js"`** in `mentions.ts` (the
-barrel `export *` may not evaluate it). Don't add `/value` to agent mentions.
 
 ## Update workflow
 
