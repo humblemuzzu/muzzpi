@@ -100,7 +100,7 @@ export interface SpawnSessionMeta {
 
 /**
  * where the child's conversation is stored. omitted means `--no-session`
- * (read_web_page, read_session); the six agent tools persist, so each can be
+ * (read_web_page); the six agent tools persist, so each can be
  * continued by continueId.
  */
 export interface SpawnSessionConfig {

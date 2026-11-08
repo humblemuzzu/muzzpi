@@ -1,6 +1,6 @@
 /**
  * the result shape every sub-agent tool returns, and the blocking spawn that
- * read_web_page and read_session use. the six agent tools go through
+ * read_web_page uses. the six agent tools go through
  * lib/agent-runs.ts, which can also run them in the background.
  */
 

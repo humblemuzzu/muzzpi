@@ -190,8 +190,9 @@ Pick by what you need back:
   to Claude's vision limits so small text stays readable. The harness refuses a
   request that would cross the API's 32 MiB limit, which pi does not check and
   which breaks every later turn.
-- **`search_sessions`** and **`read_session`** pull context out of any past
-  conversation.
+- **`search_sessions`** finds a past conversation; **`read_session`** hands the
+  whole of it to one reader model with no tools: every prompt, reply and
+  sub-agent answer in full, secrets redacted first.
 - **`ask`** puts the agent's open questions to you in a picker.
 
 ## 05 · Codemode and 19 MCP servers

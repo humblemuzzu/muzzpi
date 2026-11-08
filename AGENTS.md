@@ -333,7 +333,9 @@ for `users` and as the fallback when no source loads. A retired model is replace
 
 - **One thread draws, reads keys and runs tools**: read big files in chunks and yield (`createSlicer`).
   Measure under Node, never Bun (its readline splits on U+2028); `port-harness/frame-timer.ts` logs freezes.
-- **`search_sessions` / `read_session` read `lib/session-index.ts` summaries**, never the history.
+- **`search_sessions` reads `lib/session-index.ts` summaries**, never the history. `read_session` parses one session
+  (`lib/session-transcript.ts`) in yielding slices and hands it to one tool-less `ctx.modelRegistry.streamSimple` call,
+  in parallel parts when it outgrows the window. **Scrub every text before clipping it**: a clip through a secret leaves a piece no scrubber knows.
 - **`read`'s script copy is byte-exact or refused over 4 MB**: a shortened copy written back cuts the file.
 - **`slim-sessions.ts` rewrites user sessions**: `--dry` first; `--images` is run by hand.
 
@@ -367,7 +369,7 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
 ### Sub-agents
 
 - **One spawn path:** the six agent tools go through `lib/agent-runs.ts` (queue of 16, background,
-  notifications), `read_web_page`/`read_session` through `run-sub-agent.ts`; both start the child
+  notifications), `read_web_page` through `run-sub-agent.ts`; both start the child
   with `pi-spawn.ts` `startChild`, in RPC mode (task over stdin, closed on `agent_settled`). RPC
   gives a child `hasUI`: its dialogs are answered cancelled, and `approval.ts` treats
   `PI_SUBAGENT_TOOLS` as no UI.

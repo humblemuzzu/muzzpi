@@ -63,7 +63,7 @@ describe("the child conversation a parent keeps", () => {
 		expect(kept.messages[3].details.messages[0]).toEqual({ role: "toolResult", toolCallId: "n1", toolName: "grep", content: [], isError: false });
 	});
 
-	test("without one (read_session, read_web_page), it is kept whole", () => {
+	test("without one (read_web_page), it is kept whole", () => {
 		expect(finishedResult(details(), spawned).details.messages).toBe(conversation);
 	});
 });

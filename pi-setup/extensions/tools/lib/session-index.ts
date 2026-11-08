@@ -7,7 +7,7 @@ import { parseSessionHeader, SUB_AGENT_SESSION_DIR, type SessionHeader } from ".
 
 /**
  * A summary of every session file, kept on disk and refreshed by size and
- * mtime, so search_sessions and read_session never parse the whole history.
+ * mtime, so search_sessions never parses the whole history.
  * Everything here is async and yields every SLICE_MS: pi draws its screen on
  * this thread.
  */

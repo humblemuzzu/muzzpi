@@ -59,7 +59,7 @@ export function buildSubAgentPrompt(identity: string, toolCsv: string, readOnlyB
 				"  blocked; on a server over `ssh` they work normally.",
 			]
 			: [];
-	// grammar matters here: read_web_page and read_session children get exactly
+	// grammar matters here: read_web_page children get exactly
 	// one tool, and "These 1 are the only tools" reads like a bug.
 	const countLine =
 		tools.length === 1

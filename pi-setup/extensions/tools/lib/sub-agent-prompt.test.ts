@@ -103,7 +103,7 @@ describe("buildSubAgentPrompt", () => {
 	});
 
 	test("a single-tool child reads as english, not 'These 1 are'", () => {
-		// read_web_page and read_session children get exactly one tool.
+		// read_web_page children get exactly one tool.
 		const single = buildSubAgentPrompt("Amp", "read");
 		expect(bulletTools(single)).toEqual(["read"]);
 		expect(single).toContain("That is the only tool registered in this session");
@@ -134,7 +134,7 @@ describe("every sub-agent's prompt matches its real allowlist", () => {
 		["librarian", librarianAllowlist()],
 		["delegate", delegateAllowlist()],
 		// the two fetch/read tools that spawn a child with a single read-only tool
-		["read_web_page / read_session", ["read"]],
+		["read_web_page", ["read"]],
 	];
 
 	for (const [agent, allowlist] of agents) {

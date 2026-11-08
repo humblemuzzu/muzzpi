@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { branchesOf, SessionIndex, summarizeSession } from "./session-index";
 import { createSearchSessionsTool } from "../search-sessions";
-import { findSessionFile, renderSessionTree } from "../read-session";
 
 const ROOT = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "session-index-")));
 afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
@@ -268,21 +267,5 @@ describe("search_sessions", () => {
 		expect(await run({ after: "7d" })).toBe("(no matching sessions found)");
 		const bad = await tool.execute("t", { after: "soon" }, undefined, undefined, { cwd: "/work/alpha" });
 		expect(bad.isError).toBe(true);
-	});
-});
-
-describe("read_session lookups", () => {
-	test("by file name first, then by header id; the target branch is marked", async () => {
-		const dir = path.join(ROOT, "rs");
-		const named = branchingSession(dir, "/work/rs", "rs-named");
-		const renamed = path.join(dir, "renamed.jsonl");
-		fs.copyFileSync(branchingSession(path.join(ROOT, "rs-src"), "/work/rs", "rs-header"), renamed);
-		const roots = [dir];
-		expect(await findSessionFile("rs-named", undefined, roots)).toBe(named);
-		expect(await findSessionFile("rs-header", undefined, roots)).toBe(renamed);
-		expect(await findSessionFile("missing", undefined, roots)).toBeNull();
-		const { markdown } = await renderSessionTree(named, "u2");
-		expect(markdown).toContain("## user [TARGET BRANCH]\ngo left");
-		expect(markdown).toContain("## user\ngo right with the rocket");
 	});
 });
