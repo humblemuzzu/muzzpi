@@ -29,6 +29,24 @@ formatted differently from its tagged source, so a text-patch anchor cannot be p
 - Anthropic message threads are on by default on `main`: the keep-alive ping already passes
   `disableContinuation: true`; check `pingStreamOptions` still reaches `streamSimple` unchanged.
 
+## Claude Fable 5.2 (2026-11-10) — our own models.json entry on 1.5.0, until pi ships it
+
+Launched 2026-11-09; pi 1.5.0's catalog and the pi.dev overlay (`models-store.json`) do not have it.
+- **Entry:** `providers.anthropic.models` = pi's `claude-fable-5-1` entry with 5.2's prices (8 / 40 / cache
+  read 0.2 / 5m write 10). No `allowedFallbackModels`: upstream's `finalizeAll` drops Opus 4.8/5 for a
+  `supportsMidConvoEffort` source, which is why 5.1 has none. 128 MB limit in `modelOverrides`, as for the rest.
+- **Client version:** OAuth answered 400 `claude_code_version_too_old` ("version 2.1.290 or newer") to pi's
+  `claude-cli/2.1.280`. The entry's `headers.user-agent` (`claude-cli/2.1.311`, Claude Code stable that day)
+  overrides it for this model only (`anthropic-messages.js` merges `model.headers` after its own).
+- **Prefix check:** Fable 5.2 returns 400 on any edited history on every account. pi sends
+  `block_binding: drop_block` for `supportsMidConvoEffort` models, so it degrades like Opus 5.5.
+- **Verified:** headless `--model anthropic/claude-fable-5-2` replied; wire = Opus 5.5's shape (adaptive,
+  `drop_block`, effort marker `high`, no fallbacks/temperature); meter `allowed` on the five-hour window.
+- **Removal:** `verify-patches.sh` fails "our own entry shadows it" once pi's catalog has the id **and** pi's
+  `claudeCodeVersion` reaches the pinned one (an overlay-only catalog update keeps ours, or OAuth 400s again).
+  Then delete the entry from `models`, keep its `modelOverrides` line, `./install.sh pi`, and run one headless
+  Fable call. `enabledModels`, the compaction reserve and the `fable` agent name stay.
+
 ## Upstream sync (2026-11-04) — on 1.5.0, no pi update
 
 - goal: 0.7.7's `waiting` status, compaction-input filter, full objective after a compaction, overflow

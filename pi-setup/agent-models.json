@@ -1,5 +1,6 @@
 {
   "models": {
+    "fable": { "id": "anthropic/claude-fable-5-2", "about": "Claude Fable 5.2 (Claude Max)" },
     "opus": { "id": "anthropic/claude-opus-5-5", "about": "Claude Opus 5.5 (Claude Max)" },
     "sonnet": { "id": "anthropic/claude-sonnet-5-5", "about": "Claude Sonnet 5.5 (Claude Max)" },
     "haiku": { "id": "anthropic/claude-haiku-5-5", "about": "Claude Haiku 5.5 (Claude Max)" },

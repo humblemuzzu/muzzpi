@@ -26,6 +26,7 @@
   "compaction": {
     "enabled": true,
     "modelOverrides": {
+      "anthropic/claude-fable-5-2": { "reserveTokens": 30000 },
       "anthropic/claude-opus-5-5": { "reserveTokens": 30000 },
       "anthropic/claude-sonnet-5-5": { "reserveTokens": 30000 },
       "anthropic/claude-haiku-5-5": { "reserveTokens": 30000 },
@@ -41,6 +42,7 @@
   ],
   "enabledModels": [
     "anthropic/claude-opus-5-5",
+    "anthropic/claude-fable-5-2",
     "anthropic/claude-sonnet-5-5",
     "anthropic/claude-haiku-5-5",
     "deepseek/deepseek-flash",
