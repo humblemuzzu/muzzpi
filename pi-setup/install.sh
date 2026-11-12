@@ -237,6 +237,7 @@ fi
 # come from Homebrew, so they are named once, with one line that installs them.
 [ -n "${DEEPSEEK_API_KEY:-}" ] || warn "DEEPSEEK_API_KEY not set: chad, finder, librarian, read_session, read_web_page and session naming fall back to your main model (agent-models.json picks the agents' models), and /ysk cannot run"
 [ -n "${CONTEXT_DEV_API_KEY:-}${DEEPSEEK_API_KEY:-}${PARALLEL_API_KEY:-}" ] || warn "no web search key set (CONTEXT_DEV_API_KEY, DEEPSEEK_API_KEY or PARALLEL_API_KEY): web_search will refuse until one is"
+[ -n "${CRAWLAPI_API_KEY:-}" ] || warn "CRAWLAPI_API_KEY not set: read_web_page will refuse until it is (keys at https://app.crawlapi.dev/keys)"
 [ -s "$HOME/.grok/auth.json" ] || warn "no Grok CLI login (~/.grok/auth.json): x_search stays off until you run grok login"
 missing=""
 formulas=""

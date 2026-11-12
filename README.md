@@ -190,8 +190,11 @@ Pick by what you need back:
 ## 04 · Web, GitHub, screen, history
 
 - **`web_search`** tries Context.dev, then DeepSeek, then Parallel, and says which
-  one answered and why the others did not. **`read_web_page`** fetches a page, or
-  asks a question about it and gets the answer from a child agent.
+  one answered and why the others did not. **`read_web_page`** reads a page through
+  [crawlapi](https://crawlapi.dev) (rendered, as markdown or structured JSON), or
+  asks a question about it and gets the answer from a child agent. We use crawlapi
+  for this tool: sign up at [crawlapi.dev](https://crawlapi.dev) to get an API key
+  for it.
 - **`x_search`**: X posts, accounts and threads through Grok's own X tools on your
   Grok subscription. Grok picks the posts; their full text and counts load straight
   from FxTwitter, so a search takes ~5 s and no post is retyped by a model.
@@ -388,6 +391,7 @@ missing:
 | `DEEPSEEK_API_KEY` | cheap sub-agents (chad, finder, librarian, read_web_page), `read_session` and session names, which run on your main model without it; `/ysk` needs it |
 | `RIVER_API_KEY` | DeepSeek V4.1 Flash via River, cheaper in DeepSeek's peak hours |
 | `CONTEXT_DEV_API_KEY`, `DEEPSEEK_API_KEY`, `PARALLEL_API_KEY` | `web_search`, which uses whichever are set, in that order |
+| `CRAWLAPI_API_KEY` ([get one at crawlapi.dev](https://app.crawlapi.dev/keys)) | `read_web_page` |
 | `grok login` (Grok CLI, SuperGrok or X Premium+) | `x_search` |
 | `gh auth login` | the GitHub tools |
 | `ripgrep`, `trash` | `grep` and `find`, safe deletes |

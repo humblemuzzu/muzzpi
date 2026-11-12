@@ -1,141 +1,158 @@
 /**
- * cheerio HTML→markdown + LLM Q&A + pagination + raw mode.
- *
- * cheerio strips chrome (nav, footer, scripts), finds main content area,
- * converts to clean markdown. ~95% size reduction on typical pages.
- *
- * the fetch is static: curl runs no JavaScript, so content a page builds in
- * the browser is absent, and every converted result says so. `screenshot`
- * with `url` renders the page instead.
- *
- * `prompt` and `objective` spawn a sub-agent that receives the page content;
- * `start_index`/`max_length` paginate by character; `raw` skips conversion.
+ * read_web_page — one crawlapi.dev request per page. crawlapi renders the page,
+ * reads documents and returns markdown or structured JSON; this file sends the
+ * URL and lays the answer out for the model.
+ * https://docs.crawlapi.dev/api-reference/scrape.md
  */
 
-import { spawn } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { htmlToMarkdown } from "./lib/html-to-md";
 import { emptyAgentModels, mainRoute, modelParams, resolveRoute, type AgentModels, type ModelRoute } from "./lib/agent-models";
+import { osc8Link } from "./lib/box-format";
 import { runSubAgent, toolError } from "./lib/run-sub-agent";
 import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
-import { headTailChars } from "./lib/output-buffer";
-import { osc8Link } from "./lib/box-format";
+import { parseJson, postJson, ProviderError, retryAfterSec } from "./lib/web/http";
 
+export const CRAWLAPI_ENDPOINT = "https://api.crawlapi.dev/v1/scrape";
+const KEY_ENV = "CRAWLAPI_API_KEY";
+const SERVER_TIMEOUT_MS = 45_000;
+const CLIENT_TIMEOUT_MS = 55_000;
 const MAX_CHARS = 64_000;
-const MAX_FETCH_BYTES = 10 * 1024 * 1024;
-const CURL_TIMEOUT_SECS = 30;
-const MAX_REDIRECTS = 5;
+const MAX_LINKS = 100;
+const RETRIES = 2;
+const MAX_RETRY_WAIT_SEC = 10;
+const RETRIED_CODES = new Set(["RATE_LIMITED", "ENGINE_FAILED", "INTERNAL"]);
 
 const DEFAULT_PROMPT_SYSTEM = `Analyze web page content and answer questions. Be concise, answer from provided content only. No filler.`;
 
-/** the note every converted result carries: what a static fetch cannot contain. */
-export function staticFetchNote(html: string): string {
-	const scripts = (html.match(/<script\b/gi) ?? []).length;
-	return scripts > 0
-		? `[static fetch: ${scripts} <script> tag(s) were not run, so content they build is missing — screenshot with url renders the page]`
-		: "[static fetch: the page has no <script> tags, so this is its full content]";
+type Format = "markdown" | "json";
+
+interface CrawlPage {
+	success: true;
+	request_id: string;
+	data: {
+		metadata: { title: string; final_url: string; truncated?: boolean; login_required?: boolean };
+		links: string[];
+		markdown?: string | null;
+		json?: { tables: unknown[]; jsonld: unknown[]; embedded: unknown[]; structured?: unknown } | null;
+	};
+	usage: { credits: number; remaining: number };
 }
 
-const STATUS_MARK = "__pi_http_status__";
-
-/** splits curl's stderr into its error text and the final response's HTTP status (0 when none arrived). */
-export function parseCurlStderr(stderr: string): { message: string; status: number } {
-	const at = stderr.lastIndexOf(STATUS_MARK);
-	if (at === -1) return { message: stderr.trim(), status: 0 };
-	const status = Number.parseInt(stderr.slice(at + STATUS_MARK.length), 10);
-	return { message: stderr.slice(0, at).trim(), status: Number.isFinite(status) ? status : 0 };
+interface CrawlFailure {
+	success: false;
+	request_id: string;
+	error: { code: string; message: string; retryable: boolean };
 }
 
-function fetchUrl(
+type CrawlResponse = CrawlPage | CrawlFailure;
+
+async function scrape(
+	endpoint: string,
+	key: string,
 	url: string,
+	format: Format,
 	signal?: AbortSignal,
-): Promise<{ html: string; status?: number; capped?: boolean; error?: string }> {
-	return new Promise((resolve) => {
-		const args = [
-			"-sSL",
-			"-w", `%{stderr}${STATUS_MARK}%{http_code}`,
-			"-H", "Accept: text/markdown, text/html;q=0.9",
-			"-m", String(CURL_TIMEOUT_SECS),
-			"--max-redirs", String(MAX_REDIRECTS),
-			"-A", "Mozilla/5.0 (compatible; pi-agent/1.0)",
-			url,
-		];
-
-		const child = spawn("curl", args, {
-			stdio: ["ignore", "pipe", "pipe"],
+): Promise<{ body: CrawlResponse; retryAfter?: number }> {
+	for (let attempt = 0; ; attempt++) {
+		const res = await postJson(endpoint, {
+			headers: { Authorization: `Bearer ${key}` },
+			body: { url, format, timeout: SERVER_TIMEOUT_MS },
+			timeoutMs: CLIENT_TIMEOUT_MS,
+			signal,
 		});
-
-		const chunks: Buffer[] = [];
-		let bytes = 0;
-		let capped = false;
-		let stderr = "";
-		let aborted = false;
-
-		const onAbort = () => {
-			aborted = true;
-			if (!child.killed) child.kill("SIGTERM");
-		};
-		if (signal) {
-			if (signal.aborted) { onAbort(); }
-			else signal.addEventListener("abort", onAbort, { once: true });
+		const body = parseJson<CrawlResponse>(res, "crawlapi");
+		if (typeof body?.success !== "boolean") {
+			throw new ProviderError("invalid_response", `crawlapi answered HTTP ${res.status} without a success flag`, res.status);
 		}
+		const wait = retryAfterSec(res.headers);
+		if (body.success === true) return { body };
+		const retry = RETRIED_CODES.has(body.error.code) && attempt < RETRIES && (wait ?? 1) <= MAX_RETRY_WAIT_SEC;
+		if (!retry) return { body, retryAfter: wait };
+		await sleep((wait ?? 1) * 1000, undefined, { signal });
+	}
+}
 
-		child.stdout?.on("data", (data: Buffer) => {
-			if (capped) return;
-			chunks.push(data);
-			bytes += data.length;
-			if (bytes > MAX_FETCH_BYTES) {
-				capped = true;
-				child.kill("SIGTERM");
-			}
-		});
+export function crawlErrorText(failure: CrawlFailure, retryAfter?: number): string {
+	const { code, message, retryable } = failure.error;
+	const retry = retryable
+		? `retryable${retryAfter !== undefined ? ` after ${retryAfter}s` : " later"}`
+		: "not retryable: the same request gets the same answer";
+	return `crawlapi ${code}: ${message} (${retry}; request ${failure.request_id})`;
+}
 
-		child.stderr?.on("data", (data: Buffer) => {
-			stderr += data.toString("utf-8");
-		});
+function pageBody(page: CrawlPage, format: Format): string {
+	const { data } = page;
+	let body: string;
+	if (format === "json") {
+		const { structured, tables, jsonld, embedded } = data.json ?? {};
+		body = JSON.stringify({ structured, tables, jsonld, embedded });
+	} else {
+		body = data.markdown ?? "";
+	}
+	const links = [...new Set(data.links)];
+	if (!links.length) return body;
+	const hidden = links.length - MAX_LINKS;
+	const list = links.slice(0, MAX_LINKS).join("\n") + (hidden > 0 ? `\n[${hidden} more links not shown]` : "");
+	return `${body}\n\nLinks (${links.length}):\n${list}`;
+}
 
-		child.on("error", (err) => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve({ html: "", error: `curl error: ${err.message}` });
-		});
+/** the page as the model reads it: one window of the content, then crawlapi's notes. */
+export function pageResult(page: CrawlPage, format: Format, startIndex?: number, maxLength?: number): string {
+	const full = pageBody(page, format);
+	const from = Math.min(Math.max(0, Math.floor(startIndex ?? 0)), full.length);
+	const length = Math.min(Math.max(1, Math.floor(maxLength ?? MAX_CHARS)), MAX_CHARS);
+	const to = Math.min(full.length, from + length);
 
-		child.on("close", (code) => {
-			signal?.removeEventListener("abort", onAbort);
-			if (aborted) { resolve({ html: "", error: "fetch aborted" }); return; }
-			const { message, status } = parseCurlStderr(stderr);
-			if (code !== 0 && !capped) {
-				resolve({ html: "", error: `fetch failed: ${message.replace(/^curl: /, "") || `curl exited with code ${code}`}` });
-				return;
-			}
-			resolve({ html: Buffer.concat(chunks).subarray(0, MAX_FETCH_BYTES).toString("utf-8"), status, capped });
-		});
-	});
+	const { metadata } = page.data;
+	const { credits, remaining } = page.usage;
+	const notes = [
+		`crawlapi read ${metadata.final_url} ("${clip(metadata.title, 120)}") · ${credits} credit${credits === 1 ? "" : "s"}, ${remaining.toLocaleString("en-US")} left`,
+	];
+	if (metadata.login_required) notes.push("sign-in wall: this is the wall's own text, not the page");
+	if (metadata.truncated) notes.push("crawlapi cut the page at its size cap; the rest of the page is not available");
+	if (from > 0 || to < full.length) {
+		const rest = to < full.length ? `; pass start_index: ${to} for more` : "";
+		notes.push(`characters ${from}–${to} of ${full.length}${rest}`);
+	}
+	return `${full.slice(from, to)}\n\n${notes.map((note) => `[${note}]`).join("\n")}`;
 }
 
 export interface ReadWebPageConfig {
 	systemPrompt?: string;
 	models?: AgentModels;
+	endpoint?: string;
+	env?: Record<string, string | undefined>;
 }
 
 export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
+	const endpoint = config.endpoint ?? CRAWLAPI_ENDPOINT;
 	return {
 		name: "read_web_page",
 		label: "Read Web Page",
 		description:
 			"Read the contents of a web page at a given URL.\n\n" +
-			"Returns the page content converted to Markdown.\n\n" +
+			"Returns the page content converted to Markdown, or with format \"json\" its tables, JSON-LD and embedded data. " +
+			"Use it whenever you need what a web page says: never fetch a page with curl and strip its HTML yourself.\n\n" +
 			"When an objective is provided, a sub-agent returns verbatim excerpts relevant to that objective.\n\n" +
-			"Static fetch: scripts are not run, so content a page builds with JavaScript is missing. " +
-			"Use `screenshot` with `url` to see a rendered page.\n\n" +
-			"Do NOT use for localhost or local URLs — use `curl` via Bash instead.",
+			"Pages are rendered, so content built by JavaScript is included; PDFs, Office files, CSV, JSON and feeds are read like pages. " +
+			"Public http(s) URLs only: no sign-in, no localhost. Use `curl` via Bash for local URLs, HTTP APIs, headers or raw HTML.\n\n" +
+			"A failure returns an error code and whether a retry can help; never retry one that says it is not retryable.",
 
 		parameters: Type.Object({
 			url: Type.String({
 				description: "The URL of the web page to read.",
 			}),
+			format: Type.Optional(
+				Type.Union([Type.Literal("markdown"), Type.Literal("json")], {
+					description:
+						"markdown (default) for the page's text; json for its tables, JSON-LD and embedded data. " +
+						"A page with no structured data answers NO_CONTENT for json.",
+				}),
+			),
 			objective: Type.Optional(
 				Type.String({
 					description:
@@ -152,28 +169,26 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 			),
 			start_index: Type.Optional(
 				Type.Number({
-					description: "Character offset to start from in the converted content (for pagination).",
+					description: "Character offset to start from in the content (for pagination).",
 				}),
 			),
 			max_length: Type.Optional(
 				Type.Number({
-					description: "Maximum number of characters to return (for pagination).",
-				}),
-			),
-			raw: Type.Optional(
-				Type.Boolean({
-					description: "Return raw HTML instead of converting to Markdown.",
+					description: `Maximum number of characters to return (for pagination; at most ${MAX_CHARS.toLocaleString("en-US")}).`,
 				}),
 			),
 			...modelParams(models, "read_web_page"),
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const url = params.url;
-
-			if (!url.startsWith("http://") && !url.startsWith("https://")) {
-				return toolError(`invalid URL: "${url}" — must start with http:// or https://`);
+			const key = (config.env ?? process.env)[KEY_ENV]?.trim();
+			if (!key) {
+				return toolError(
+					`read_web_page needs ${KEY_ENV}: create a key at https://app.crawlapi.dev/keys, export it in ~/.zshrc, then restart pi.`,
+				);
 			}
+			const url = params.url;
+			const format: Format = params.format === "json" ? "json" : "markdown";
 
 			let route: ModelRoute = {};
 			if (params.prompt || params.objective) {
@@ -182,42 +197,17 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 				route = resolved;
 			}
 
-			const { html, status, capped, error } = await fetchUrl(url, signal);
-			if (error) return toolError(error);
-			if (status !== undefined && status >= 400) {
-				const body = (htmlToMarkdown(html) ?? html).replace(/\s+/g, " ").trim();
-				const excerpt = body ? `\n\nthe error page says: ${body.length > 400 ? `${body.slice(0, 400)}…` : body}` : "";
-				return toolError(`HTTP ${status} from ${url} — the server did not return the page.${excerpt}`);
+			let page: CrawlPage;
+			try {
+				const { body, retryAfter } = await scrape(endpoint, key, url, format, signal);
+				if (body.success === false) return toolError(crawlErrorText(body, retryAfter));
+				page = body;
+			} catch (err) {
+				if (signal?.aborted) return toolError("read_web_page aborted");
+				return toolError(`read_web_page: ${(err as Error).message}`);
 			}
 
-			if (!html.trim()) {
-				return {
-					content: [{ type: "text" as const, text: "(empty response)" }],
-				} as any;
-			}
-
-			// raw mode: skip conversion entirely
-			if (params.raw) {
-				const content = headTailChars(`Raw HTML content as requested:\n${html}`, MAX_CHARS).text;
-				return { content: [{ type: "text" as const, text: content }] } as any;
-			}
-
-			const md = htmlToMarkdown(html);
-			let content = md ?? html;
-
-			// pagination: slice before truncation so offsets are stable
-			if (params.start_index !== undefined || params.max_length !== undefined) {
-				const total = content.length;
-				const start = params.start_index ?? 0;
-				const end = params.max_length !== undefined ? start + params.max_length : total;
-				content = content.slice(start, end);
-				content += `\n\n[${start}–${Math.min(end, total)} of ${total} characters]`;
-			}
-
-			content = headTailChars(content, MAX_CHARS).text;
-			const notes = [staticFetchNote(html)];
-			if (capped) notes.push(`[the response exceeded ${MAX_FETCH_BYTES / 1024 / 1024} MB; only the start was fetched]`);
-			content += `\n\n${notes.join("\n")}`;
+			const content = pageResult(page, format, params.start_index, params.max_length);
 
 			if (params.prompt || params.objective) {
 				const ask = params.prompt
@@ -252,6 +242,7 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 			const displayUrl = clip(url, 60);
 			const linkedUrl = url.startsWith("http") ? osc8Link(url, displayUrl) : displayUrl;
 			let label = theme.fg("toolTitle", theme.bold("read_web_page ")) + theme.fg("dim", linkedUrl);
+			if (args.format === "json") label += theme.fg("muted", " json");
 			const promptLabel = args.prompt || args.objective;
 			if (promptLabel) label += theme.fg("muted", ` — ${clip(promptLabel, 40)}`);
 			text.setText(label);

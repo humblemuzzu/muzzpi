@@ -321,6 +321,10 @@ starts at DeepSeek); auth and credit failures are held for every process in
 `<agent dir>/cache/web-search-health.json`. A Context.dev key allows 2 requests in flight: the chain
 skips it rather than queue.
 
+**`read_web_page` is one crawlapi.dev call** (`CRAWLAPI_API_KEY` in `~/.zshrc`; `POST /v1/scrape`,
+only `url`, `format`, `timeout`): crawlapi renders and converts, we keep no fetch, HTML parsing or
+fallback. Agents read page content only through it; `curl` in bash stays for APIs, headers and raw HTML.
+
 **`x_search` needs the Grok CLI login, never pi's `/login xai`**: that token reaches the proxy with
 API-tier limits and no X tools, and Grok then invents posts. It renews an expiring token by running
 `grok models` (it never writes `~/.grok/auth.json`), must send `x-grok-client-version` (426 without;

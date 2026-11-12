@@ -448,8 +448,7 @@ export function findLatestChange(
 
 /**
  * graceful require for the `diff` package — falls back to a naive
- * line-by-line diff when the package isn't resolvable (same pattern
- * as cheerio in html-to-md.ts).
+ * line-by-line diff when the package isn't resolvable.
  */
 let createPatchFn: ((fileName: string, oldStr: string, newStr: string, oldHeader?: string, newHeader?: string, options?: { context?: number }) => string) | null = null;
 
