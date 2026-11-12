@@ -340,13 +340,13 @@ describe("tool contract: background is offered only where a result can wake the 
 		createChadTool({ runs }), createFinderTool({ runs }), createCodeReviewTool({ runs }),
 	] as any[];
 
-	test("in the main session every agent tool says so and takes `background`", () => {
+	test("in the main session every agent tool says so, and offers no way to wait for it", () => {
 		const saved = process.env[SUB_AGENT_TOOLS_ENV];
 		delete process.env[SUB_AGENT_TOOLS_ENV];
 		try {
 			for (const tool of toolsWith(new AgentRuns(host))) {
 				expect(tool.description).toContain("it runs in the background");
-				expect(tool.parameters.properties.background.type).toBe("boolean");
+				expect(tool.parameters.properties.background).toBeUndefined();
 				expect(tool.parameters.properties.continueId.type).toBe("string");
 			}
 		} finally {

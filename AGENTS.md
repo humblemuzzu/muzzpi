@@ -377,7 +377,7 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
   `PI_SUBAGENT_TOOLS` as no UI.
 - **Agent tools run in the background** only where a result can wake the caller (TUI or RPC parent;
   never `-p`, a child or a codemode script). Results come back once, as one `agent-result` message
-  per batch (`triggerTurn` + `deliverAs: "steer"`) unless `agents wait`/`stop` took them. Esc does
+  per batch (`triggerTurn` + `deliverAs: "steer"`) unless `agents stop` took them. Esc does
   not stop them. `session_shutdown` does, and adds unreported results to the session unwoken; on
   `/reload` the new load continues them (`takeReloadHandoff`).
 - **All six persist `<agent>-<uuid>` sessions**; `unresumableReason` refuses another agent's id
@@ -465,16 +465,35 @@ back; drop the override only once pi stops sending Claude strict.
   Only edit/write take it: bash and undo_edit can still race a sub-agent.
 - Undo records live 7 days after a session's last edit (`pruneOldChanges`); tests set `PI_FILE_CHANGES_DIR`.
 
-### bash — nothing runs unbounded
+### bash — nothing runs unbounded, nothing runs blind
 
 | | mechanism | bounds |
 |---|---|---|
-| L1 | **`timeout` required**, schema-bounded 1–600s; over the cap `prepareArguments` runs it at the cap and the result says so (missing stays an error) | declared budget |
+| L1 | **`timeout` required**, schema-bounded 1–3600s, the deadline from start in the foreground and as a job; over the cap `prepareArguments` runs it at the cap and the result says so (missing stays an error) | declared budget |
 | L2 | idle kill: no output **and** no CPU for 300s | a hung command |
 | L3 | `startChild` stall watchdog: no child output for 900s | sub-agent children |
 
-Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables), `PI_SPAWN_STALL_SEC`,
-`PI_SPAWN_RELEASE_MS` (the 10 s grace, for tests), `PI_BASH_CPU_LIVENESS`.
+Overrides: `PI_BASH_MAX_TIMEOUT_SEC`, `PI_BASH_IDLE_KILL_SEC` (0 disables), `PI_BASH_YIELD_SEC` (0 never
+moves), `PI_SPAWN_STALL_SEC`, `PI_SPAWN_RELEASE_MS` (the 10 s grace, for tests), `PI_BASH_CPU_LIVENESS`.
+
+- **A command still running after 60s becomes a background job** (`lib/bash-jobs.ts`): the call returns
+  its output so far and a `bash-xxxx` id; the same process runs on, never re-run; `background: true` moves
+  it at once, Ctrl+B moves a waiting call, the first `wake_on` line early. Codemode calls (`/` in the call id) and git
+  commands (they hold the repo lock) always wait; a registry without a host never moves anything.
+- **News reaches the agent by itself, never by polling**: a session `wakeable()` says can be woken gets
+  one batched `bash-job` message (`triggerTurn`); a sub-agent or `-p` run gets a steer and is **held at
+  `agent_before_settle`** while its jobs run, with a `setStatus(JOB_STATUS_KEY)` heartbeat a minute that
+  feeds L3 and shows in the parent's dock. A child's codemode or git command silent past 900s still meets L3.
+- A sub-agent's foreground command beats `RUN_STATUS_KEY` once a minute (feeds L3); a child held for its
+  jobs (`JOB_STATUS_KEY`) is stopped with SIGTERM at once. Package scripts are judged by the nearest package.json.
+- Job output is no tool result: the host scrubs it before `sendMessage`. Jobs share the agents broadcast
+  (dock, prompt-cache keep-alive) and `agents` list/stop (no wait: results arrive by themselves); bash-running children get `agents` too.
+  `/reload` hands live jobs over (`takeHandoff`); any other shutdown stops them and reports unwoken.
+- **Refused before running** (`lib/command-shape.ts`, top-level parse, fails open): a test, build, type
+  check or install piped into a consumer that holds output (`tail`, `head`, `grep`…) or redirected to a
+  file, a streaming consumer without `pipefail`, and a bare `sleep` of 30s+ outside a loop body. An exit 0
+  over a failure shape behind a pipe or `||` gets a note. Children inherit all of it from `bash.ts`.
+- `PYTHONUNBUFFERED=1` is in every command's environment: Python block-buffers into a pipe otherwise.
 
 - **CPU liveness can only keep a command alive, never kill it**; `proc-cpu.ts`
   returns `undefined` on failure, degrading to output-only.

@@ -26,7 +26,7 @@ const CODE_REVIEW_PARAM_NAMES = ["diff_description", "task", "query", "prompt", 
 /** sub-agent needs bash (git diff), read/grep/find (context), web tools (docs lookup) */
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash"];
 const EXTENSION_TOOLS = [
-	"read", "grep", "find", "ls", "bash", "codemode",
+	"read", "grep", "find", "ls", "bash", "agents", "codemode",
 	"web_search", "read_web_page", "screenshot",
 ];
 

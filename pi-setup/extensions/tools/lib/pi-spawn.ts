@@ -15,6 +15,7 @@ import { loadAgentModels, modelViolation, type AgentModels } from "./agent-model
 import { repairInterrupted, savedSessionModel, subAgentSessionFile } from "./session-repair";
 import { CACHE_PING_ENTRY } from "./prompt-cache";
 import { RepetitionWatch } from "./repetition";
+import { JOB_STATUS_KEY, RUN_STATUS_KEY } from "./agent-channel";
 
 // --- stall watchdog ---
 
@@ -489,6 +490,8 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 	let finishing = false;
 	let settledCleanly = false;
 	let stopRequested = false;
+	/** held at the end of its run for its bash jobs: no turn is running, so an abort has nothing to stop */
+	let heldForJobs = false;
 	let stalled = false;
 	const repetition = new RepetitionWatch();
 	let resampling = false;
@@ -561,7 +564,7 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 		if (stopRequested || finishing || released) return false;
 		stopRequested = true;
 		send({ type: "abort" });
-		later(STOP_GRACE_MS, () => { if (!finishing) terminate("SIGTERM"); });
+		later(heldForJobs ? 0 : STOP_GRACE_MS, () => { if (!finishing) terminate("SIGTERM"); });
 		return true;
 	};
 	const onLoop = () => {
@@ -607,6 +610,10 @@ export function startChild(config: PiSpawnConfig): ChildRun {
 			case "extension_ui_request":
 				// nobody can answer a dialog inside a sub-agent
 				if (["select", "confirm", "input", "editor"].includes(event.method)) send({ type: "extension_ui_response", id: event.id, cancelled: true });
+				else if (event.method === "setStatus" && (event.statusKey === JOB_STATUS_KEY || event.statusKey === RUN_STATUS_KEY)) {
+					if (event.statusKey === JOB_STATUS_KEY) heldForJobs = typeof event.statusText === "string";
+					config.onEvent?.(event);
+				}
 				return;
 			case "agent_start":
 				active = true;

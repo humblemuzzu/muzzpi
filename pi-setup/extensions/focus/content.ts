@@ -77,7 +77,7 @@ const BASH_PREVIEW_LINES = 6;
 /** entries the transcript renderer cannot draw: compactions, agent results, folded prompts and your own `!` commands */
 function markerLines(entry: SessionEntry, width: number, theme: Styler): string[] | undefined {
 	if (entry.type === "compaction") return [theme.fg("dim", `── summarised here: ${Math.round(entry.tokensBefore / 1000)}k tokens became a summary ──`)];
-	if (entry.type === "custom_message") return [`${theme.fg("dim", "⇢ ")}${theme.fg("muted", entry.customType === "agent-result" ? "background agents reported back" : oneLine(entry.customType))}`];
+	if (entry.type === "custom_message") return [`${theme.fg("dim", "⇢ ")}${theme.fg("muted", entry.customType === "agent-result" ? "background agents reported back" : entry.customType === "bash-job" ? "a background bash job reported back" : oneLine(entry.customType))}`];
 	if (entry.type !== "message") return undefined;
 	const { message } = entry;
 	if (message.role === "user") return [theme.fg("accent", injectedKind(messageText(message)) === "goal" ? "↻ goal: keep going" : "✦ /ysk flagged something")];

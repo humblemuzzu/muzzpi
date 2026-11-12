@@ -25,6 +25,9 @@ const mockCtx = {
 	sessionManager: { getSessionId: () => "test-session-id" },
 } as any;
 
+/** a hung process: silent, no CPU, never exits. A bare long `sleep` is refused as a blind wait. */
+const HANG = "tail -f /dev/null";
+
 /** run the real tool. `idle` overrides the idle window for this call only. */
 async function run(
 	params: Record<string, unknown>,
@@ -69,7 +72,7 @@ describe("schema: timeout is required and bounded", () => {
 
 	test("bounds are in the schema, so 0 and 99999 are model-visible errors", () => {
 		expect(params.properties.timeout.minimum).toBe(1);
-		expect(params.properties.timeout.maximum).toBe(600);
+		expect(params.properties.timeout.maximum).toBe(3600);
 		expect(params.properties.timeout.type).toBe("number");
 	});
 
@@ -80,9 +83,9 @@ describe("schema: timeout is required and bounded", () => {
 	test("the description carries the ladder the model plans against", () => {
 		const d = params.properties.timeout.description as string;
 		expect(d).toMatch(/Required/i);
-		expect(d).toContain("1-600");
+		expect(d).toContain("1-3600");
 		expect(d).toMatch(/read\/grep/);
-		expect(d).toMatch(/e2e\/deploy/);
+		expect(d).toMatch(/e2e\/full suite/);
 	});
 
 	test("the description warns that silence kills regardless of the value", () => {
@@ -110,13 +113,18 @@ describe("schema: timeout is required and bounded", () => {
 describe("description: stop the model blinding the harness", () => {
 	const tool = createBashTool();
 
-	test("tells the model not to pipe to tail/head/grep", () => {
-		expect(tool.description).toMatch(/Do NOT pipe to `tail`\/`head`\/`grep`/);
+	test("says up front that a piped or redirected test, build or install is refused", () => {
+		expect(tool.description).toMatch(/Do NOT pipe to `tail`\/`head`\/`grep` just to shorten output/);
+		expect(tool.description).toMatch(/For tests, builds, type checks and installs it is refused, as is redirecting them to a file/);
 	});
 
-	test("says WHY — piping buffers and hides progress", () => {
-		expect(tool.description).toMatch(/buffers everything until the command ends/);
-		expect(tool.description).toMatch(/look hung/);
+	test("says WHY — the pipe hides progress and replaces the exit code", () => {
+		expect(tool.description).toMatch(/hides their progress until they end and replaces their exit code/);
+	});
+
+	test("says a long bare sleep is refused, and what to run instead", () => {
+		expect(tool.description).toMatch(/Do NOT `sleep` to wait \(30s or more is refused\)/);
+		expect(tool.description).toMatch(/gh run watch/);
 	});
 
 	test("still states the tool's own truncation, so the advice is actionable", () => {
@@ -131,7 +139,7 @@ describe("runtime net: malformed timeout is refused before any work", () => {
 		["missing", undefined],
 		["zero", 0],
 		["negative", -5],
-		["over the ceiling", 601],
+		["over the ceiling", 3601],
 		["absurd", 99999],
 		["string", "120"],
 		["non-numeric string", "abc"],
@@ -158,7 +166,7 @@ describe("runtime net: malformed timeout is refused before any work", () => {
 		return run({ cmd: "echo x" }).then(({ text }) => {
 			expect(text.length).toBeLessThan(120);
 			expect(text).toContain("read 10");
-			expect(text).toContain("1-600");
+			expect(text).toContain("1-3600");
 		});
 	});
 
@@ -174,9 +182,9 @@ describe("runtime net: malformed timeout is refused before any work", () => {
 		expect(text).toContain("VIA_ALIAS");
 	});
 
-	test("boundary values 1 and 600 are accepted", async () => {
+	test("boundary values 1 and 3600 are accepted", async () => {
 		expect((await run({ cmd: "echo LOW", timeout: 1 })).isError).toBe(false);
-		expect((await run({ cmd: "echo HIGH", timeout: 600 })).isError).toBe(false);
+		expect((await run({ cmd: "echo HIGH", timeout: 3600 })).isError).toBe(false);
 	});
 });
 
@@ -189,20 +197,20 @@ describe("over the ceiling: run at the ceiling, and told so", () => {
 		return { params, text: result.content?.[0]?.text ?? "", isError: result.isError === true, result };
 	}
 
-	test("900 and \"1200\" pass pi's validation as 600 and the result names the clamp", async () => {
-		for (const timeout of [900, "1200"]) {
+	test("4000 and \"7200\" pass pi's validation as 3600 and the result names the clamp", async () => {
+		for (const timeout of [4000, "7200"]) {
 			const { params, text, isError, result } = await piRuns({ cmd: "echo RAN", timeout });
-			expect(params.timeout).toBe(600);
+			expect(params.timeout).toBe(3600);
 			expect(isError).toBe(false);
 			expect(text).toContain("RAN");
-			expect(text).toContain(`(your timeout ${Number(timeout)}s is over the 600s cap, so it ran with 600s)`);
+			expect(text).toContain(`(your timeout ${Number(timeout)}s is over the 3600s cap, so it ran with 3600s)`);
 			expect(result.structuredContent.exit_code).toBe(0);
 		}
 	});
 
 	test("a timeout within the cap is passed through untouched, with no note", async () => {
-		const args = { cmd: "echo RAN", timeout: 600 };
-		expect(clampTimeout(args, 600)).toBe(args);
+		const args = { cmd: "echo RAN", timeout: 3600 };
+		expect(clampTimeout(args, 3600)).toBe(args);
 		const { text } = await piRuns(args);
 		expect(text).not.toContain("cap");
 	});
@@ -218,7 +226,7 @@ describe("over the ceiling: run at the ceiling, and told so", () => {
 
 	test("the schema and description the model sees are unchanged", () => {
 		const params = createBashTool().parameters as any;
-		expect(params.properties.timeout.maximum).toBe(600);
+		expect(params.properties.timeout.maximum).toBe(3600);
 		expect(params.properties.timeout_clamped_from).toBeUndefined();
 	});
 });
@@ -240,7 +248,7 @@ describe("wall clock: the declared budget is enforced", () => {
 
 	test("tells the model it may raise it, and names the ceiling", async () => {
 		const { text } = await run({ cmd: "sleep 10", timeout: 1 }, 0);
-		expect(text).toMatch(/Raise it, up to 600s/);
+		expect(text).toMatch(/Raise it, up to 3600s/);
 	}, 20000);
 });
 
@@ -249,7 +257,7 @@ describe("wall clock: the declared budget is enforced", () => {
 describe("idle kill: silence is the failure signal", () => {
 	test("kills a silent command well before its declared budget", async () => {
 		// the incident in one line: budget of 600s, dead after producing nothing.
-		const { text, isError, ms } = await run({ cmd: "sleep 30", timeout: 600 }, 1);
+		const { text, isError, ms } = await run({ cmd: HANG, timeout: 600 }, 1);
 		expect(isError).toBe(true);
 		expect(text).toMatch(/no output and no CPU activity for 1s/);
 		expect(ms).toBeLessThan(8000);
@@ -261,7 +269,7 @@ describe("idle kill: silence is the failure signal", () => {
 		// produced nothing — a kill that discarded it would be worse than the bug.
 		// (claude-code issue #34266 is exactly that bug.)
 		const { text, isError } = await run(
-			{ cmd: "echo TESTS_PASSED; echo SUMMARY_LINE; sleep 30", timeout: 600 },
+			{ cmd: `echo TESTS_PASSED; echo SUMMARY_LINE; ${HANG}`, timeout: 600 },
 			1,
 		);
 		expect(isError).toBe(true);
@@ -271,7 +279,7 @@ describe("idle kill: silence is the failure signal", () => {
 	}, 20000);
 
 	test("says the output above is complete, because it usually is", async () => {
-		const { text } = await run({ cmd: "echo DONE; sleep 30", timeout: 600 }, 1);
+		const { text } = await run({ cmd: `echo DONE; ${HANG}`, timeout: 600 }, 1);
 		expect(text).toMatch(/Output above is everything it printed/);
 		expect(text).toMatch(/finishes its work and fails to exit/);
 	}, 20000);
@@ -313,8 +321,8 @@ describe("idle kill: silence is the failure signal", () => {
 	}, 20000);
 
 	test("idle and wall-clock produce DIFFERENT diagnoses", async () => {
-		const idle = await run({ cmd: "sleep 30", timeout: 600 }, 1);
-		const wall = await run({ cmd: "sleep 30", timeout: 1 }, 0);
+		const idle = await run({ cmd: HANG, timeout: 600 }, 1);
+		const wall = await run({ cmd: HANG, timeout: 1 }, 0);
 		expect(idle.text).toMatch(/no output and no CPU/);
 		expect(idle.text).not.toMatch(/timed out after/);
 		expect(wall.text).toMatch(/timed out after/);
@@ -323,7 +331,7 @@ describe("idle kill: silence is the failure signal", () => {
 
 	test("idle beats the wall clock when both could apply", async () => {
 		// idle 1s, wall 3s, silent command: the idle diagnosis is the useful one.
-		const { text } = await run({ cmd: "sleep 30", timeout: 3 }, 1);
+		const { text } = await run({ cmd: HANG, timeout: 3 }, 1);
 		expect(text).toMatch(/no output and no CPU/);
 	}, 20000);
 
@@ -332,7 +340,7 @@ describe("idle kill: silence is the failure signal", () => {
 		// TERM is the case where the escalation is load-bearing — and the case where
 		// the interval would otherwise re-fire the kill on every tick.
 		const { isError, text, ms } = await run(
-			{ cmd: "trap '' TERM; sleep 30", timeout: 600 },
+			{ cmd: `trap '' TERM; ${HANG}`, timeout: 600 },
 			1,
 		);
 		expect(isError).toBe(true);
@@ -368,8 +376,8 @@ describe("CPU liveness: work counts, even with no output", () => {
 	}, 30000);
 
 	test("a genuinely dead process (no output, no CPU) is STILL killed", async () => {
-		// CPU liveness must not save a real hang. `sleep` burns no CPU.
-		const { isError, text, ms } = await run({ cmd: "sleep 30", timeout: 600 }, 2);
+		// CPU liveness must not save a real hang, which burns no CPU.
+		const { isError, text, ms } = await run({ cmd: HANG, timeout: 600 }, 2);
 		expect(isError).toBe(true);
 		expect(text).toMatch(/no output and no CPU activity/);
 		expect(ms).toBeLessThan(10000);
@@ -410,7 +418,7 @@ describe("may_run_silent: the escape hatch for legitimately-silent work", () => 
 
 	test("WITHOUT the flag, the same silent zero-CPU command IS killed", async () => {
 		// proves the flag is what saves it — the remote deploy really would die.
-		const { isError, text } = await run({ cmd: "sleep 30; echo deployed", timeout: 30 }, 1);
+		const { isError, text } = await run({ cmd: `${HANG}; echo deployed`, timeout: 30 }, 1);
 		expect(isError).toBe(true);
 		expect(text).toMatch(/no output and no CPU/);
 		expect(text).not.toContain("deployed");
@@ -420,7 +428,7 @@ describe("may_run_silent: the escape hatch for legitimately-silent work", () => 
 		// may_run_silent turns OFF the idle kill, not the declared timeout. a
 		// genuinely hung remote command still dies at its declared budget.
 		const { isError, text, ms } = await run(
-			{ cmd: "sleep 30", timeout: 2, may_run_silent: true },
+			{ cmd: HANG, timeout: 2, may_run_silent: true },
 			1,
 		);
 		expect(isError).toBe(true);
@@ -454,7 +462,7 @@ describe("may_run_silent: schema and guidance", () => {
 	});
 
 	test("the kill message points to may_run_silent, NOT a longer timeout", async () => {
-		const { text } = await run({ cmd: "sleep 30", timeout: 600 }, 1);
+		const { text } = await run({ cmd: HANG, timeout: 600 }, 1);
 		expect(text).toMatch(/may_run_silent: true/);
 		expect(text).toMatch(/longer timeout will NOT help/);
 	}, 20000);
@@ -472,7 +480,7 @@ describe("process hygiene", () => {
 		// a backgrounded grandchild that would write 3s from now, behind a parent
 		// that never exits. if only the direct child were killed, the marker lands.
 		await run(
-			{ cmd: `(sleep 3; echo ORPHANED > "${marker}") & sleep 30`, timeout: 600 },
+			{ cmd: `(sleep 3; echo ORPHANED > "${marker}") & ${HANG}`, timeout: 600 },
 			1,
 		);
 		await new Promise((r) => setTimeout(r, 4000));
@@ -491,12 +499,12 @@ describe("process hygiene", () => {
 
 describe("env overrides", () => {
 	test("PI_BASH_MAX_TIMEOUT_SEC raises the ceiling in the schema AND the net", async () => {
-		process.env.PI_BASH_MAX_TIMEOUT_SEC = "1800";
+		process.env.PI_BASH_MAX_TIMEOUT_SEC = "7200";
 		try {
 			const params = createBashTool().parameters as any;
-			expect(params.properties.timeout.maximum).toBe(1800);
-			expect(maxTimeoutSec()).toBe(1800);
-			const { isError } = await run({ cmd: "echo HIGH_CEILING", timeout: 1200 });
+			expect(params.properties.timeout.maximum).toBe(7200);
+			expect(maxTimeoutSec()).toBe(7200);
+			const { isError } = await run({ cmd: "echo HIGH_CEILING", timeout: 5000 });
 			expect(isError).toBe(false);
 		} finally {
 			delete process.env.PI_BASH_MAX_TIMEOUT_SEC;
@@ -507,17 +515,17 @@ describe("env overrides", () => {
 		for (const junk of ["abc", "-1", "", "   ", "NaN"]) {
 			process.env.PI_BASH_MAX_TIMEOUT_SEC = junk;
 			process.env.PI_BASH_IDLE_KILL_SEC = junk;
-			expect(maxTimeoutSec()).toBe(600);
+			expect(maxTimeoutSec()).toBe(3600);
 			expect(idleKillSec()).toBe(300);
 		}
 		delete process.env.PI_BASH_MAX_TIMEOUT_SEC;
 		delete process.env.PI_BASH_IDLE_KILL_SEC;
 	});
 
-	test("defaults are 600 / 300 with no env set", () => {
+	test("defaults are 3600 / 300 with no env set", () => {
 		delete process.env.PI_BASH_MAX_TIMEOUT_SEC;
 		delete process.env.PI_BASH_IDLE_KILL_SEC;
-		expect(maxTimeoutSec()).toBe(600);
+		expect(maxTimeoutSec()).toBe(3600);
 		expect(idleKillSec()).toBe(300);
 	});
 
@@ -537,7 +545,7 @@ describe("interaction with the other guards", () => {
 		setTimeout(() => controller.abort(), 300);
 		const result: any = await tool.execute!(
 			"t",
-			{ cmd: "sleep 30", timeout: 600 } as any,
+			{ cmd: HANG, timeout: 600 } as any,
 			controller.signal,
 			undefined,
 			mockCtx,

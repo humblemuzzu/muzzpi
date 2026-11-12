@@ -3,7 +3,9 @@
  * command to `$FAKE_PI_LOG/<session id>.jsonl` and answers a prompt as the
  * `--model` it was given, with "answer: <message>". a message holding
  * `SLEEP <seconds>` runs that long first; `FAIL` ends the run with a provider
- * error; `TOOL <path>` reports a write; `PREFLIGHT <seconds>` delays the run's
+ * error; `TOOL <path>` reports a write; `JOBSTATUS` shows the status a run held
+ * for its bash jobs sets; `HELD` sets it too and, like a held run, ignores an
+ * abort; `PREFLIGHT <seconds>` delays the run's
  * start; `LOOP` streams a reply that repeats itself until aborted (`LOOP ALWAYS`:
  * every later run too). like pi, a steer joins the running run (before a run
  * starts it starts one of its own) and an abort ends it.
@@ -23,6 +25,7 @@ const emit = (event: unknown) => process.stdout.write(`${JSON.stringify(event)}\
 log({ argv, holder: process.env.PI_SUBAGENT_ID });
 
 let running: { steers: string[]; finish: (stopReason: string) => void } | undefined;
+let held = false;
 let alwaysLoop = false;
 
 function assistant(text: string, stopReason: string) {
@@ -59,6 +62,14 @@ function begin(message: string) {
 		emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "write", args: { path: tool, content: "x" } });
 		emit({ type: "tool_execution_end", toolCallId: "t1", toolName: "write", isError: false });
 	}
+	if (message.includes("HELD")) {
+		held = true;
+		emit({ type: "extension_ui_request", id: "h1", method: "setStatus", statusKey: "bash-jobs", statusText: "waiting for bash-1a2b (5s): tick" });
+	}
+	if (message.includes("JOBSTATUS")) {
+		emit({ type: "extension_ui_request", id: "s1", method: "setStatus", statusKey: "bash-jobs", statusText: "waiting for bash-1a2b (5s): tick" });
+		emit({ type: "extension_ui_request", id: "s2", method: "setStatus", statusKey: "other", statusText: "not about jobs" });
+	}
 	const state = {
 		steers: [] as string[],
 		finish: (stopReason: string) => {
@@ -83,7 +94,7 @@ process.stdin.on("data", (chunk) => {
 		const command = JSON.parse(line);
 		log(command);
 		if (command.type === "abort") {
-			running?.finish("aborted");
+			if (!held) running?.finish("aborted");
 			emit({ type: "response", id: command.id, command: "abort", success: true });
 		} else if (command.type === "prompt" && running && command.streamingBehavior) {
 			running.steers.push(command.message);

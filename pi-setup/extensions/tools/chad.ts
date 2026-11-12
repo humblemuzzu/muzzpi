@@ -44,7 +44,7 @@ import { firstLine } from "./lib/sub-agent-render";
  */
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash"];
 const EXTENSION_TOOLS = [
-	"read", "grep", "find", "ls", "bash", "skill", "codemode",
+	"read", "grep", "find", "ls", "bash", "agents", "skill", "codemode",
 	"web_search", "x_search", "read_web_page", "screenshot",
 	"read_github", "search_github", "list_directory_github",
 	"list_repositories", "glob_github", "commit_search", "diff",

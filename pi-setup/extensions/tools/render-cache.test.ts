@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { initTheme } from "@mariozechner/pi-coding-agent";
 import { Container, visibleWidth } from "@mariozechner/pi-tui";
 import { renderAgentResult } from "./agents";
+import { renderJobResult } from "./bash";
 import { renderCallLine } from "./lib/box-format";
 import { renderChangeResult } from "./lib/change-render";
 import { renderAgentTree, type SingleResult } from "./lib/sub-agent-render";
@@ -85,5 +86,34 @@ describe("the agent-result message", () => {
 		initTheme("dark");
 		const container = renderAgentResult(message, { expanded: true, outputPad: 1 }, theme);
 		expect(container.render(80).join("\n")).toContain("answer");
+	});
+});
+
+describe("the bash-job message", () => {
+	const job = {
+		id: "bash-1a2b",
+		command: "uv run pytest -q\n--second-line",
+		status: "failed" as const,
+		kind: "finished" as const,
+		durationMs: 432_000,
+		exitCode: 1,
+		text: "Background job bash-1a2b failed after 7m12s.\n\n$ uv run pytest -q\n\n..F.\nFAILED tests/test_a.py::test_x\n\nexit code 1",
+	};
+
+	test("a line naming the job, its command, then its output in a cached box, inside the width", () => {
+		const container = renderJobResult({ content: "…", details: { jobs: [job] } }, { expanded: false, outputPad: 1 }, theme);
+		const lines = container.render(50);
+		expect(lines[0]).toContain("✕ bash-1a2b failed · 7m12s");
+		expect(lines[1]).toContain("$ uv run pytest -q");
+		expect(lines.join("\n")).not.toContain("--second-line");
+		expect(lines.join("\n")).toContain("FAILED tests/test_a.py::test_x");
+		expect(lines.join("\n")).not.toContain("Background job bash-1a2b failed after");
+		expect(lines.every((line) => visibleWidth(line) <= 50)).toBe(true);
+		rendersFromCache(container.children[1] as any);
+	});
+
+	test("without details it shows the text", () => {
+		const container = renderJobResult({ content: "plain news" }, { expanded: false, outputPad: 1 }, theme);
+		expect(container.render(40).join("\n")).toContain("plain news");
 	});
 });

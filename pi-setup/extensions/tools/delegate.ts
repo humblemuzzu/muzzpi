@@ -29,7 +29,7 @@ import { firstLine } from "./lib/sub-agent-render";
 
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const EXTENSION_TOOLS = [
-	"read", "grep", "find", "ls", "bash",
+	"read", "grep", "find", "ls", "bash", "agents",
 	"edit", "write", "skill", "finder", "codemode",
 	"web_search", "x_search", "read_web_page", "screenshot",
 ];

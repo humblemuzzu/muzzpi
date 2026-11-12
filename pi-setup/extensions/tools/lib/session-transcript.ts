@@ -77,6 +77,7 @@ const SUB_AGENT_ID = /^(chad|delegate|oracle|finder|librarian|review_code)-/;
 const ANSWER_TOOLS = new Set(["read_session", "read_web_page", "web_search", "x_search"]);
 const BACKGROUND_STUB = /^(?:The user moved this \w+ to the background with Ctrl\+B\. )?(\w+) (?:is running in the background|is queued behind)[^(]*\(continueId: ([\w.-]+)\)/;
 const AGENT_RESULT_PREAMBLE = /^\[Automated agent event\.[^\n]*\]\n\n[^\n]*background sub-agents? finished\.[^\n]*\n\n/;
+const JOB_EVENT_PREAMBLE = /^\[Automated bash-job event\.[^\n]*\]\n\n/;
 
 // --- finding the file ---
 
@@ -403,6 +404,10 @@ function entryBlock(entry: Entry, ctx: Context): Block | undefined {
 		case "custom_message": {
 			const { text } = textParts(entry.content);
 			if (entry.customType === "agent-result") return block(entry, "SUB-AGENT RESULTS ARRIVED", [{ text: s(text.replace(AGENT_RESULT_PREAMBLE, "")) }]);
+			if (entry.customType === "bash-job") {
+				const body = cutPiece(text.replace(JOB_EVENT_PREAMBLE, ""), 1, s, ctx.maxCut);
+				return block(entry, "BACKGROUND BASH JOB REPORTED (automated, not typed by the user)", body ? [body] : []);
+			}
 			if (entry.customType === "pi-codex-goal") return block(entry, "GOAL CONTINUATION (sent by the goal extension, not typed by the user)", []);
 			if (entry.customType === "agent-message") return block(entry, "MESSAGE FROM ANOTHER SESSION", [{ text: s(text) }]);
 			const body = cutPiece(text, 1, s, ctx.maxCut);

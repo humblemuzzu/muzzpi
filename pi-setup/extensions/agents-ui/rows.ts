@@ -81,7 +81,7 @@ function activityText(run: RunSnapshot, theme: Styler, now: number, dim: boolean
 	if (notice) return paint(notice.ok ? "dim" : "warning", notice.ok ? notice.text : `✗ ${notice.text}`);
 	if (run.status === "running") return paint("dim", run.activity ?? "starting…");
 	if (run.status === "queued") return paint("muted", "waiting for a free slot");
-	if (run.status === "done") return paint("dim", answerLine(run));
+	if (run.status === "done") return paint("dim", run.activity ?? answerLine(run));
 	if (run.status === "failed") return paint("error", run.errorMessage ?? "failed");
 	return paint("muted", STATUS_STYLE[run.status].verb);
 }

@@ -144,8 +144,9 @@ Pick by what you need back:
 - **They run in the background.** A call returns at once and the answer
   arrives as a message that wakes the main agent; agents that finish together
   arrive as one. Pass a `continueId` back to redirect a running agent or to
-  follow up a finished one; `agents` lists, stops or waits for them, and
-  `Ctrl+B` sends a blocking call to the background.
+  follow up a finished one; `agents` lists or stops them. In the main
+  session an agent call never blocks; `Ctrl+B` sends a waiting bash command to
+  the background.
 - **Say it, get it.** *"Three chads on deepseek flash, medium thinking, in
   parallel"* runs exactly that. Models live in one file,
   [`agent-models.json`](pi-setup/agent-models.json); a name not on it is refused,
@@ -171,9 +172,17 @@ Pick by what you need back:
   over ssh, deletes run.
 - A comment gate refuses a patch that is mostly commentary.
 
-## 03 · Bash that cannot hang
+## 03 · Bash that cannot hang, and never runs blind
 
-- Every command declares a timeout, 1–600 s.
+- Every command declares a timeout, 1–3600 s.
+- A command still running after a minute moves to the background as a job. The
+  agent gets its output so far and keeps working or ends its turn; the result
+  wakes it when the command ends, or as soon as a line matches its `wake_on`
+  pattern. Jobs show in the agents dock. Sub-agents get the same, and wait for
+  their jobs before they report.
+- A test, build or install piped into `tail`/`head`/`grep`, or sent to a file, is
+  refused: the pipe hides its progress and replaces its exit code. So is a bare
+  `sleep` of 30 s or more.
 - No output **and** no CPU for 300 s: killed. A command busy at 100% CPU is left
   alone; a machine that slept is not counted as hung.
 - A failed command is reported as failed, exit code and stderr intact.
@@ -289,7 +298,7 @@ mentions a token stays readable.
 | Tools on by default | 4: `read`, `bash`, `edit`, `write` | 35 |
 | Sub-agents | none, by design | 6, each on its own model |
 | Edits | `edit` + `write` | the same tools, plus undo across restarts, permission rules, a comment gate |
-| Bash | timeout optional | timeout required, hung commands killed |
+| Bash | timeout optional | timeout required, hung commands killed, long ones moved to the background |
 | MCP | every server connects at start | each connects on first use |
 | Web, GitHub, screen | none | built in |
 | Secrets in tool output | sent as is | scrubbed |

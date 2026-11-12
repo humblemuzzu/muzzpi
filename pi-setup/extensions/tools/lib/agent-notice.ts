@@ -12,7 +12,7 @@ export interface Overlap {
 	files: string[];
 }
 
-/** one finished run, as the notification, `agents wait` and stats see it. */
+/** one finished run, as the notification, `agents stop` and stats see it. */
 export interface RunReport {
 	agent: string;
 	label: string;
@@ -50,18 +50,16 @@ export function failureText(
 	return hint ? `${error}\n\n${hint}` : error;
 }
 
-export function backgroundStub(agent: string, continueId: string, queuedBehind: number, movedByUser = false): string {
+export function backgroundStub(agent: string, continueId: string, queuedBehind: number): string {
 	const where = queuedBehind > 0
 		? `is queued behind ${queuedBehind} running agent${queuedBehind === 1 ? "" : "s"} and starts when one finishes`
 		: "is running in the background";
 	return (
-		(movedByUser ? `The user moved this ${agent} to the background with Ctrl+B. ` : "") +
 		`${agent} ${where} (continueId: ${continueId}). Its result arrives by itself as an agent-result notification. ` +
 		"Until then you know nothing about what it found: do not guess, predict or report its result. " +
 		"Do not poll, sleep or redo its work. Keep working on something that does not overlap with it, " +
 		"or tell the user briefly what you launched and end your turn; you will be woken when it finishes. " +
-		`To add instructions while it runs, call ${agent} again with this continueId; the agents tool stops it, ` +
-		"or waits for it when nothing else is left to do."
+		`To add instructions while it runs, call ${agent} again with this continueId; the agents tool stops it.`
 	);
 }
 

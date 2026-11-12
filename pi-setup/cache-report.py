@@ -26,10 +26,10 @@ def parse_time(value):
 def read_session(path, since):
     turns, warms, compactions = [], [], []
     previous = None
-    agent_result = False
+    woken_by = None
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
-            if '"cacheWrite"' not in line and '"compaction"' not in line and '"agent-result"' not in line:
+            if '"cacheWrite"' not in line and '"compaction"' not in line and '"agent-result"' not in line and '"bash-job"' not in line:
                 continue
             try:
                 entry = json.loads(line)
@@ -41,8 +41,8 @@ def read_session(path, since):
             if entry.get("type") == "compaction":
                 compactions.append({"tokens": entry.get("tokensBefore") or 0, "capture": (entry.get("details") or {}).get("fromCapture")})
                 continue
-            if entry.get("type") == "custom_message" and entry.get("customType") == "agent-result":
-                agent_result = True
+            if entry.get("type") == "custom_message" and entry.get("customType") in ("agent-result", "bash-job"):
+                woken_by = "a background agent" if entry.get("customType") == "agent-result" else "a background bash job"
                 continue
             if entry.get("type") == "usage" and entry.get("kind") == "cache_warm":
                 warms.append(entry.get("usage") or {})
@@ -62,13 +62,13 @@ def read_session(path, since):
                 "write": usage.get("cacheWrite", 0),
                 "write1h": usage.get("cacheWrite1h", 0) or 0,
                 "gap": None if previous is None else at - previous["at"],
-                "waited_on": None if previous is None else ("+".join(sorted(set(previous["tools"]))) if previous["stop"] == "toolUse" else "a background agent" if agent_result else "you"),
+                "waited_on": None if previous is None else ("+".join(sorted(set(previous["tools"]))) if previous["stop"] == "toolUse" else woken_by or "you"),
                 "stop": message.get("stopReason"),
                 "tools": tools,
             }
             turns.append(turn)
             previous = turn
-            agent_result = False
+            woken_by = None
     return turns, warms, compactions
 
 

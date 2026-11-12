@@ -20,7 +20,8 @@ import { createLsTool } from "./ls";
 import { createEditTool, createWriteTool } from "./edit-write";
 import { createGrepTool } from "./grep";
 import { createGlobTool } from "./glob";
-import { createBashTool } from "./bash";
+import { createBashTool, renderJobResult } from "./bash";
+import { BashJobs, JOB_RESULT_TYPE } from "./lib/bash-jobs";
 import { createRedoEditTool, createUndoEditTool } from "./undo-edit";
 import { createSkillTool } from "./skill";
 import { isLocalProvider } from "./lib/local-providers";
@@ -38,7 +39,7 @@ import { createSearchSessionsTool } from "./search-sessions";
 import { createReadSessionTool } from "./read-session";
 import { createAskTool } from "./ask";
 import { createAgentsTool, renderAgentResult } from "./agents";
-import { AGENT_CONTROL_CHANNEL, AGENT_RESULT_TYPE, AGENT_RUNS_CHANNEL, parseControlRequest } from "./lib/agent-channel";
+import { AGENT_CONTROL_CHANNEL, AGENT_RESULT_TYPE, AGENT_RUNS_CHANNEL, JOB_STATUS_KEY, parseControlRequest, type RunSnapshot } from "./lib/agent-channel";
 import { AGENT_RUN_ENTRY, AgentRuns } from "./lib/agent-runs";
 import { SUB_AGENT_TOOLS_ENV } from "./lib/sub-agent-prompt";
 import { readAgentPrompt } from "./lib/pi-spawn";
@@ -71,11 +72,31 @@ import { peakPriced } from "./lib/deepseek-cost";
 export default function (pi: ExtensionAPI) {
 	// read once: the schema enums and the resolver must agree for the whole session.
 	const models = loadAgentModels();
+	/* one broadcast carries both, so the agents UI and the prompt cache see every background run. */
+	const shown: { agents: RunSnapshot[]; jobs: RunSnapshot[] } = { agents: [], jobs: [] };
+	const broadcast = () => pi.events.emit(AGENT_RUNS_CHANNEL, [...shown.agents, ...shown.jobs]);
 	const runs = new AgentRuns({
 		notify: (content, details, wake) =>
 			pi.sendMessage({ customType: AGENT_RESULT_TYPE, content, display: true, details }, wake ? { triggerTurn: true, deliverAs: "steer" } : {}),
-		broadcast: (snapshot) => pi.events.emit(AGENT_RUNS_CHANNEL, snapshot),
+		broadcast: (snapshot) => {
+			shown.agents = snapshot;
+			broadcast();
+		},
 		record: (entry) => pi.appendEntry(AGENT_RUN_ENTRY, entry),
+	});
+	/* a job's output is not a tool result, so the tool_result scrubber never sees it: scrub it here. */
+	const jobs = new BashJobs({
+		notify: (content, details, wake) =>
+			makeScrubber().then((scrub) =>
+				pi.sendMessage(
+					{ customType: JOB_RESULT_TYPE, content: scrub(content), display: true, details: { jobs: details.jobs.map((job) => ({ ...job, command: scrub(job.command), text: scrub(job.text) })) } },
+					wake ? { triggerTurn: true, deliverAs: "steer" } : {},
+				),
+			).catch(() => {}),
+		broadcast: (snapshot) => {
+			shown.jobs = snapshot;
+			broadcast();
+		},
 	});
 
 	pi.registerTool(createReadTool(NORMAL_LIMITS));
@@ -85,7 +106,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createWriteTool());
 	pi.registerTool(createGrepTool());
 	pi.registerTool(createGlobTool());
-	pi.registerTool(createBashTool());
+	pi.registerTool(createBashTool(jobs));
 	pi.registerTool(createUndoEditTool());
 	// redo is only safe because it refuses when the file moved on since the
 	// undo; see the invalidation check in undo-edit.ts.
@@ -132,8 +153,18 @@ export default function (pi: ExtensionAPI) {
 		models,
 		runs,
 	}));
-	pi.registerTool(createAgentsTool(runs));
+	pi.registerTool(createAgentsTool(runs, jobs));
 	pi.registerMessageRenderer(AGENT_RESULT_TYPE, renderAgentResult);
+	pi.registerMessageRenderer(JOB_RESULT_TYPE, renderJobResult);
+	// a session nothing can wake ends its run only once its background jobs have reported
+	pi.on("agent_before_settle", async (_event, ctx) => {
+		const sent = await jobs.hold(ctx.signal, (text) => {
+			try {
+				ctx.ui.setStatus(JOB_STATUS_KEY, text);
+			} catch {}
+		});
+		return sent ? { continue: true } : undefined;
+	});
 	pi.registerTool(createReadWebPageTool({
 		systemPrompt: readAgentPrompt("prompt.amp.read-web-page.md"),
 		models,
@@ -161,14 +192,18 @@ export default function (pi: ExtensionAPI) {
 		stopControl?.();
 		stopControl = pi.events.on(AGENT_CONTROL_CHANNEL, (message) => {
 			const request = parseControlRequest(message);
-			if (request) void runs.control(request).catch(() => {});
+			if (!request) return;
+			if (request.action === "stopAll" || jobs.has(request.id)) jobs.control(request);
+			if (request.action === "stopAll" || !jobs.has(request.id)) void runs.control(request).catch(() => {});
 		});
 		runs.restore(ctx.sessionManager.getBranch());
 		const handoff = event.reason === "reload" ? AgentRuns.takeReloadHandoff() : undefined;
 		if (handoff) runs.adoptReload(handoff);
+		const jobHandoff = event.reason === "reload" ? BashJobs.takeHandoff() : undefined;
+		if (jobHandoff) jobs.adopt(jobHandoff);
 		if (ctx.mode === "tui") {
-			// not a registered shortcut: Ctrl+B stays the editor's cursor-left unless a blocking agent runs
-			stopDetachKey = ctx.ui.onTerminalInput((data) => (matchesKey(data, "ctrl+b") && runs.detachForeground() ? { consume: true } : undefined));
+			// not a registered shortcut: Ctrl+B stays the editor's cursor-left unless a bash call is waiting
+			stopDetachKey = ctx.ui.onTerminalInput((data) => (matchesKey(data, "ctrl+b") && jobs.detachForeground() ? { consume: true } : undefined));
 		}
 		if (!ctx.hasUI || process.env[SUB_AGENT_TOOLS_ENV]?.trim()) return;
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -190,7 +225,7 @@ export default function (pi: ExtensionAPI) {
 		stopDetachKey = undefined;
 		stopControl?.();
 		stopControl = undefined;
-		await runs.shutdown(event.reason === "reload");
+		await Promise.all([runs.shutdown(event.reason === "reload"), jobs.shutdown(event.reason === "reload")]);
 	});
 
 	// github tools — used by librarian sub-agent, also available to main agent

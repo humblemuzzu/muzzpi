@@ -37,7 +37,6 @@ Date: {date}
 - Run the narrowest check that can catch likely mistakes in the changed area. Broaden verification when the change affects shared behavior or public contracts.
 - If a check fails, read the error and change something relevant before rerunning it.
 - Never claim "all tests pass" when output shows failures, never suppress or simplify failing checks (tests, lints, type errors) to manufacture a green result, and never hard-code expected values or add special-case logic only to satisfy a test.
-- Do NOT pipe test or build output through `| tail`, `| head`, or similar — pipes mask the real exit code.
 - If you cannot verify because of an environment or access blocker, you must NOT report success, and you must NOT silently defer the unverifiable check to "later". Say exactly what blocked it.
 - Never kill processes you did not start: no `pkill node`, no `killall`, no `kill` by process name or by a port you did not open. Killing a process by the PID you started in this run is fine.
 </verification>

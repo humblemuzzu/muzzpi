@@ -1,4 +1,4 @@
-import { Input, Key, matchesKey, truncateToWidth, type Component, type Focusable } from "@mariozechner/pi-tui";
+import { Input, Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type Focusable } from "@mariozechner/pi-tui";
 import type { RunSnapshot } from "../tools/lib/agent-channel";
 import { justify, type Styler } from "../tools/lib/agent-layout";
 import { identityColor, STATUS_STYLE } from "../tools/lib/agent-style";
@@ -18,6 +18,9 @@ export interface ViewActions {
 export type ViewResult = "closed";
 
 const PAGE_OVERLAP = 2;
+
+/** a bash job: its latest output instead of a conversation, and no messages */
+const isJob = (run: RunSnapshot) => run.output !== undefined;
 
 /**
  * One agent, full screen: its own conversation as the main chat draws it, live
@@ -98,7 +101,7 @@ export class AgentView implements Component, Focusable {
 	private send(): void {
 		const text = this.input.getValue().trim();
 		const run = this.store.get(this.id);
-		if (!text || !run) return;
+		if (!text || !run || isJob(run)) return;
 		this.input.setValue("");
 		this.follow = true;
 		if (isLive(run)) this.actions.steer(run.id, text);
@@ -133,11 +136,13 @@ export class AgentView implements Component, Focusable {
 	}
 
 	private bodyLines(run: RunSnapshot, inner: number): string[] {
-		const key = `${run.id}|${inner}|${this.fullResults}|${run.messages.length}|${run.status}|${run.errorMessage ?? ""}`;
+		const key = `${run.id}|${inner}|${this.fullResults}|${run.messages.length}|${run.status}|${run.errorMessage ?? ""}|${run.output ?? ""}`;
 		if (this.body?.key === key) return this.body.lines;
 		const { theme } = this;
-		const lines = this.transcript.lines(run.messages, inner, { full: this.fullResults });
-		if (lines.length === 0) lines.push(theme.fg("muted", isLive(run) ? "starting up…" : "(no transcript)"));
+		const lines = isJob(run)
+			? (run.output ? normalizeForDisplay(run.output).split("\n").flatMap((line) => wrapTextWithAnsi(theme.fg("toolOutput", line), inner)) : [])
+			: this.transcript.lines(run.messages, inner, { full: this.fullResults });
+		if (lines.length === 0) lines.push(theme.fg("muted", isJob(run) ? "(no output yet)" : isLive(run) ? "starting up…" : "(no transcript)"));
 		if (!isLive(run) && run.errorMessage && run.status !== "done") lines.push("", ...normalizeForDisplay(run.errorMessage).split("\n").map((line) => theme.fg("error", line)));
 		this.body = { key, lines };
 		return lines;
@@ -156,6 +161,7 @@ export class AgentView implements Component, Focusable {
 
 	private inputRow(run: RunSnapshot, inner: number): string {
 		const line = this.input.render(inner)[0] ?? "";
+		if (isJob(run)) return truncateToWidth(this.theme.fg("dim", "a bash job takes no messages"), inner);
 		if (this.input.getValue() !== "") return truncateToWidth(line, inner);
 		const placeholder = isLive(run) ? "type to steer this agent" : "type to continue this agent";
 		return truncateToWidth(`${line.trimEnd()}${this.theme.fg("dim", placeholder)}`, inner);
@@ -166,7 +172,7 @@ export class AgentView implements Component, Focusable {
 		const notice = controlNotice(run, this.clock.now());
 		if (notice) return theme.fg(notice.ok ? "dim" : "warning", notice.ok ? notice.text : `✗ ${notice.text}`);
 		const dim = (text: string) => theme.fg("dim", text);
-		const send = `enter ${isLive(run) ? "steer" : "continue"}`;
+		const send = isJob(run) ? "output" : `enter ${isLive(run) ? "steer" : "continue"}`;
 		const position = this.follow ? "following" : `paused (${Math.max(0, maxTop - this.top)} below) · end follows`;
 		const switching = this.store.all().length > 1 ? "←→ agent · " : "";
 		const stop = isLive(run) && !run.stopping ? " · ctrl+c stop" : "";

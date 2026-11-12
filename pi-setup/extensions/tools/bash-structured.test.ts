@@ -104,6 +104,21 @@ describe("bash structuredContent (codemode contract)", () => {
 		expect(r.structuredContent).toBeUndefined();
 	});
 
+	test("a command the OS refuses to spawn is an error result, never an unhandled rejection", async () => {
+		const stray: unknown[] = [];
+		const onStray = (reason: unknown) => stray.push(reason);
+		process.on("unhandledRejection", onStray);
+		try {
+			const r = await run("echo a\u0000b");
+			expect(r.isError).toBe(true);
+			expect(r.content[0].text).toStartWith("command error:");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(stray).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onStray);
+		}
+	});
+
 	test("a command killed by a signal is an error, not a success", async () => {
 		const r = await run("kill -9 $$");
 		expect(r.isError).toBe(true);

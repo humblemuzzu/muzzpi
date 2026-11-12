@@ -358,20 +358,16 @@ describe("continueId", () => {
 });
 
 describe("blocking runs", () => {
-	test("print mode, a sub-agent, a codemode script and background:false all block", async () => {
+	test("print mode, a sub-agent and a codemode script block; nothing else does", async () => {
 		const blocked = async (result: any) => {
 			expect(result.details.background).toBeUndefined();
 			expect(textOf(result)).toContain("answer: Task: hi");
 			expect(textOf(result)).toContain("continueId: chad-");
 		};
 		await blocked(await setup("print").launch("hi"));
-		await blocked(await setup().launch("hi", { background: false }));
 		await blocked(await setup().launch("hi", {}, "chad", { toolCallId: "call-1/2" }));
-		const { runs, launch } = setup();
-		const nested = launch("SLEEP 0.5 hi", {}, "chad", { toolCallId: "call-9/1" });
-		await Bun.sleep(200);
-		expect(runs.detachForeground()).toBe(false);
-		expect(textOf(await nested)).toContain("answer: Task: SLEEP 0.5 hi");
+		const habit = await setup().launch("hi", { background: false });
+		expect(habit.details.background).toBe(true);
 		process.env[SUB_AGENT_TOOLS_ENV] = "read,finder";
 		try {
 			await blocked(await setup("rpc").launch("hi"));
@@ -383,7 +379,7 @@ describe("blocking runs", () => {
 	test("Esc stops a blocking run", async () => {
 		const controller = new AbortController();
 		const { launch } = setup();
-		const pending = launch("SLEEP 30", { background: false }, "chad", { signal: controller.signal });
+		const pending = launch("SLEEP 30", {}, "chad", { toolCallId: "call-3/1", signal: controller.signal });
 		await Bun.sleep(300);
 		controller.abort();
 		const result = await pending;
@@ -391,18 +387,6 @@ describe("blocking runs", () => {
 		expect(textOf(result)).toContain("Stopped before the sub-agent finished");
 	}, 20000);
 
-	test("Ctrl+B moves a blocking run to the background", async () => {
-		const { host, runs, launch } = setup();
-		const pending = launch("SLEEP 1 long", { background: false });
-		await Bun.sleep(300);
-		expect(runs.detachForeground()).toBe(true);
-		const stub = await pending;
-		expect(stub.details.background).toBe(true);
-		expect(textOf(stub)).toStartWith("The user moved this chad to the background with Ctrl+B.");
-		await until(() => host.notified.length > 0);
-		expect(host.notified[0]!.runs[0]!.status).toBe("done");
-		expect(runs.detachForeground()).toBe(false);
-	}, 20000);
 });
 
 test("pi still names a codemode script's tool calls <callerId>/<n>, which is how a nested run is told apart", () => {
@@ -425,6 +409,24 @@ describe("the queue", () => {
 	}, 30000);
 });
 
+describe("a child held for its bash jobs", () => {
+	test("its job status becomes the run's activity; other status keys do not", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 1 JOBSTATUS"));
+		await until(() => host.last.find((run) => run.id === id)?.activity === "waiting for bash-1a2b (5s): tick");
+		await runs.wait([id], 10);
+	});
+
+	test("a stop ends it at once: an abort cannot reach a run held at its end", async () => {
+		const { host, runs, launch } = setup();
+		const id = idOf(await launch("SLEEP 30 HELD"));
+		await until(() => host.last.find((run) => run.id === id)?.activity?.startsWith("waiting for") === true);
+		const started = Date.now();
+		await runs.stop([id]);
+		expect(Date.now() - started).toBeLessThan(1_500);
+	}, 20000);
+});
+
 describe("agents stop and list", () => {
 	test("stop ends a running agent, reports it, and it is not notified", async () => {
 		const { host, runs, launch } = setup();
@@ -436,7 +438,7 @@ describe("agents stop and list", () => {
 		expect(stopped.details.runs.map((r) => [r.continueId, r.status])).toEqual([[id, "stopped"]]);
 		await Bun.sleep(1_800);
 		expect(host.notified).toHaveLength(0);
-		expect((await runs.stop(["all"])).text).toBe("No agent is running.");
+		expect((await runs.stop(["all"])).text).toBe("");
 		expect((await runs.stop([])).text).toContain("Name the continueIds to stop");
 	}, 20000);
 });

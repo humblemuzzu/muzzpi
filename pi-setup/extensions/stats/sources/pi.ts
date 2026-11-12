@@ -30,7 +30,7 @@ import type { FileSpec, LineEnv } from "./files";
  * pi's own sessions. Main-session spend comes from assistant `usage`, which
  * pi prices itself. Sub-agent spend comes from the parent's record of each run:
  * a blocking call's toolResult `details.usage`, or the `details.runs` of a
- * background run's agent-result message (or of the `agents wait` that took it).
+ * background run's agent-result message (or, in older sessions, of the `agents wait` that took it).
  * A fork copies its parent's entries with their
  * original timestamps, so entries older than the fork header are skipped
  * while the parent exists. pi records $0 for subscription and imported

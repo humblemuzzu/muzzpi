@@ -2,8 +2,6 @@
 
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
-import { StringDecoder } from "node:string_decoder";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { COLLAPSED_EXCERPTS, formatBoxesWindowed, normalizeForDisplay, type BoxSection } from "./lib/box-format";
 import { getText, getContainer } from "./lib/tui";
@@ -13,22 +11,22 @@ import { evaluateCommand, loadPermissions } from "./lib/permissions";
 import { requestApproval } from "./lib/approval";
 import { evaluateReadOnlyCommand, isReadOnlyBash, readOnlyRefusal } from "./lib/read-only-bash";
 import { resolveToAbsolute } from "./read";
-import { OutputBuffer, headTailChars } from "./lib/output-buffer";
-import { FullOutput, MAX_FILE_BYTES } from "./lib/full-output";
 import { loadSecrets, makeScrubber } from "./lib/psst";
 import { gitAction, leakRefusal, scanCommand } from "./lib/commit-guard";
-import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./lib/watchdog";
-import { sampleGroupCpuSeconds } from "./lib/proc-cpu";
 import { heredocTags } from "./lib/remote-command";
+import { BashProcess, HEAD_LINES, TAIL_LINES, sanitizeForDisplay } from "./lib/bash-process";
+import { endResult } from "./lib/bash-result";
+import { blindingRefusal, sleepRefusal, SLEEP_LIMIT_SEC } from "./lib/command-shape";
+import { BashJobs, HEARTBEAT_MS, movedText, yieldSec, type JobResultDetails } from "./lib/bash-jobs";
+import { RUN_STATUS_KEY, wakeable } from "./lib/agent-channel";
+import { SUB_AGENT_TOOLS_ENV } from "./lib/sub-agent-prompt";
+import { STATUS_STYLE } from "./lib/agent-style";
+import { formatDuration } from "./lib/sub-agent-render";
 
-const HEAD_LINES = 50;
-const TAIL_LINES = 50;
-/** the line window alone lets one minified line through whole. */
-const MAX_OUTPUT_CHARS = 20_000;
-const SIGKILL_DELAY_MS = 3000;
-/** how long after the shell exits a still-open output pipe is taken to mean a background process holds it. */
-const BACKGROUND_GRACE_MS = 1500;
+export { exitNote } from "./lib/bash-result";
+
 const STREAM_UPDATE_INTERVAL_MS = 150;
+const MAX_WAKE_ON_CHARS = 300;
 
 /** pi's built-in bash output contract, so codemode scripts get data, not a throw, on a non-zero exit. */
 const bashOutputSchema = Type.Object({
@@ -42,22 +40,13 @@ const bashOutputSchema = Type.Object({
 // --- time bounds ---
 
 /*
- * timeout is required (1..MAX) so nothing runs unbounded. idle kill is the
- * other bound: no output AND no CPU for N seconds, from t=0 — pipes block-buffer,
- * so arming after first output never fires on the hang it exists for. CPU can
- * only keep a command alive; sample failure (undefined) degrades to stdout-only.
- * residuals, both still bounded by timeout: 0-CPU remote work (ssh) looks idle;
- * a 100% busy-loop hang is caught by the wall clock, not idle.
+ * timeout is required (1..MAX) so nothing runs unbounded; it is the command's
+ * deadline from its start, in the foreground and as a background job alike.
+ * The idle kill (bash-process.ts) is the other bound.
  */
 const MIN_TIMEOUT_SEC = 1;
-const DEFAULT_MAX_TIMEOUT_SEC = 600;
+const DEFAULT_MAX_TIMEOUT_SEC = 3600;
 const DEFAULT_IDLE_KILL_SEC = 300;
-
-/** fraction of one core over the sample window; scale-invariant so tests and production agree. */
-const CPU_ALIVE_CORE_FRACTION = 0.05;
-
-/** coarse tick; real interval is min(this, idle/3) so a short window is still observed. */
-const IDLE_TICK_MS = 10_000;
 
 function envInt(name: string, fallback: number): number {
 	const raw = process.env[name];
@@ -65,11 +54,6 @@ function envInt(name: string, fallback: number): number {
 	const parsed = Number(raw);
 	if (!Number.isFinite(parsed) || parsed < 0) return fallback;
 	return Math.floor(parsed);
-}
-
-/** off (`PI_BASH_CPU_LIVENESS=0`) falls back to stdout-only idle. */
-function cpuLivenessEnabled(): boolean {
-	return process.env.PI_BASH_CPU_LIVENESS !== "0";
 }
 
 /** ceiling, read at construction — it goes into the schema the model sees. */
@@ -105,18 +89,6 @@ export function idleKillSec(): number {
 	return envInt("PI_BASH_IDLE_KILL_SEC", DEFAULT_IDLE_KILL_SEC);
 }
 
-// --- shell config ---
-
-/**
- * pi's getShellConfig() lives in utils/shell.js, not re-exported
- * from the main package. reimplemented here — on macOS (our target)
- * this is always /bin/bash.
- */
-function getShell(): { shell: string; args: string[] } {
-	if (existsSync("/bin/bash")) return { shell: "/bin/bash", args: ["-c"] };
-	return { shell: "sh", args: ["-c"] };
-}
-
 // --- command preprocessing ---
 
 /**
@@ -133,25 +105,6 @@ function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
 
 function stripBackground(cmd: string): string {
 	return cmd.replace(/\s*&\s*$/, "");
-}
-
-const SEARCH_PROGRAMS = new Set(["grep", "egrep", "fgrep", "rg", "ag"]);
-
-/** the program the command line runs last, past `VAR=x` prefixes; exit 1 from a search there means "no match" */
-function lastProgram(command: string): string {
-	const stage = command.split(/\|\||&&|;|\|/).at(-1) ?? "";
-	const words = stage.trim().split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
-	const first = (words[0] ?? "").replace(/^.*\//, "");
-	return first === "git" && words[1] === "grep" ? "grep" : first;
-}
-
-export function exitNote(command: string, code: number, hasOutput: boolean): string {
-	if (code === 127) return "exit code 127: command not found. The program may not be installed or not on PATH.";
-	if (code === 126) return "exit code 126: found but not executable. Check its permissions.";
-	if (code === 1 && !hasOutput && SEARCH_PROGRAMS.has(lastProgram(command))) {
-		return "exit code 1: no matches. A search that finds nothing exits 1; this is not a failure.";
-	}
-	return `exit code ${code}`;
 }
 
 function isGitCommand(cmd: string): boolean {
@@ -172,46 +125,70 @@ function injectGitTrailers(cmd: string, sessionId: string): string {
 	);
 }
 
-// --- process management ---
+/** `wake_on` as a RegExp; `/x/i` is read as a regex literal. A refusal when it does not compile. */
+function wakeOnOf(params: Record<string, unknown>): { regex?: RegExp; error?: string } {
+	const raw = params.wake_on ?? params.wakeOn;
+	if (raw === undefined || raw === null || raw === "") return {};
+	if (typeof raw !== "string" || raw.length > MAX_WAKE_ON_CHARS) return { error: `wake_on must be a regular expression of at most ${MAX_WAKE_ON_CHARS} characters.` };
+	const literal = raw.match(/^\/(.+)\/([imsu]*)$/s);
+	try {
+		return { regex: literal ? new RegExp(literal[1]!, literal[2]!.replace(/[gy]/g, "")) : new RegExp(raw) };
+	} catch (err: any) {
+		return { error: `wake_on is not a valid regular expression: ${err.message}` };
+	}
+}
+
+/** the output so far, to the TUI while the call waits; at most one update per interval. */
+function streamPreview(proc: BashProcess, onUpdate: ((update: any) => void) | undefined): () => void {
+	if (!onUpdate) return () => {};
+	let lastAt = 0;
+	let pending: ReturnType<typeof setTimeout> | undefined;
+	const send = () => {
+		pending = undefined;
+		lastAt = Date.now();
+		try {
+			onUpdate({ content: [{ type: "text", text: proc.preview() }] });
+		} catch {}
+	};
+	const stop = proc.onOutput(() => {
+		if (pending) return;
+		const wait = STREAM_UPDATE_INTERVAL_MS - (Date.now() - lastAt);
+		if (wait <= 0) send();
+		else pending = setTimeout(send, wait);
+	});
+	return () => {
+		stop();
+		if (pending) clearTimeout(pending);
+	};
+}
 
 /**
- * SIGTERM the process group first, escalate to SIGKILL after delay.
- * pi's built-in goes straight to SIGKILL via killProcessTree().
- * graceful fallback so processes can clean up.
+ * a sub-agent's parent kills it after 900s with nothing on its stdout; a command
+ * that must wait in the foreground (git, a codemode script) says once a minute
+ * that it runs. The command's own timeout and idle kill still bound it.
  */
-function killGracefully(pid: number): void {
-	try {
-		process.kill(-pid, "SIGTERM");
-	} catch {
-		return;
-	}
-
-	setTimeout(() => {
+export function childHeartbeat(ui: { setStatus(key: string, text: string | undefined): void } | undefined, command: string, everyMs = HEARTBEAT_MS): () => void {
+	if (!ui || !process.env[SUB_AGENT_TOOLS_ENV]?.trim()) return () => {};
+	const started = Date.now();
+	const label = normalizeForDisplay(command.split("\n")[0] ?? "").slice(0, 60);
+	let beat = false;
+	const set = (text: string | undefined) => {
 		try {
-			process.kill(-pid, 0);
-			process.kill(-pid, "SIGKILL");
-		} catch {
-			// already dead
-		}
-	}, SIGKILL_DELAY_MS);
+			ui.setStatus(RUN_STATUS_KEY, text);
+		} catch {}
+	};
+	const timer = setInterval(() => {
+		beat = true;
+		set(`running \`${label}\` (${formatDuration(Date.now() - started)})`);
+	}, everyMs);
+	timer.unref?.();
+	return () => {
+		clearInterval(timer);
+		if (beat) set(undefined);
+	};
 }
 
-/** groups a finished call left running in the background; each dies at its deadline or when pi exits. */
-const backgroundGroups = new Set<number>();
-let exitHookInstalled = false;
-
-function trackBackgroundGroup(pid: number): void {
-	backgroundGroups.add(pid);
-	if (exitHookInstalled) return;
-	exitHookInstalled = true;
-	process.once("exit", () => {
-		for (const pgid of backgroundGroups) {
-			try {
-				process.kill(-pgid, "SIGTERM");
-			} catch {}
-		}
-	});
-}
+const refusal = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true }) as any;
 
 /** command lines shown in the call header before eliding; ctrl+o shows the rest */
 const COLLAPSED_CMD_LINES = 3;
@@ -240,64 +217,61 @@ function foldHeredocs(lines: string[]): CommandRow[] {
 /** grace past the max declared timeout before an orphaned elapsed-ticker self-clears */
 const TICKER_SLACK_MS = 60_000;
 
-// --- output sanitization ---
-
-/**
- * strip terminal control sequences before they reach the TUI. CSI uses ECMA-48
- * parameter bytes 0x30-0x3f so DEC private modes (`?1049h`) are caught —
- * `[0-9;]*` misses the `?` and those execute as real terminal commands.
- */
-function sanitizeForDisplay(text: string): string {
-	return text
-		// CSI sequences (full ECMA-48): \x1b[ + parameter bytes (0x30-0x3f)
-		// + intermediate bytes (0x20-0x2f) + final byte (0x40-0x7e).
-		// covers SGR colors, cursor movement, DEC private mode (?25h, ?1049h,
-		// ?2004h), screen clearing, xterm modifiers (>4;2m), etc.
-		.replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, "")
-		// OSC sequences: \x1b] ... BEL or \x1b] ... ST
-		.replace(/\x1b\][^\x07]*\x07/g, "")
-		.replace(/\x1b\][^\x1b]*\x1b\\/g, "")
-		// DCS sequences: \x1bP ... ST (\x1b\\ or \x07)
-		.replace(/\x1bP[^\x07]*\x07/g, "")
-		.replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-		// APC/PM/SOS sequences: \x1b_ / \x1b^ / \x1bX ... ST
-		.replace(/\x1b[_^X][^\x1b]*\x1b\\/g, "")
-		.replace(/\x1b[_^X][^\x07]*\x07/g, "")
-		// charset selection, cursor save/restore, keypad modes
-		.replace(/\x1b[()][0-9A-B]/g, "")
-		.replace(/\x1b[78=>]/g, "")
-		// normalize line endings (SSH sends \r\n; raw \r overwrites line start)
-		.replace(/\r\n/g, "\n")
-		.replace(/\r/g, "\n")
-		// strip remaining control chars (except \n newline and \t tab)
-		.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+/** output lines in a box, cached per width; collapsed it shows the start and end. */
+function outputBox(text: string, expanded: boolean, notices: string[] | undefined, theme: any) {
+	const lines = text.split("\n");
+	let cachedWidth: number | undefined;
+	let cachedLines: string[] | undefined;
+	return {
+		render(width: number): string[] {
+			if (cachedLines !== undefined && cachedWidth === width) return cachedLines;
+			const sections: BoxSection[] = [{
+				blocks: [{ lines: lines.map((l) => ({ text: theme.fg("toolOutput", l), highlight: true })) }],
+			}];
+			cachedLines = formatBoxesWindowed(sections, expanded ? {} : { excerpts: COLLAPSED_EXCERPTS }, notices, width).split("\n");
+			cachedWidth = width;
+			return cachedLines;
+		},
+		invalidate() {
+			cachedLines = undefined;
+			cachedWidth = undefined;
+		},
+	};
 }
 
-function hasCompleteEscapeSequence(text: string): boolean {
-	return /^(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1bP[^\x07]*(?:\x07|\x1b\\)|\x1b[_^X][^\x07]*(?:\x07|\x1b\\)|\x1b[()][0-9A-B]|\x1b[78=>])/.test(text);
-}
-
-function splitIncompleteEscape(text: string): { display: string; carry: string } {
-	const lastEsc = text.lastIndexOf("\x1b");
-	if (lastEsc === -1) return { display: text, carry: "" };
-
-	const suffix = text.slice(lastEsc);
-	if (hasCompleteEscapeSequence(suffix) || suffix.length > 1024) {
-		return { display: text, carry: "" };
+/** the message a background job's news arrives in: a line per job, then its output. */
+export function renderJobResult(message: { content: unknown; details?: unknown }, { expanded, outputPad }: { expanded: boolean; outputPad: number }, theme: any) {
+	const Text = getText();
+	const Container = getContainer();
+	const container = new Container();
+	const jobs = (message.details as JobResultDetails | undefined)?.jobs;
+	if (!Array.isArray(jobs)) {
+		container.addChild(new Text(normalizeForDisplay(typeof message.content === "string" ? message.content : ""), outputPad, 0));
+		return container;
 	}
-
-	return { display: text.slice(0, lastEsc), carry: suffix };
+	for (const job of jobs) {
+		const style = STATUS_STYLE[job.status];
+		const what = job.kind === "matched" ? "matched its wake_on line, still running" : style.verb;
+		const head = `${theme.fg(style.color, style.icon)} ${theme.bold(job.id)} ${theme.fg("muted", `${what} · ${formatDuration(job.durationMs)}`)}`;
+		container.addChild(new Text(`${head}\n${theme.fg("toolTitle", `$ ${normalizeForDisplay(job.command.split("\n")[0] ?? "")}`)}`, outputPad, 0));
+		const body = sanitizeForDisplay(job.text.replace(/^[^\n]*\n\n(?:\$ [^\n]*\n\n)?/, ""));
+		container.addChild(outputBox(body, expanded, undefined, theme));
+	}
+	return container;
 }
 
 // --- tool factory ---
 
-export function createBashTool(): ToolDefinition {
+/** `jobs` with a host moves long commands to the background; without one, every call waits for its command. */
+export function createBashTool(jobs: BashJobs = new BashJobs()): ToolDefinition {
 	/* a read-only session must say so in the description, not only refuse at call time. */
 	const readOnly = isReadOnlyBash();
 	/* ceiling is fixed for the life of the tool: it goes into the schema. */
 	const maxTimeout = maxTimeoutSec();
 	/* captured once so the description and the kill cannot disagree. */
 	const idleSec = idleKillSec();
+	const yieldAfter = yieldSec();
+	const moves = jobs.movable && yieldAfter > 0;
 	/* named in the description so the agent does not have to learn the idle kill from a kill. */
 	const idleNote = idleSec > 0
 		? `\n- A command that produces NO output AND uses NO CPU for ${idleSec}s is stopped — ` +
@@ -306,6 +280,13 @@ export function createBashTool(): ToolDefinition {
 			"(a deploy pushing to a remote server over ssh, a slow silent build — the work is on " +
 			"the OTHER machine, so this machine sees no output and no CPU), pass `may_run_silent: true` " +
 			"and ONLY your `timeout` will bound it."
+		: "";
+	const backgroundNote = moves
+		? `\n- A command still running after ${yieldAfter}s moves to the background as a job instead of holding you: you ` +
+			"get its output so far and a job id, and its exit code and output reach you by themselves when it ends. " +
+			"`background: true` moves it at once (servers, watchers). `wake_on` hands it back early on the first output " +
+			"line matching a regex, so a failure early in a long run reaches you then. Calls from codemode scripts and git " +
+			"commands always wait."
 		: "";
 	const readOnlyNote = readOnly
 		? "\n\nREAD-ONLY SESSION. Only read-only commands run here. No redirection to a file " +
@@ -321,16 +302,19 @@ export function createBashTool(): ToolDefinition {
 		label: "Bash",
 		description:
 			"Executes the given shell command using bash.\n\n" +
-			"- Do NOT chain commands with `;` or `&&` or use `&` for background processes; make separate tool calls instead\n" +
+			`- Do NOT chain commands with \`;\` or \`&&\`; make separate tool calls instead. Do NOT use \`&\`${moves ? "; use `background: true`" : ""}\n` +
 			"- Do NOT use interactive commands (REPLs, editors, password prompts)\n" +
 			`- Output shows first ${HEAD_LINES} and last ${TAIL_LINES} lines; for larger output the truncation marker names a file holding all of it\n` +
-			"- Do NOT pipe to `tail`/`head`/`grep` just to shorten output — this tool already truncates. " +
-			"Piping buffers everything until the command ends, which hides progress and makes a working command look hung\n" +
+			"- Do NOT pipe to `tail`/`head`/`grep` just to shorten output: this tool already does that and keeps the rest. For tests, " +
+			"builds, type checks and installs it is refused, as is redirecting them to a file, because that hides their progress " +
+			"until they end and replaces their exit code\n" +
+			`- Do NOT \`sleep\` to wait (${SLEEP_LIMIT_SEC}s or more is refused): run the command that waits for what you need, such as \`gh run watch <id> --exit-status\`\n` +
 			"- Environment variables and `cd` do not persist between commands; use the `cwd` parameter instead\n" +
 			"- Commands run in the workspace root by default; only use `cwd` when you need a different directory\n" +
 			"- ALWAYS quote file paths: `cat \"path with spaces/file.txt\"`\n" +
 			"- Use the Grep tool instead of grep, the Read tool instead of cat\n" +
 			"- Only run `git commit` and `git push` if explicitly instructed by the user." +
+			backgroundNote +
 			idleNote +
 			readOnlyNote,
 
@@ -358,6 +342,18 @@ export function createBashTool(): ToolDefinition {
 						`using no CPU for ${idleSec}s, which means the process has hung).`,
 				}),
 			),
+			...(moves
+				? {
+					background: Type.Optional(Type.Boolean({
+						description: "Start it as a background job at once: a server, a watcher, or anything you know runs for minutes. Its result reaches you by itself when it ends.",
+					})),
+					wake_on: Type.Optional(Type.String({
+						description:
+							"A regular expression. The first output line that matches it reaches you at once while the command keeps running, " +
+							"such as `FAILED|Error|panicked` on a test run, so you can act on an early failure.",
+					})),
+				}
+				: {}),
 			/*
 			 * required, schema-bounded. TypeBox `default` is unused: pi fills no
 			 * defaults (Value.Convert coerces types only), so a default here would
@@ -367,8 +363,8 @@ export function createBashTool(): ToolDefinition {
 				minimum: MIN_TIMEOUT_SEC,
 				maximum: maxTimeout,
 				description:
-					`Required. Max seconds this command may run (${MIN_TIMEOUT_SEC}-${maxTimeout}). ` +
-					"read/grep/git status 10 · typecheck/lint/unit tests 120 · build/install 300 · e2e/deploy 600. " +
+					`Required. Max seconds this command may run (${MIN_TIMEOUT_SEC}-${maxTimeout})${moves ? ", in the foreground and as a background job together" : ""}. ` +
+					"read/grep/git status 10 · typecheck/lint/unit tests 300 · build/install 600 · e2e/full suite 1800. " +
 					// only claim the idle kill when it is actually armed: with it
 					// disabled this read "prints NOTHING for 0s is killed", which is
 					// both false and unparseable.
@@ -459,10 +455,11 @@ export function createBashTool(): ToolDefinition {
 					state.interval = undefined;
 				}
 			}
+			const job = result?.details?.job;
 			const timing =
 				state.startedAt === undefined
 					? undefined
-					: `${options.isPartial ? "elapsed" : "took"} ` +
+					: `${options.isPartial ? "elapsed" : job ? `background job ${job} after` : "took"} ` +
 						`${(((state.endedAt ?? Date.now()) - state.startedAt) / 1000).toFixed(1)}s`;
 			const noOutput = timing ? `(no output) ${timing}` : "(no output)";
 
@@ -493,46 +490,11 @@ export function createBashTool(): ToolDefinition {
 				return container;
 			}
 
-			// --- FINAL: box format with proper expanded state ---
-			const { expanded } = options;
-			const outputLines = text.split("\n");
-
-			const buildSections = (): BoxSection[] => [{
-				blocks: [{ lines: outputLines.map((l) => ({ text: theme.fg("toolOutput", l), highlight: true })) }],
-			}];
-
-			const notices = timing ? [timing] : undefined;
-
-			// capture expanded in closure
-			let cachedWidth: number | undefined;
-			let cachedLines: string[] | undefined;
-
-			container.addChild({
-				render(width: number): string[] {
-					if (cachedLines !== undefined && cachedWidth === width) {
-						return cachedLines;
-					}
-					const sections = buildSections();
-					const visual = formatBoxesWindowed(
-						sections,
-						expanded ? {} : { excerpts: COLLAPSED_EXCERPTS },
-						notices,
-						width,
-					);
-					cachedLines = visual.split("\n");
-					cachedWidth = width;
-					return cachedLines;
-				},
-				invalidate() {
-					cachedLines = undefined;
-					cachedWidth = undefined;
-				},
-			});
-
+			container.addChild(outputBox(text, options.expanded, timing ? [timing] : undefined, theme));
 			return container;
 		},
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			/* schema already enforces this; this is the net for providers that skip it. */
 			const timeoutSec = params.timeout;
 			if (
@@ -541,15 +503,10 @@ export function createBashTool(): ToolDefinition {
 				timeoutSec < MIN_TIMEOUT_SEC ||
 				timeoutSec > maxTimeout
 			) {
-				return {
-					content: [{
-						type: "text" as const,
-						text:
-							`timeout required: seconds, ${MIN_TIMEOUT_SEC}-${maxTimeout}. ` +
-							"read 10 · test 120 · build 300 · e2e 600.",
-					}],
-					isError: true,
-				} as any;
+				return refusal(
+					`timeout required: seconds, ${MIN_TIMEOUT_SEC}-${maxTimeout}. ` +
+						"read 10 · test 300 · build 600 · e2e 1800.",
+				);
 			}
 
 			// accept both `cmd` (our schema) and `command` (pi default / Claude convention)
@@ -564,12 +521,7 @@ export function createBashTool(): ToolDefinition {
 				command = cdSplit.command;
 			}
 
-			if (!existsSync(effectiveCwd)) {
-				return {
-					content: [{ type: "text" as const, text: `working directory does not exist: ${effectiveCwd}` }],
-					isError: true,
-				} as any;
-			}
+			if (!existsSync(effectiveCwd)) return refusal(`working directory does not exist: ${effectiveCwd}`);
 
 			/*
 			 * read-only gate first, so its message is the one a research sub-agent
@@ -578,26 +530,21 @@ export function createBashTool(): ToolDefinition {
 			 */
 			if (readOnly) {
 				const readOnlyVerdict = evaluateReadOnlyCommand(command);
-				if (!readOnlyVerdict.allowed) {
-					return {
-						content: [
-							{ type: "text" as const, text: readOnlyRefusal(readOnlyVerdict.reason, command) },
-						],
-						isError: true,
-					} as any;
-				}
+				if (!readOnlyVerdict.allowed) return refusal(readOnlyRefusal(readOnlyVerdict.reason, command));
 			}
 
 			const verdict = evaluateCommand(command, loadPermissions());
 			if (verdict.action === "reject") {
-				const msg = verdict.message
+				return refusal(verdict.message
 					? `command rejected: ${verdict.message}`
-					: `command rejected by permission rule. command: ${command}`;
-				return {
-					content: [{ type: "text" as const, text: msg }],
-					isError: true,
-				} as any;
+					: `command rejected by permission rule. command: ${command}`);
 			}
+
+			const shape = sleepRefusal(command) ?? blindingRefusal(command, effectiveCwd);
+			if (shape) return refusal(shape);
+			const wakeOn = wakeOnOf(params);
+			if (wakeOn.error) return refusal(wakeOn.error);
+
 			if (verdict.action === "ask") {
 				const asks = verdict.asks ?? [];
 				const answer = await requestApproval(
@@ -610,20 +557,12 @@ export function createBashTool(): ToolDefinition {
 					},
 					signal,
 				);
-				if (!answer.approved) {
-					return {
-						content: [{ type: "text" as const, text: answer.message }],
-						isError: true,
-						terminate: answer.stop,
-					} as any;
-				}
+				if (!answer.approved) return { ...refusal(answer.message), terminate: answer.stop };
 			}
 
 			if (gitAction(command)) {
 				const found = await scanCommand(command, effectiveCwd, await makeScrubber());
-				if (found) {
-					return { content: [{ type: "text" as const, text: leakRefusal(found.action, found.leaks) }], isError: true } as any;
-				}
+				if (found) return refusal(leakRefusal(found.action, found.leaks));
 			}
 
 			const sessionId = ctx.sessionManager.getSessionId();
@@ -645,9 +584,32 @@ export function createBashTool(): ToolDefinition {
 				params.mayRunSilent === true ||
 				params.expect_silent === true;
 			const effectiveIdleSec = mayRunSilent ? 0 : idleSec;
+			const limits = { timeoutSec, idleSec: effectiveIdleSec, maxTimeoutSec: maxTimeout };
 			const clampedFrom = (params as Record<string, unknown>)[TIMEOUT_CLAMPED_FROM];
+			/* a codemode script cannot be woken, and a git command holds the repo's lock: both wait for the end. */
+			const waits = toolCallId.includes("/") || isGitCommand(command);
 			const run = async () => {
-				const result = await runCommand(command, effectiveCwd, timeoutSec, effectiveIdleSec, signal, onUpdate, secretEnv);
+				const proc = new BashProcess({ command, cwd: effectiveCwd, timeoutSec, idleSec: effectiveIdleSec, env: secretEnv });
+				const stopPreview = streamPreview(proc, onUpdate);
+				const stopHeartbeat = childHeartbeat(ctx.hasUI ? ctx.ui : undefined, command);
+				let result: any;
+				try {
+					const attended = await jobs.attend(proc, {
+						command,
+						limits,
+						wakes: wakeable(ctx.mode),
+						yieldAfterMs: waits || !moves ? undefined : yieldAfter * 1000,
+						background: !waits && jobs.movable && (params.background === true || params.run_in_background === true),
+						wakeOn: waits ? undefined : wakeOn.regex,
+						signal,
+					});
+					result = "ended" in attended
+						? endResult(command, attended.ended, limits)
+						: { content: [{ type: "text" as const, text: movedText(command, attended, wakeOn.regex?.source, yieldAfter) }], details: { command, job: attended.moved } };
+				} finally {
+					stopPreview();
+					stopHeartbeat();
+				}
 				return clampedFrom === undefined ? result : withClampNote(result, clampedFrom, maxTimeout);
 			};
 
@@ -659,332 +621,4 @@ export function createBashTool(): ToolDefinition {
 			return run();
 		},
 	};
-}
-
-// --- execution ---
-
-async function runCommand(
-	command: string,
-	cwd: string,
-	timeout: number,
-	idleSec: number,
-	signal: AbortSignal | undefined,
-	onUpdate: ((update: any) => void) | undefined,
-	secretEnv: Record<string, string> = {},
-): Promise<any> {
-	const { shell, args } = getShell();
-
-	// merge secrets into process env — values available as $NAME in commands
-	const env = { ...process.env, ...secretEnv };
-
-	return new Promise((resolve) => {
-		const startedAt = performance.now();
-		const child = spawn(shell, [...args, command], {
-			cwd,
-			detached: true,
-			env,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-
-		const output = new OutputBuffer(HEAD_LINES, TAIL_LINES);
-		const full = new FullOutput();
-		let timedOut = false;
-		let idledOut = false;
-		let aborted = false;
-		let controlCarry = "";
-		let lastUpdateAt = 0;
-		let pendingUpdate: ReturnType<typeof setTimeout> | undefined;
-		// per-stream decoders: Buffer.toString("utf-8") on a chunk that splits a
-		// multibyte character mid-sequence produces permanent U+FFFD corruption.
-		// StringDecoder carries the partial sequence to the next chunk.
-		const stdoutDecoder = new StringDecoder("utf8");
-		const stderrDecoder = new StringDecoder("utf8");
-
-		let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-		if (timeout && timeout > 0) {
-			timeoutHandle = setTimeout(() => {
-				timedOut = true;
-				if (child.pid) killGracefully(child.pid);
-			}, timeout * 1000);
-		}
-
-		/*
-		 * lastOutputAt is stamped on RAW chunk arrival, not displayable text, so a
-		 * progress bar of only control sequences still counts as alive. CPU OR
-		 * output keep it alive; the kill fires only when both are quiet.
-		 */
-		const idleMs = idleSec * 1000;
-		let lastOutputAt = Date.now();
-		let lastIdleTickAt = Date.now();
-		// CPU liveness state. `child.pid` is the process-GROUP id because the child
-		// is spawned `detached` (the same fact `killGracefully(-pid)` relies on).
-		const cpuOn = cpuLivenessEnabled() && idleMs > 0;
-		let lastCpuSecs: number | undefined;
-		let lastCpuSampleAt = Date.now();
-		let sampling: Promise<void> | undefined;
-		/* CPU can only bump lastOutputAt; undefined (ps failed) is no signal. */
-		const readCpu = async (pid: number) => {
-			const cpuNow = await sampleGroupCpuSeconds(pid);
-			const now = Date.now();
-			// a failed `ps` keeps the old baseline, so the next reading measures across the gap
-			if (cpuNow === undefined) return;
-			if (lastCpuSecs !== undefined) {
-				// scaled by elapsed time; abs() because a child exiting drops the group's total, which is activity too
-				const threshold = Math.max((now - lastCpuSampleAt) / 1000, 0) * CPU_ALIVE_CORE_FRACTION;
-				if (Math.abs(cpuNow - lastCpuSecs) > threshold) lastOutputAt = now;
-			}
-			lastCpuSecs = cpuNow;
-			lastCpuSampleAt = now;
-		};
-		/** a tick that finds a reading in flight waits for that one rather than starting another */
-		const sampleCpu = (): Promise<void> => {
-			if (!cpuOn || !child.pid) return Promise.resolve();
-			sampling ??= readCpu(child.pid).finally(() => {
-				sampling = undefined;
-			});
-			return sampling;
-		};
-		void sampleCpu();
-		let idleHandle: ReturnType<typeof setInterval> | undefined;
-		if (idleMs > 0) {
-			// wrapped for the same reason as the elapsed ticker. on a throw, stop the
-			// watchdog rather than kill: the declared timeout still bounds the run.
-			const idleTick = async () => {
-				// one kill only. after the first tick fires, `lastOutputAt` can never
-				// advance again (the process is dying and producing nothing), so every
-				// later tick would re-issue SIGTERM and queue another 3s SIGKILL timer
-				// against a process that is already on its way out.
-				if (idledOut) return;
-				await sampleCpu();
-				if (idledOut || settled) return;
-				const now = Date.now();
-				const verdict = watchdogVerdict(now, lastIdleTickAt, lastOutputAt, idleMs, SLEEP_JUMP_MS);
-				lastIdleTickAt = now;
-				// machine slept: forgive the gap rather than kill a process that was
-				// frozen along with everything else.
-				if (verdict === "slept") { lastOutputAt = now; return; }
-				if (verdict === "wait") return;
-				idledOut = true;
-				if (child.pid) killGracefully(child.pid);
-			};
-			idleHandle = setInterval(() => {
-				idleTick().catch(() => {
-					if (idleHandle) clearInterval(idleHandle);
-					idleHandle = undefined;
-				});
-			}, watchdogTickMs(idleMs, IDLE_TICK_MS));
-			idleHandle.unref?.();
-		}
-
-		const onAbort = () => {
-			aborted = true;
-			if (child.pid) killGracefully(child.pid);
-		};
-		if (signal) {
-			if (signal.aborted) onAbort();
-			else signal.addEventListener("abort", onAbort, { once: true });
-		}
-
-		const sendUpdate = () => {
-			pendingUpdate = undefined;
-			lastUpdateAt = Date.now();
-			const { text } = output.preview();
-			onUpdate?.({ content: [{ type: "text", text }] });
-		};
-
-		const scheduleUpdate = () => {
-			if (!onUpdate || pendingUpdate) return;
-			const elapsed = Date.now() - lastUpdateAt;
-			if (elapsed >= STREAM_UPDATE_INTERVAL_MS) {
-				sendUpdate();
-				return;
-			}
-			pendingUpdate = setTimeout(sendUpdate, STREAM_UPDATE_INTERVAL_MS - elapsed);
-		};
-
-		const handleData = (decoder: StringDecoder) => (data: Buffer) => {
-			// liveness is stamped on RAW arrival, before sanitization: bytes that
-			// sanitize to nothing (a redrawing progress bar) still prove the process
-			// is running. counting only displayable text would kill it.
-			lastOutputAt = Date.now();
-			// sanitize at source — strip terminal control sequences before they
-			// enter the buffer or reach onUpdate. prevents escape sequences from
-			// ever flowing through the TUI pipeline (even briefly via onUpdate).
-			// keep incomplete escape sequences across chunks so high-volume SSH
-			// output cannot leak a split CSI/OSC sequence as printable garbage.
-			const raw = controlCarry + decoder.write(data);
-			const { display, carry } = splitIncompleteEscape(raw);
-			controlCarry = carry;
-			const sanitized = sanitizeForDisplay(display);
-			if (sanitized) {
-				output.add(sanitized);
-				full.add(sanitized);
-			}
-			scheduleUpdate();
-		};
-
-		child.stdout?.on("data", handleData(stdoutDecoder));
-		child.stderr?.on("data", handleData(stderrDecoder));
-
-		let settled = false;
-		let backgroundHandle: ReturnType<typeof setTimeout> | undefined;
-
-		child.on("error", (err) => {
-			if (settled) return;
-			settled = true;
-			if (backgroundHandle) clearTimeout(backgroundHandle);
-			if (timeoutHandle) clearTimeout(timeoutHandle);
-			if (idleHandle) clearInterval(idleHandle);
-			if (pendingUpdate) clearTimeout(pendingUpdate);
-			signal?.removeEventListener("abort", onAbort);
-			full.finish();
-			resolve({
-				content: [{ type: "text" as const, text: `command error: ${err.message}` }],
-				isError: true,
-			} as any);
-		});
-
-		/*
-		 * `close` waits for every holder of the output pipes, so a backgrounded
-		 * grandchild would hold the call open until the timeout kill. `background`
-		 * finishes on the shell's own exit instead and leaves the timeout armed:
-		 * the background process still dies at the declared deadline.
-		 */
-		const finish = (code: number | null, killSignal: NodeJS.Signals | null, background: boolean) => {
-			if (settled) return;
-			settled = true;
-			if (backgroundHandle) clearTimeout(backgroundHandle);
-			if (timeoutHandle) {
-				if (background) timeoutHandle.unref?.();
-				else clearTimeout(timeoutHandle);
-			}
-			if (idleHandle) clearInterval(idleHandle);
-			if (pendingUpdate) clearTimeout(pendingUpdate);
-			signal?.removeEventListener("abort", onAbort);
-			if (background) {
-				if (child.pid) trackBackgroundGroup(child.pid);
-				for (const stream of [child.stdout, child.stderr]) {
-					stream?.removeAllListeners("data");
-					stream?.on("data", () => {});
-					(stream as any)?.unref?.();
-				}
-			}
-
-			const finalCarry = sanitizeForDisplay(controlCarry + stdoutDecoder.end() + stderrDecoder.end());
-			if (finalCarry) {
-				output.add(finalCarry);
-				full.add(finalCarry);
-			}
-			controlCarry = "";
-			const formatted = output.format(() => full.spill());
-			let outputText = formatted.text;
-			let modelViewCut = formatted.truncatedLines > 0;
-			if (outputText.length > MAX_OUTPUT_CHARS) {
-				const file = full.spill();
-				outputText = headTailChars(outputText, MAX_OUTPUT_CHARS, file ? `full output: ${file}` : undefined).text;
-				modelViewCut = true;
-			}
-			const finished = full.finish();
-
-			if (aborted) {
-				const text = outputText ? `${outputText}\n\ncommand aborted` : "command aborted";
-				resolve({
-					content: [{ type: "text" as const, text }],
-					isError: true,
-				} as any);
-				return;
-			}
-
-			/* idle first: if both fire, "doing nothing" is the more useful diagnosis. */
-			if (idledOut) {
-				const text =
-					`${outputText || "(no output)"}\n\n` +
-					`killed: no output and no CPU activity for ${idleSec}s — the process was doing ` +
-					"nothing on this machine. Output above is everything it printed. A process that " +
-					"finishes its work and fails to exit looks exactly like this — check the output " +
-					"first; it may be complete. If this command was LEGITIMATELY quiet (a deploy or " +
-					"build whose work runs on a remote server, so this machine sees no output and no " +
-					"CPU), re-run it with may_run_silent: true — a longer timeout will NOT help, the " +
-					"idle check ignores it.";
-				resolve({
-					content: [{ type: "text" as const, text }],
-					isError: true,
-				} as any);
-				return;
-			}
-
-			if (timedOut) {
-				const notice =
-					`command timed out after ${timeout} seconds (your declared timeout). ` +
-					`Raise it, up to ${maxTimeoutSec()}s, if the command legitimately needs longer.`;
-				const text = outputText ? `${outputText}\n\n${notice}` : notice;
-				resolve({
-					content: [{ type: "text" as const, text }],
-					isError: true,
-				} as any);
-				return;
-			}
-
-			// format result with command header
-			let result = `$ ${command}\n\n${outputText || "(no output)"}`;
-			if (finished.error && modelViewCut) result += `\n\n(full output not kept: ${finished.error})`;
-			if (finished.capped) result += `\n\n(the full-output file stops at ${MAX_FILE_BYTES / 1024 / 1024} MiB; the command printed more)`;
-			if (background) {
-				result +=
-					"\n\n(the shell exited, but a background process it started still holds the output pipe, so " +
-					`nothing it prints from now on is captured. It will be killed when the ${timeout}s timeout expires or pi exits. ` +
-					"To keep a process running, redirect its output (`cmd > /tmp/cmd.log 2>&1 &`) or run it in tmux.)";
-			}
-
-			if (code === null) {
-				resolve({
-					content: [{ type: "text" as const, text: `${result}\n\nterminated by ${killSignal ?? "a signal"}` }],
-					isError: true,
-					details: { command },
-				} as any);
-				return;
-			}
-
-			const structuredContent = {
-				...(finished.error
-					? { output: outputText, truncated: modelViewCut }
-					: {
-						output: finished.output,
-						truncated: finished.truncated,
-						...(finished.truncated && finished.path ? { full_output_path: finished.path } : {}),
-					}),
-				exit_code: code,
-				wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
-			};
-
-			if (code !== 0) {
-				result += `\n\n${exitNote(command, code, outputText.trim().length > 0)}`;
-				resolve({
-					content: [{ type: "text" as const, text: result }],
-					isError: true,
-					details: { command },
-					structuredContent,
-				} as any);
-			} else {
-				resolve({
-					content: [{ type: "text" as const, text: result }],
-					details: { command },
-					structuredContent,
-				} as any);
-			}
-		};
-
-		child.on("exit", (code, killSignal) => {
-			if (settled) return;
-			backgroundHandle = setTimeout(() => finish(code, killSignal, true), BACKGROUND_GRACE_MS);
-		});
-		child.on("close", (code, killSignal) => {
-			if (settled) {
-				if (timeoutHandle) clearTimeout(timeoutHandle);
-				if (child.pid) backgroundGroups.delete(child.pid);
-				return;
-			}
-			finish(code, killSignal, false);
-		});
-	});
 }

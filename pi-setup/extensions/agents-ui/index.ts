@@ -247,7 +247,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("agents", {
-		description: "See, steer and stop background agents; /agents chad opens one, /agents models picks their models, /agents dock how they show",
+		description: "See, steer and stop background agents and bash jobs; /agents chad opens one, /agents models picks their models, /agents dock how they show",
 		getArgumentCompletions: (prefix) => {
 			const typed = prefix.trim().toLowerCase();
 			const runs = store

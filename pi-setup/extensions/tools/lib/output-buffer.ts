@@ -150,6 +150,12 @@ export class OutputBuffer {
 		return this.formatLines(this.pendingLine ? 1 : 0, this.pendingLine);
 	}
 
+	/** the last `count` lines so far (at most the tail it keeps), the unfinished one included */
+	lastLines(count: number): string[] {
+		const lines = this.pendingLine ? [...this.tail, this.pendingLine] : this.tail;
+		return lines.slice(-count);
+	}
+
 	/**
 	 * finalize and format the output.
 	 * returns the formatted text and count of truncated lines.

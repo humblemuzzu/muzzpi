@@ -35,7 +35,7 @@ const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash"];
  * Screenshots return to the parent via `collectSubAgentImages` (most recent 2).
  */
 const EXTENSION_TOOLS = [
-	"read", "grep", "find", "ls", "bash",
+	"read", "grep", "find", "ls", "bash", "agents",
 	"web_search", "x_search", "read_web_page", "screenshot",
 ];
 

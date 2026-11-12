@@ -9,7 +9,7 @@ import { resolve as resolvePath } from "node:path";
 import { Type } from "@sinclair/typebox";
 import { SUB_AGENT_SESSION_DIR, newSessionId, startChild, unresumableReason, zeroUsage, type ChildRun, type PiSpawnConfig, type PiSpawnResult } from "./pi-spawn";
 import { mainRoute, resolveRoute, type AgentModels, type MainModel, type SubAgent } from "./agent-models";
-import type { ControlOutcome, ControlRequest, RunSnapshot, RunStatus } from "./agent-channel";
+import { wakeable, type ControlOutcome, type ControlRequest, type RunSnapshot, type RunStatus } from "./agent-channel";
 import {
 	backgroundStub,
 	failureText,
@@ -28,7 +28,7 @@ import { resolveParam } from "./params";
 
 export const AGENT_RUN_ENTRY = "agent-run";
 export const MAX_RUNNING = 16;
-export const MAX_WAIT_SEC = 600;
+const MAX_WAIT_SEC = 600;
 const LISTED_FINISHED = 20;
 const BATCH_MS = 1_500;
 const BROADCAST_MS = 250;
@@ -84,6 +84,8 @@ interface Run {
 	startedAt?: number;
 	endedAt?: number;
 	activity?: string;
+	/** `activity` is the child's job status line, cleared when the child clears it */
+	activityIsStatus?: boolean;
 	toolCount: number;
 	files: string[];
 	toolArgs: Map<string, Record<string, unknown>>;
@@ -98,7 +100,6 @@ interface Run {
 	control?: ControlOutcome;
 	ended: Promise<void>;
 	markEnded: () => void;
-	detach?: () => void;
 	onProgress?: () => void;
 }
 
@@ -188,18 +189,11 @@ export class AgentRuns {
 					"once it has finished, it continues with its full history.",
 			}),
 		);
-		if (!this.wakes) return { continueId };
-		const background = Type.Optional(
-			Type.Boolean({
-				description:
-					"Default true. false blocks until the answer; use it only when nothing else can happen first. Calls from codemode scripts always block.",
-			}),
-		);
-		return { continueId, background };
+		return { continueId };
 	}
 
 	private canBackground(ctx: LaunchContext): boolean {
-		return this.wakes && (ctx.mode === "tui" || ctx.mode === "rpc");
+		return this.wakes && wakeable(ctx.mode);
 	}
 
 	async launch(spec: LaunchSpec, toolCallId: string, ctx: LaunchContext, signal?: AbortSignal, onUpdate?: (update: any) => void): Promise<any> {
@@ -220,8 +214,9 @@ export class AgentRuns {
 		const route = resolveRoute(spec.models, spec.agent, spec.params, ctx.modelRegistry, !!continueId, mainRoute(ctx.model));
 		if ("error" in route) return toolError(route.error);
 
+		/* a script cannot be woken, so its calls wait; everywhere else a woken session never waits on an agent */
 		const nested = toolCallId.includes("/");
-		const background = spec.params.background !== false && !nested && this.canBackground(ctx);
+		const background = !nested && this.canBackground(ctx);
 		const id = continueId ?? newSessionId(spec.agent);
 		const run = this.add(spec, id, !!continueId, background, {
 			...spec.spawn,
@@ -239,23 +234,12 @@ export class AgentRuns {
 		return this.attend(run, spec, signal, onUpdate);
 	}
 
-	detachForeground(): boolean {
-		if (this.closed) return false;
-		const attached = this.runs.filter((run) => !run.background && !run.nested && LIVE.has(run.status) && run.detach);
-		for (const run of attached) {
-			run.background = true;
-			run.detach!();
-		}
-		if (attached.length > 0) this.changed();
-		return attached.length > 0;
-	}
-
 	async stop(ids: string[]): Promise<{ text: string; details: AgentResultDetails }> {
 		const none = (text: string) => ({ text, details: { runs: [] } });
 		if (ids.length === 0) return none('Name the continueIds to stop, or ["all"].');
 		const all = ids.includes("all");
 		const targets = this.runs.filter((run) => LIVE.has(run.status) && (all || ids.includes(run.continueId)));
-		if (targets.length === 0) return none(all ? "No agent is running." : `None of ${ids.join(", ")} is running.`);
+		if (targets.length === 0) return none(all ? "" : `None of ${ids.join(", ")} is running.`);
 		for (const run of targets) {
 			run.delivered = true;
 			this.pending = this.pending.filter((p) => p !== run);
@@ -352,7 +336,7 @@ export class AgentRuns {
 		}
 		for (const id of foreground) parts.push(`${id}: runs in the foreground; its result returns to the call that started it`);
 		for (const id of unknown) parts.push(`${id}: no agent with that continueId ran in this session`);
-		return { text: parts.join("\n\n") || "No agent is running or waiting to report.", details: { runs: reports } };
+		return { text: parts.join("\n\n"), details: { runs: reports } };
 	}
 
 	list(): string {
@@ -362,7 +346,7 @@ export class AgentRuns {
 		const shown = finished.slice(-LISTED_FINISHED);
 		const lines = [...live, ...shown].map((run) => listLine(run, now));
 		if (finished.length > shown.length) lines.push(`(${finished.length - shown.length} earlier finished runs not shown)`);
-		return lines.join("\n") || "No agents have run in this session.";
+		return lines.join("\n");
 	}
 
 	restore(entries: readonly any[]): void {
@@ -511,7 +495,12 @@ export class AgentRuns {
 	}
 
 	private onChildEvent(run: Run, event: any): void {
-		if (event.type === "tool_execution_start") {
+		if (event.type === "extension_ui_request") {
+			const text = typeof event.statusText === "string" ? clip(event.statusText.split("\n")[0]!, 100) : undefined;
+			if (text || run.activityIsStatus) run.activity = text;
+			run.activityIsStatus = !!text;
+		} else if (event.type === "tool_execution_start") {
+			run.activityIsStatus = false;
 			run.toolCount++;
 			const args = event.args && typeof event.args === "object" ? event.args : {};
 			run.toolArgs.set(event.toolCallId, args);
@@ -601,10 +590,10 @@ export class AgentRuns {
 		return overlaps;
 	}
 
-	private stub(run: Run, movedByUser = false): any {
+	private stub(run: Run): any {
 		const behind = run.status === "queued" ? this.running() : 0;
 		return {
-			content: [{ type: "text", text: backgroundStub(run.agent, run.continueId, behind, movedByUser) }],
+			content: [{ type: "text", text: backgroundStub(run.agent, run.continueId, behind) }],
 			details: { agent: run.agent, task: run.label, continueId: run.continueId, background: true, model: run.spawn.model },
 		};
 	}
@@ -613,21 +602,17 @@ export class AgentRuns {
 		const details: SingleResult = { agent: run.agent, task: run.label, exitCode: -1, messages: [], usage: zeroUsage(), continueId: run.continueId };
 		run.onProgress = () => onUpdate?.(progressUpdate(details, run.result, spec.working));
 		const onAbort = () => {
-			if (run.background) return;
 			if (run.child) run.child.stop();
 			else this.end(run, { ...run.result, exitCode: 1, stopReason: "aborted" });
 		};
 		if (signal?.aborted) onAbort();
 		else signal?.addEventListener("abort", onAbort, { once: true });
-		const detached = new Promise<void>((resolve) => { run.detach = resolve; });
 		try {
-			await Promise.race([run.ended, detached]);
+			await run.ended;
 		} finally {
 			signal?.removeEventListener("abort", onAbort);
 			run.onProgress = undefined;
-			run.detach = undefined;
 		}
-		if (run.background) return this.stub(run, true);
 		run.delivered = true;
 		const result = { ...run.result, session: { continueId: run.continueId, sessionDir: this.sessionDir } };
 		if (run.status === "interrupted") Object.assign(result, { stopReason: "error", errorMessage: run.failure });
