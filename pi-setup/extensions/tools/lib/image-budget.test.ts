@@ -21,15 +21,14 @@ const catalog = JSON.parse(
 const model = (id: string) => catalog[`chat:${id}`];
 
 const setupDir = join(import.meta.dir, "../../..");
-const anthropicConfig = JSON.parse(fs.readFileSync(join(setupDir, "models.json"), "utf8")).providers.anthropic;
-const anthropicOverrides = anthropicConfig.modelOverrides as Record<string, { inputLimits?: { maxRequestBytes?: number } }>;
-const customModels = (anthropicConfig.models ?? []) as { id: string; inputLimits?: object }[];
+const anthropicOverrides = JSON.parse(fs.readFileSync(join(setupDir, "models.json"), "utf8")).providers.anthropic
+  .modelOverrides as Record<string, { inputLimits?: { maxRequestBytes?: number } }>;
 
-/** pi's merge: a models.json entry replaces the catalog's, then an override's top-level inputLimits fields replace its (provider-composer.js). */
-const withOverride = (id: string) => {
-  const base = customModels.find((entry) => entry.id === id) ?? model(id);
-  return { ...base, inputLimits: { ...base.inputLimits, ...anthropicOverrides[id]!.inputLimits } };
-};
+/** pi's merge: an override's top-level inputLimits fields replace the catalog's (provider-composer.js). */
+const withOverride = (id: string) => ({
+  ...model(id),
+  inputLimits: { ...model(id).inputLimits, ...anthropicOverrides[id]!.inputLimits },
+});
 
 const MiB = 1024 * 1024;
 

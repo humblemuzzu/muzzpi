@@ -70,7 +70,7 @@ export function pingPayload(payload: Record<string, unknown>): Record<string, un
 
 /**
  * A replay must not take over the conversation's Anthropic message thread (pi's own cache warmer
- * sets the same flag); pi 1.5.0 predates the option and drops it.
+ * sets the same flag).
  */
 export function pingStreamOptions(capture: CapturedRequest, payload: Record<string, unknown>, signal: AbortSignal) {
 	return { signal, maxRetries: 0, sessionId: capture.sessionId, disableContinuation: true, onPayload: () => payload };

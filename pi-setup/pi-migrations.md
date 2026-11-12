@@ -12,40 +12,44 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
-## Next pi release (after 1.5.0): known drift on pi `main`, do these in `update-pi.sh`'s order
+## 1.5.2 (2026-11-12) — from 1.5.0 (via 1.5.1), two core patches + two speed patches re-derived
 
-Read from `origin/main` (unreleased) on 2026-11-04. Re-check against the published **dist**: 1.5.0's dist is
-formatted differently from its tagged source, so a text-patch anchor cannot be predicted from `git show`.
-- `extensions/mcp/index.js` (blocks the update): `mcpNamespace` and `createMcpToolName` moved to
-  `@earendil-works/pi-mcp` (76c040a2a). Take the new stock file, import both from there, drop
-  `createMcpToolName` from the `./tools.js` import, re-apply every `LOCAL PATCH: lazy MCP connect` and
-  `LOCAL PATCH: idle MCP disconnect` hunk. `verify-patches.sh`'s load check fails if an import is left dangling.
-- `core/keybindings.js` (blocks): stock now has `defaultKeys: windowsKeybindings ? ["alt+v", "ctrl+v"]`
-  (37b38e9f6); take stock and re-add only `app.session.pin` and the `pinSession` alias.
-- Speed patches (warn only): `markdown.js` gained `removeHtmlCommentBlocks(tokens)` inside the block
-  `streaming-markdown` replaces (54280c4ff); call it on both the full and the appended path.
-  `interactive-mode.js` needs only a new `stock` sha. Re-check `assistant-message.js` in the new dist.
-- Bundle: `grok-mermaid` became `lovely-mermaid` (aceb1bd12); run `port-harness/bundle-fidelity.mjs <ver>`.
-- Anthropic message threads are on by default on `main`: the keep-alive ping already passes
-  `disableContinuation: true`; check `pingStreamOptions` still reaches `streamSimple` unchanged.
+**Patch drift (registry tarballs, stock 1.5.0 vs 1.5.2; 1.5.1 → 1.5.2 touched only 4 unrelated files):**
+`resource-loader.js`, `session-selector*.js`, `session-manager.js` identical, copied. Our hunks (diff vs stock
+1.5.0) applied to stock 1.5.2 with `patch`, no fuzz:
+- `keybindings.js`: stock gained `windowsKeybindings ? ["alt+v", "ctrl+v"]`.
+- `mcp/index.js`: `createMcpToolName`/`mcpNamespace` now come from `@earendil-works/pi-mcp`, `truncate` uses
+  `sliceHead`; our lazy-connect and idle-disconnect hunks untouched.
+- `streaming-markdown`: stock gained `removeHtmlCommentBlocks(tokens)` (it splices tokens); ours calls it on
+  the full and the appended lex, before `resumable` is computed, so a reply with a comment block falls back
+  to a full lex. Fuzz of comment-heavy documents (nested in lists/quotes, inline, unclosed): 65,099 frames,
+  0 differ from stock; `MD_STREAM_SESSIONS=200` real answers stream as stock. `tool-row-result`: new sha only.
 
-## Claude Fable 5.2 (2026-11-10) — our own models.json entry on 1.5.0, until pi ships it
+**Fable 5.2 is official** (`claudeCodeVersion` 2.1.322; Opus 5 server-side fallback). Our own `models.json`
+entry, its README line, `image-budget.test.ts` custom-entry merge and the shadow check in `verify-patches.sh`
+are gone; `enabledModels`, compaction reserve, `fable` agent name and the 128 MB override stay (pi's catalog
+still says 32 MiB for every Claude model). Live: 200, plan, `server-side-fallback` beta, cache hit.
 
-Launched 2026-11-09; pi 1.5.0's catalog and the pi.dev overlay (`models-store.json`) do not have it.
-- **Entry:** `providers.anthropic.models` = pi's `claude-fable-5-1` entry with 5.2's prices (8 / 40 / cache
-  read 0.2 / 5m write 10). No `allowedFallbackModels`: upstream's `finalizeAll` drops Opus 4.8/5 for a
-  `supportsMidConvoEffort` source, which is why 5.1 has none. 128 MB limit in `modelOverrides`, as for the rest.
-- **Client version:** OAuth answered 400 `claude_code_version_too_old` ("version 2.1.290 or newer") to pi's
-  `claude-cli/2.1.280`. The entry's `headers.user-agent` (`claude-cli/2.1.311`, Claude Code stable that day)
-  overrides it for this model only (`anthropic-messages.js` merges `model.headers` after its own).
-- **Prefix check:** Fable 5.2 returns 400 on any edited history on every account. pi sends
-  `block_binding: drop_block` for `supportsMidConvoEffort` models, so it degrades like Opus 5.5.
-- **Verified:** headless `--model anthropic/claude-fable-5-2` replied; wire = Opus 5.5's shape (adaptive,
-  `drop_block`, effort marker `high`, no fallbacks/temperature); meter `allowed` on the five-hour window.
-- **Removal:** `verify-patches.sh` fails "our own entry shadows it" once pi's catalog has the id **and** pi's
-  `claudeCodeVersion` reaches the pinned one (an overlay-only catalog update keeps ours, or OAuth 400s again).
-  Then delete the entry from `models`, keep its `modelOverrides` line, `./install.sh pi`, and run one headless
-  Fable call. `enabledModels`, the compaction reserve and the `fable` agent name stay.
+**Anthropic message threads** (1.5.1, on for `api.anthropic.com`): after the first reply a request sends only
+new messages plus `thread: continue`, no `system`/`tools`. Thread prep runs after `onPayload`, so
+`before_provider_request` (anthropic-sub, prompt-cache capture, payload log, prefix-break log) still sees the
+full request. Live on OAuth, Haiku 5.5: create → continue → continue, all billed to plan, our
+`extended-cache-ttl` beta kept, 1h writes on continues. Keep-alive (`PI_PROMPT_CACHE_TTL=5m`, a 285 s bash
+turn): ping at 4.5 min = full capture, no `thread`, 38,207 read / 0 written; the next turn continued the same
+thread. `/compact` from the capture: 85,512 read / 0 written, `## Goal` summary; the next prompt opened a new
+thread. `/reload` kept the thread (prompt and tools byte-identical).
+
+**Checked, nothing to do:** `GrepOperations.readFile` break (our grep is our own; edit/write error strings
+byte-identical, `details` shape same); `cacheWarming` default `"idle"` (ours pinned `"off"`); RPC now ignores
+one SIGTERM during shutdown (children SIGKILLed 5 s later at worst; no leftovers seen); missing-cwd "Fork"
+prompt is interactive-only; `/reload` refuses while streaming; `clampMaxTokensToContext` keeps a 15% input
+margin (32k output near a full 1M window); schemas only gained keys; bundle recipe + esbuild unchanged,
+`bundle-fidelity` 78/84 identical (rest npm dependency drift).
+
+**Verified:** staged in `/tmp` first (verify, 2,314 + 494 tests, canary 4/4, sub-agent, TUI), then
+`update-pi.sh 1.5.2` (verify ALL PASS, smoke, canary 4/4), `install.sh pi`, tests 2,313 + 494 / 0 fail. TUI on
+Haiku: write, edit, `/focus` (open, Tab, keys reach the editor, close), background `finder` + agent-result
+wake, `ask` picker, `/agents`, `/reload`, `/resume` pin, `/help`. Backup: `~/pi-update-backup-1.5.0-20261112-104104`.
 
 ## Upstream sync (2026-11-04) — on 1.5.0, no pi update
 

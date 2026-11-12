@@ -1,36 +1,6 @@
 {
   "providers": {
     "anthropic": {
-      "models": [
-        {
-          "id": "claude-fable-5-2",
-          "name": "Claude Fable 5.2",
-          "api": "anthropic-messages",
-          "baseUrl": "https://api.anthropic.com",
-          "headers": { "user-agent": "claude-cli/2.1.311" },
-          "reasoning": true,
-          "input": ["text", "image"],
-          "cost": { "input": 8, "output": 40, "cacheRead": 0.2, "cacheWrite": 10 },
-          "contextWindow": 1000000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": { "off": null, "xhigh": "xhigh", "max": "max" },
-          "compat": {
-            "forceAdaptiveThinking": true,
-            "supportsMidConvoEffort": true,
-            "supportsMidConvoSystemMessages": true,
-            "supportsMidConvoToolChanges": true,
-            "supportsStrictTools": true
-          },
-          "promptCache": { "short": 300, "long": 3600 },
-          "inputLimits": {
-            "maxRequestBytes": 33554432,
-            "images": {
-              "maxPerRequest": 600,
-              "resize": { "maxWidth": 2000, "maxHeight": 2000, "maxBytes": 4718592, "jpegQuality": 80 }
-            }
-          }
-        }
-      ],
       "modelOverrides": {
         "claude-fable-5-2": { "inputLimits": { "maxRequestBytes": 128000000 } },
         "claude-opus-5-5": { "inputLimits": { "maxRequestBytes": 128000000 } },

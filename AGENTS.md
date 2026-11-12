@@ -48,7 +48,7 @@ Write the one-line rule and delete whatever it supersedes.
 ## Providers and defaults
 
 ```
-pi CLI (v1.5.0) — @earendil-works/pi-coding-agent
+pi CLI (v1.5.2) — @earendil-works/pi-coding-agent
   ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)   [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)

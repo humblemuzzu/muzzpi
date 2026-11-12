@@ -61,7 +61,7 @@ export const PATCHES = [
 		test: "cd pi-setup/extensions/tools && bun test markdown-stream.test.ts",
 		package: "@earendil-works/pi-tui",
 		file: "dist/components/markdown.js",
-		stock: "d568987f10b4628eb0f2a6d14220d04e175003e7585e0158010b14130cef5b67",
+		stock: "409a6c0f8d7d94c1e724ae81f82226d8d0cf8af8c3445dd4457bc36cdd2c7f36",
 		requires: { marked: "18.0.11" },
 		edits: [
 			["const markdownParser = new Marked();\n", `${MARKDOWN_LEX}const markdownParser = new Marked();\n`],
@@ -71,6 +71,7 @@ export const PATCHES = [
         if (!tokens) {
             tokens = markdownParser.lexer(normalizedText);
             trimPartialClosingFences(tokens);
+            removeHtmlCommentBlocks(tokens);
             this.cachedTokens = new WeakRef({ source: normalizedText, tokens });
         }`,
 				`        const cached = this.cachedTokens?.deref();
@@ -80,6 +81,7 @@ export const PATCHES = [
             const appended = streaming ? lexAppended(cached, normalizedText) : undefined;
             tokens = appended ?? markdownParser.lexer(normalizedText);
             trimPartialClosingFences(tokens);
+            removeHtmlCommentBlocks(tokens);
             const resumable = Object.keys(tokens.links).length === 0 && tokensLength(tokens) === normalizedText.length;
             this.cachedTokens = new WeakRef({ source: normalizedText, tokens, pieced: appended !== undefined, resumable });
         }`,
@@ -110,7 +112,7 @@ export const PATCHES = [
 		test: "cd pi-setup/extensions/tools && bun test core-patches.test.ts",
 		package: "@earendil-works/pi-coding-agent",
 		file: "dist/modes/interactive/interactive-mode.js",
-		stock: "718980c4931aa457ba8f531c07c0f2ef4d2c8f1f660f044028029f59f11daa2c",
+		stock: "a316502682c68544e1950b80e3b19d584c7a43331cfb7029765b5c04d18e4465",
 		edits: [
 			[
 				"component.updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs });",

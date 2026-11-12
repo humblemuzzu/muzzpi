@@ -112,8 +112,7 @@ explains a refusal in plain words. Tool names stay as they are. Check it any tim
 ### Providers / Models
 
 `enabledModels` in `settings.json` is what `/model` lists: the four Claude models (Max OAuth via
-anthropic-sub, default `claude-opus-5-5`; `claude-fable-5-2` is our own `models.json` entry until
-pi's catalog carries it), `deepseek/deepseek-flash` and
+anthropic-sub, default `claude-opus-5-5`), `deepseek/deepseek-flash` and
 `deepseek/deepseek-v4-pro` (`$DEEPSEEK_API_KEY`), `river/deepseek-ai/DeepSeek-V4.1-Flash`
 (`$RIVER_API_KEY`; same weights, flat 20% under DeepSeek's off-peak rate, no peak surcharge), and
 one openrouter model (`z-ai/glm-5.3-flash`).

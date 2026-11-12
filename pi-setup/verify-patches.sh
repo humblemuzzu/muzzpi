@@ -268,52 +268,6 @@ else
          "add it under providers.anthropic.modelOverrides in pi-setup/models.json, then ./install.sh pi"
 fi
 
-# ── models.json: a model we define ourselves, now in pi's own catalog ──
-# A models.json `models` entry replaces pi's model of the same id, so ours
-# would keep shadowing pi's newer facts once upstream ships the model. An entry
-# pinning `user-agent: claude-cli/X` stays until pi itself sends X or newer:
-# Anthropic refuses a new model to an older Claude Code version over OAuth.
-PI_AI_DIST="$PI_PKG/node_modules/@earendil-works/pi-ai/dist"
-SHADOW_REPORT=$(python3 - "$PI_AGENT/models.json" "$PI_AI_DIST" "$PI_AGENT/models-store.json" <<'PY'
-import json, os, re, sys
-def version(text):
-    return tuple(int(n) for n in text.split("."))
-try:
-    custom = json.load(open(sys.argv[1])).get("providers") or {}
-    ai_dist, store_path = sys.argv[2], sys.argv[3]
-    store = json.load(open(store_path)) if os.path.exists(store_path) else {}
-    found = re.search(r'claudeCodeVersion = "([\d.]+)"', open(os.path.join(ai_dist, "api/anthropic-messages.js")).read())
-    pi_client = version(found.group(1)) if found else None
-    shadowed = []
-    for provider, config in custom.items():
-        entries = config.get("models") or []
-        if not entries:
-            continue
-        catalog = set()
-        bundled = os.path.join(ai_dist, "providers/data", provider + ".json")
-        if os.path.exists(bundled):
-            for models in json.load(open(bundled)).values():
-                catalog.update(m.get("id") for m in models.values())
-        catalog.update(m.get("id") for m in (store.get(provider) or {}).get("models") or [])
-        for entry in entries:
-            if entry.get("id") not in catalog:
-                continue
-            pinned = re.fullmatch(r"claude-cli/([\d.]+)", (entry.get("headers") or {}).get("user-agent", ""))
-            if pinned and (pi_client is None or pi_client < version(pinned.group(1))):
-                continue
-            shadowed.append(f"{provider}/{entry['id']}")
-    print(" ".join(shadowed))
-except Exception as e:
-    print(f"cannot read config: {type(e).__name__}: {e}")
-PY
-)
-if [ -z "$SHADOW_REPORT" ]; then
-    pass "models.json: no custom model shadows one in pi's catalog"
-else
-    fail "models.json: pi's catalog now has $SHADOW_REPORT — our own entry shadows it" \
-         "delete that entry from providers.<p>.models in pi-setup/models.json (keep its modelOverrides), then ./install.sh pi"
-fi
-
 # ── agent prompts: every repo prompt is deployed ──
 # pi-spawn reads sub-agent prompts from here; a missing file silently
 # degrades that agent to the default body.
