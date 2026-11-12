@@ -308,6 +308,21 @@ else
          "bash pi-setup/install.sh"
 fi
 
+# ── git: the secret scan is a config hook bash and the commit tool add (git 2.54+); git hunks ships with the harness ──
+if [ -f "$PI_AGENT/extensions/tools/git-hook.mjs" ] && [ -x "$PI_AGENT/git/git-hunks" ] && [ ! -e "$HOME/.config/agents/skills/git" ]; then
+    pass "git: secret-scan hook bundled, git hunks deployed, the old git skill retired"
+else
+    fail "git: extensions/tools/git-hook.mjs or $PI_AGENT/git/git-hunks is missing, or the retired git skill is still in ~/.config/agents/skills" \
+         "bash pi-setup/install.sh"
+fi
+read -r GIT_MAJOR GIT_MINOR <<< "$(git --version 2>/dev/null | sed -n 's/^git version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
+if [ "${GIT_MAJOR:-0}" -gt 2 ] || { [ "${GIT_MAJOR:-0}" -eq 2 ] && [ "${GIT_MINOR:-0}" -ge 54 ]; }; then
+    pass "git $GIT_MAJOR.$GIT_MINOR runs config hooks: the secret scan sees exactly what each commit and push holds"
+else
+    note "git ${GIT_MAJOR:-?}.${GIT_MINOR:-?} is older than 2.54: the secret scan reads the repository before a command runs, so a git add in the same command goes unseen" \
+         "brew install git"
+fi
+
 if [ -f "$PI_AGENT/extensions/agents-ui/index.js" ] && [ ! -e "$PI_AGENT/extensions/subagent-inspector" ] && \
    grep -q '"~/.pi/agent/extensions/agents-ui"' "$PI_AGENT/settings.json" 2>/dev/null; then
     pass "agents-ui: deployed and listed; the old subagent-inspector is gone"

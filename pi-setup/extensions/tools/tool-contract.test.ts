@@ -244,7 +244,7 @@ describe("tool contract: the spawn graph is acyclic", () => {
 	test("codemode goes to chad, delegate and review_code, and gives chad no way to write", () => {
 		for (const name of ["chad", "delegate", "review_code"]) expect(allowlists[name]).toContain("codemode");
 		for (const name of ["finder", "oracle", "librarian"]) expect(allowlists[name]).not.toContain("codemode");
-		for (const mutation of ["edit", "write", "undo_edit", "redo_edit"]) {
+		for (const mutation of ["edit", "write", "commit", "undo_edit", "redo_edit"]) {
 			expect(allowlists.chad).not.toContain(mutation);
 		}
 	});

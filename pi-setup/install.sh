@@ -403,12 +403,30 @@ if [ -d "$SCRIPT_DIR/pi-skills" ]; then
 fi
 
 # ── Config-level skills ──
+# sync_dir keeps what the repo no longer ships, and pi would go on loading a retired skill
+RETIRED_SKILLS="git"
+for name in $RETIRED_SKILLS; do
+    [ -e "$CONFIG_SKILLS/$name" ] || continue
+    if command -v trash &>/dev/null; then run trash "$CONFIG_SKILLS/$name"; else run rm -rf "$CONFIG_SKILLS/$name"; fi
+    warn "Removed the retired $name skill"
+done
 info "Installing config skills..."
 sync_dir "$SCRIPT_DIR/config-skills" "$CONFIG_SKILLS"
 if [ -f "$CONFIG_SKILLS/chrome-cdp/scripts/cdp.mjs" ] || [ "$DRY_RUN" -eq 1 ]; then
     run chmod +x "$CONFIG_SKILLS/chrome-cdp/scripts/cdp.mjs"
 fi
 ok "Config skills installed"
+
+# ── git helpers ──
+# bash puts this folder on PATH, which makes `git hunks` a git command (extensions/tools/lib/git.ts)
+info "Installing git helpers..."
+run mkdir -p "$PI_AGENT/git"
+run install -m 755 "$SCRIPT_DIR/git/git-hunks" "$PI_AGENT/git/git-hunks"
+LOCAL_HUNKS="$HOME/.local/bin/git-hunks"
+case "$(readlink "$LOCAL_HUNKS" 2>/dev/null)" in
+    */skills/git/scripts/git-hunks) run ln -sfn "$PI_AGENT/git/git-hunks" "$LOCAL_HUNKS" ;;
+esac
+ok "git helpers installed ($PI_AGENT/git)"
 
 # ── Config files ──
 info "Installing settings, models, sub-agent models, keybindings, permissions..."

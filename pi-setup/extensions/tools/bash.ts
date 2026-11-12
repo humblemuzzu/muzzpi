@@ -11,8 +11,8 @@ import { evaluateCommand, loadPermissions } from "./lib/permissions";
 import { requestApproval } from "./lib/approval";
 import { evaluateReadOnlyCommand, isReadOnlyBash, readOnlyRefusal } from "./lib/read-only-bash";
 import { resolveToAbsolute } from "./read";
-import { loadSecrets, makeScrubber } from "./lib/psst";
-import { gitAction, leakRefusal, scanCommand } from "./lib/commit-guard";
+import { loadSecrets } from "./lib/psst";
+import { gitEnv, gitRefusal, hasCommitTool, secretCheckBeforeRun, withSessionTrailer } from "./lib/git";
 import { heredocTags } from "./lib/remote-command";
 import { BashProcess, HEAD_LINES, TAIL_LINES, sanitizeForDisplay } from "./lib/bash-process";
 import { endResult } from "./lib/bash-result";
@@ -109,20 +109,6 @@ function stripBackground(cmd: string): string {
 
 function isGitCommand(cmd: string): boolean {
 	return /\bgit\s+/.test(cmd);
-}
-
-/**
- * inject session ID trailer into git commit commands so commits
- * are traceable back to the pi session that authored them.
- * skips if trailers are already present (model added them manually).
- */
-function injectGitTrailers(cmd: string, sessionId: string): string {
-	if (!/\bgit\s+commit\b/.test(cmd)) return cmd;
-	if (/--trailer/.test(cmd)) return cmd;
-	return cmd.replace(
-		/\bgit\s+commit\b/,
-		`git commit --trailer "Session-Id: ${sessionId}"`,
-	);
 }
 
 /** `wake_on` as a RegExp; `/x/i` is read as a regex literal. A refusal when it does not compile. */
@@ -296,6 +282,14 @@ export function createBashTool(jobs: BashJobs = new BashJobs()): ToolDefinition 
 			"grep, ...). Anything else is refused. Report the command you wanted instead of " +
 			"looking for another way to run it."
 		: "";
+	const sweeping =
+		"`git add .`, `git add -A` or `-u` without paths, and `git commit -a` are refused: in a checkout shared with other " +
+		"sessions they sweep in work that is not yours. Never force push.";
+	const gitNote = readOnly
+		? ""
+		: hasCommitTool()
+			? `\n- Git: commit with the \`commit\` tool. ${sweeping} To stage part of a file: \`git hunks list <path>\`, which prints the next command.`
+			: `\n- Only run \`git commit\` and \`git push\` if explicitly instructed by the user. Stage files by name: ${sweeping}`;
 
 	return {
 		name: "bash",
@@ -312,8 +306,8 @@ export function createBashTool(jobs: BashJobs = new BashJobs()): ToolDefinition 
 			"- Environment variables and `cd` do not persist between commands; use the `cwd` parameter instead\n" +
 			"- Commands run in the workspace root by default; only use `cwd` when you need a different directory\n" +
 			"- ALWAYS quote file paths: `cat \"path with spaces/file.txt\"`\n" +
-			"- Use the Grep tool instead of grep, the Read tool instead of cat\n" +
-			"- Only run `git commit` and `git push` if explicitly instructed by the user." +
+			"- Use the Grep tool instead of grep, the Read tool instead of cat" +
+			gitNote +
 			backgroundNote +
 			idleNote +
 			readOnlyNote,
@@ -540,6 +534,9 @@ export function createBashTool(jobs: BashJobs = new BashJobs()): ToolDefinition 
 					: `command rejected by permission rule. command: ${command}`);
 			}
 
+			const gitRefused = gitRefusal(command);
+			if (gitRefused) return refusal(gitRefused);
+
 			const shape = sleepRefusal(command) ?? blindingRefusal(command, effectiveCwd);
 			if (shape) return refusal(shape);
 			const wakeOn = wakeOnOf(params);
@@ -560,19 +557,18 @@ export function createBashTool(jobs: BashJobs = new BashJobs()): ToolDefinition 
 				if (!answer.approved) return { ...refusal(answer.message), terminate: answer.stop };
 			}
 
-			if (gitAction(command)) {
-				const found = await scanCommand(command, effectiveCwd, await makeScrubber());
-				if (found) return refusal(leakRefusal(found.action, found.leaks));
+			if (isGitCommand(command)) {
+				const leak = await secretCheckBeforeRun(command, effectiveCwd);
+				if (leak) return refusal(leak);
 			}
 
 			const sessionId = ctx.sessionManager.getSessionId();
-			command = injectGitTrailers(command, sessionId);
+			command = withSessionTrailer(command, sessionId);
 
-			// inject psst vault secrets into subprocess environment
-			const secrets = await loadSecrets();
-			const secretEnv: Record<string, string> = {};
-			for (const secret of secrets) {
-				secretEnv[secret.name] = secret.value;
+			// git's settings, then the psst vault secrets, added to pi's own environment
+			const childEnv = gitEnv();
+			for (const secret of await loadSecrets()) {
+				childEnv[secret.name] = secret.value;
 			}
 
 			// may_run_silent opts a command out of the idle kill: the agent is
@@ -589,7 +585,7 @@ export function createBashTool(jobs: BashJobs = new BashJobs()): ToolDefinition 
 			/* a codemode script cannot be woken, and a git command holds the repo's lock: both wait for the end. */
 			const waits = toolCallId.includes("/") || isGitCommand(command);
 			const run = async () => {
-				const proc = new BashProcess({ command, cwd: effectiveCwd, timeoutSec, idleSec: effectiveIdleSec, env: secretEnv });
+				const proc = new BashProcess({ command, cwd: effectiveCwd, timeoutSec, idleSec: effectiveIdleSec, env: childEnv });
 				const stopPreview = streamPreview(proc, onUpdate);
 				const stopHeartbeat = childHeartbeat(ctx.hasUI ? ctx.ui : undefined, command);
 				let result: any;

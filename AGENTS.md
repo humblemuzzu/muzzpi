@@ -506,11 +506,32 @@ moves), `PI_SPAWN_STALL_SEC`, `PI_SPAWN_RELEASE_MS` (the 10 s grace, for tests),
 - Killing ≠ released: `FORCE_RELEASE_MS` (10s) resolves even when a grandchild holds stdout. A TUI parent's
   child leads its own process group (`ownProcessGroup`), so a stop ends its MCP servers and sub-agents too; under
   `pi -p` it shares the parent's, where Ctrl+C reaches it. 900s sits above pi's HTTP idle (300s) + retry.
-- **A local `git commit`/`git push` whose added lines the psst scrubber would hide is refused**
-  (`lib/commit-guard.ts`; `PI_SECRET_SCAN_OFF=1`). A search's exit 1 with no output reads "no matches".
+- A search's exit 1 with no output reads "no matches".
 - **bash keeps pi's codemode contract**: `structuredContent` on every exit code (a script's `grep`
   miss is data, not a throw); timeout/idle/abort/signal stay errors. The `tool_result` scrub hook
   must return `structuredContent` too — `content` alone makes pi drop it.
+
+### git — the commit tool, the guard, the secret scan
+
+The git rules live in the `bash` and `commit` descriptions; **there is no git skill** (`install.sh`
+`RETIRED_SKILLS` removes the deployed one). `lib/git.ts` is the one home for how pi runs git.
+- **`commit` runs `git commit --only` on the files named**: another session's staged or unstaged work never
+  rides along. delegate has it, chad never. `git hunks` (`pi-setup/git/`, deployed to `<agent dir>/git`, which
+  bash puts on PATH) stages part of a file; `bun test lib/git.test.ts` runs its 40-case suite.
+- **`gitRefusal` parses the command** (never a glob: `*git add .*` refused `git add .gitignore`): whole-tree
+  staging (`.`, `-A`/`-u` without paths, `commit -a`) locally, force and delete pushes over ssh too.
+  `permissions.json` keeps only `git rm -f` and `git clean`; plain `git rm` runs (git refuses unsaved changes).
+- **The secret scan runs inside git**: `gitEnv()` adds `prepare-commit-msg` (`--no-verify` does not skip it)
+  and `pre-push` config hooks through `GIT_CONFIG_COUNT`, appended after the user's; git 2.54+ runs them beside
+  the repo's own. The hook is `tools/git-hook.mjs`, bundled standalone (`.mjs`: node runs it as a plain file): **it may import nothing from pi**.
+  Under older git and for `push --no-verify`, bash scans before running (an `add` in the same command is unseen).
+- **It blocks only certainties**: a value of the user's secrets (psst, `auth.json`, secret-named env) or an exact
+  provider format with a real body (GitHub's checksum). What the scrubber merely hides is a warning. A value the
+  file held at HEAD, `MERGE_HEAD`, `CHERRY_PICK_HEAD` or the remote is not new. `pi:allow-secret` /
+  `gitleaks:allow` clears a format, never a user's value. **The block message never tells the agent to stop and
+  wait**: it fixes the line and commits again. `PI_SECRET_SCAN_OFF=1` turns it off.
+- bash sets `GIT_EDITOR`/`GIT_SEQUENCE_EDITOR=true` and `GIT_TERMINAL_PROMPT=0`; the `Session-Id` trailer goes only
+  on a commit with its own message (on a bare `git commit` it became the whole message).
 
 ### screenshot / vision budget
 

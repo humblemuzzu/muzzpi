@@ -13,6 +13,9 @@ if (!OUT) {
 }
 
 const SKIP = new Set(["node_modules", "package-lock.json", "tsconfig.json"]);
+// programs something else runs beside the extension: ideas' popup, and the git hook tools registers,
+// as .mjs because node runs it as a plain file and tools/package.json declares no module type
+const STANDALONE: Record<string, string> = { "cli.ts": "cli.js", "git-hook.ts": "git-hook.mjs" };
 // pi supplies these at load time. A plugin resolves them before tsconfig paths
 // (stats/tsconfig.json maps them to files), which would inline a second pi.
 const piPackages: import("bun").BunPlugin = {
@@ -38,7 +41,9 @@ for (const name of readdirSync(SRC).sort()) {
 	if (statSync(path).isDirectory()) {
 		if (!existsSync(join(path, "index.ts"))) continue;
 		await bundle(join(path, "index.ts"), join(OUT, name, "index.js"));
-		if (existsSync(join(path, "cli.ts"))) await bundle(join(path, "cli.ts"), join(OUT, name, "cli.js"));
+		for (const [entry, output] of Object.entries(STANDALONE)) {
+			if (existsSync(join(path, entry))) await bundle(join(path, entry), join(OUT, name, output));
+		}
 		for (const file of readdirSync(path)) {
 			if (SKIP.has(file) || file.endsWith(".ts") || statSync(join(path, file)).isDirectory()) continue;
 			copyFileSync(join(path, file), join(OUT, name, file));

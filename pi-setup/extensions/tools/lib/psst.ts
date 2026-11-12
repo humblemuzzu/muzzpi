@@ -307,7 +307,7 @@ export async function saveSecret(name: string, value: string, tags: string[]): P
 // re-parsed only when the file changes, so a refreshed OAuth token is still caught
 let authCache: { path: string; mtimeMs: number; size: number; values: string[] } | undefined;
 
-function authJsonValues(): string[] {
+export function authJsonValues(): string[] {
 	const authPath = path.join(os.homedir(), ".pi", "agent", "auth.json");
 	try {
 		const st = fs.statSync(authPath);
@@ -345,18 +345,19 @@ export async function loadAllScrubValues(): Promise<string[]> {
 	values.push(...authJsonValues());
 
 	// 3. sensitive env vars
-	const sensitiveEnvPatterns = [
-		/KEY$/i, /API_KEY$/i, /_TOKEN$/i, /_SECRET$/i, /PASSWORD$/i,
-	];
-	const env = process.env;
-	for (const [key, val] of Object.entries(env)) {
-		if (typeof val !== "string" || val.length < 8) continue;
-		if (sensitiveEnvPatterns.some((p) => p.test(key))) {
-			values.push(val);
-		}
-	}
+	values.push(...sensitiveEnvEntries().map(([, value]) => value));
 
 	return values;
+}
+
+const SENSITIVE_ENV_NAMES = [/KEY$/i, /_TOKEN$/i, /_SECRET$/i, /PASSWORD$/i];
+
+/** env vars whose name says they hold a secret, with a value long enough to be one */
+export function sensitiveEnvEntries(env: NodeJS.ProcessEnv = process.env): [string, string][] {
+	return Object.entries(env).filter(
+		(entry): entry is [string, string] =>
+			typeof entry[1] === "string" && entry[1].length >= 8 && SENSITIVE_ENV_NAMES.some((pattern) => pattern.test(entry[0])),
+	);
 }
 
 // --- scrubbing ---

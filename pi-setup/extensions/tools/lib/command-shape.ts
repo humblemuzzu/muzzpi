@@ -334,6 +334,19 @@ function innerScript(stage: string): string | undefined {
 	return flag > 0 ? words[flag + 1] : undefined;
 }
 
+/** the words of every simple command the line runs, those inside a group or `bash -c` included */
+export function simpleCommands(cmd: string): string[][] {
+	const found: string[][] = [];
+	for (const statement of statementsOf(cmd)) {
+		for (const stage of statement.stages) {
+			const inside = innerScript(stage);
+			if (inside !== undefined) found.push(...simpleCommands(inside));
+			else found.push(commandWords(stage));
+		}
+	}
+	return found;
+}
+
 /** the runner a stage starts, one inside a group or `bash -c` included */
 function runnerIn(stage: string, scripts?: Scripts, depth = 0): string[] | undefined {
 	const inside = innerScript(stage);

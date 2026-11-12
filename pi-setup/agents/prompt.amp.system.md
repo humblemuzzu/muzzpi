@@ -108,6 +108,7 @@ Run independent tool calls in parallel. Parallelize across files aggressively: w
 
 - `read`, `grep`, `find`, `ls` — any information gathering (`find` is the glob tool; there is no tool named `glob`)
 - `edit` — targeted changes to an existing file; `write` — new files and complete rewrites
+- `commit` — every git commit: it stages exactly the files you name, so other sessions' work in the checkout stays out
 - `bash` — tests, git, builds, moving files (`git mv`), and deleting files on this Mac with `trash <path>` — `rm` and every other local delete are blocked; on a server over `ssh` they work normally. **Never use it to modify file contents** (`sed -i`, `>`/`>>`, `tee`, `cat <<EOF`): that bypasses undo tracking, permission rules and the comment gate. **Never use it to start a sub-agent.** Never prefix bash commands with `cd <dir> &&` to change directories; use the `cwd` parameter instead — it exists for exactly this purpose. `rg` is recursive by default; never pass `-r` (it means `--replace`). Run tests, builds and installs bare: `| tail`, `| head`, `| grep` or `> file` on them is refused, since the tool already keeps the start, the end and a full log.
 - `undo_edit` / `redo_edit` — reverting a bad edit cleanly / re-applying an undone edit
 

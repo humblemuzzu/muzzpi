@@ -81,7 +81,7 @@ for it; a call can pass `model` / `thinking` to override:
 - `delegate` — full resumable sub-agent for parallel independent work
 - `read_web_page` — static web page reader; `prompt` / `objective` spawn a Q&A / excerpt child
 
-**Other tools:** `agents` (list, stop or wait for background agents), `read_session` (one reader
+**Other tools:** `commit` (stages exactly the files named, commits only those, optionally pushes), `agents` (list, stop or wait for background agents), `read_session` (one reader
 model, no tools, reads a whole past session with secrets redacted), `search_sessions`, `screenshot`,
 `web_search` (Context.dev, then DeepSeek, then Parallel), `x_search` (X through the Grok CLI login),
 `ask` (questions to you in a picker), `codemode` (pi's built-in, on by default), and the goal tools
@@ -130,7 +130,7 @@ gruvbox (active), nightowl, catppuccin-mocha, black-metal.
 
 ### Skills
 Config-level (`config-skills/` → `~/.config/agents/skills/`):
-`chrome-cdp`, `dataforseo`, `design-port`, `dig`, `git`, `jev`, `paper-chrome` (Paper + Chrome DevTools MCP),
+`chrome-cdp`, `dataforseo`, `design-port`, `dig`, `jev`, `paper-chrome` (Paper + Chrome DevTools MCP),
 `review`, `server-ops`, `tmux`
 plus external skills adapted for pi (author-prefixed):
 `c-sqr` (cursor — strict quality review), `mat-design` / `mat-tdd` (matt pocock), `dm-antislop` (dmmulroy).
@@ -144,9 +144,8 @@ and `install.sh` does not create them.
 - Steering/follow-up: all · Quiet startup: header only
 
 ### Permissions
-- Blocks `git add -A` / `git add .` (forces explicit staging)
-- Blocks force push
-- Blocks every way to delete on this Mac — `rm`, `rmdir`, `unlink`, `shred`, `find -delete`, `git rm`, `git clean`, delete calls in scripts; the agent uses `trash` instead. Deletes inside `ssh host '...'` run normally.
+- Git (in `extensions/tools/lib/git.ts`, not here): `git add .` / `-A` / `-u` without paths, `git commit -a`, force pushes and remote branch deletes are refused; every commit and push is checked for secrets by a git hook bash adds
+- Blocks every way to delete on this Mac — `rm`, `rmdir`, `unlink`, `shred`, `find -delete`, `git rm -f`, `git clean`, delete calls in scripts; the agent uses `trash` instead. Plain `git rm` runs (git refuses it on unsaved changes). Deletes inside `ssh host '...'` run normally.
 - Approvals are **off by default**: destroying data (SQL `DROP`/`TRUNCATE`/`DELETE` without `WHERE`, Docker volumes, cloud buckets and databases, disks, an MCP `DELETE`) run without asking, logged as `auto`. Set `"approvals": { "enabled": true }` in `~/.pi/agent/ext-config.json` and restart pi to turn them on.
 - When on, the ask is a picker: Allow, Deny (the agent stops and waits), or type what to do instead (the agent carries on with that). No UI (a sub-agent) means refused; every answer, and anything you typed, goes to `~/.pi/agent/approvals.jsonl`.
 

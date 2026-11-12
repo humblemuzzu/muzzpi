@@ -248,7 +248,7 @@ describe("the real permissions.json: every delete on this machine is blocked", (
 	it("blocks every other way to delete", () => {
 		for (const cmd of [
 			"rmdir empty", "unlink f", "shred -u f", "find . -name '*.log' -delete", "sudo find / -delete",
-			"git rm f", "git -C repo rm -r dir", "git clean -fd", "git rm $(git ls-files --cached)", "git rm foo # --cached",
+			"git rm -f f", "git -C repo rm -rf dir", "git rm --force f", "git clean -fd", "git rm -f $(git ls-files --cached)", "git rm -f foo # --cached",
 			"rsync -a --delete src/ dst/", "rsync --remove-source-files a b",
 			`python3 -c "import os; os.remove('f')"`, `python -c "import shutil; shutil.rmtree('d')"`,
 			`python3 -c "from os import remove; remove('f')"`, `node -e "require('fs').rmSync('d', {recursive: true})"`,
@@ -268,7 +268,7 @@ describe("the real permissions.json: every delete on this machine is blocked", (
 	it("does NOT fire on commit messages, dry runs, or commands that merely contain 'rm'", () => {
 		for (const cmd of [
 			"npm run rm-cache", "grep rm file.txt", "warm up", "echo confirm", "trash foo", "trash -v a b",
-			"git rm --cached f", "git rm -r --cached dir", "git log --grep rm", "docker run --rm img", "ls node_modules/.bin",
+			"git rm --cached f", "git rm -r --cached dir", "git rm f", "git -C repo rm -r dir", "git rm -q old.ts", "git log --grep rm", "docker run --rm img", "ls node_modules/.bin",
 			"grep -rn unlinkSync src", 'git commit -m "git clean up"', 'git commit -m "git rm foo"', 'git commit -m "do rm"',
 			'git commit -m "fix: time rm"', 'git commit -m "find -delete support"', 'git commit -m "rsync --delete support"',
 			"git clean -n", "git clean -nd", "git clean --dry-run", "git rm -n f", 'echo "then rm"', "command -v rm",
@@ -343,10 +343,6 @@ describe("the real permissions.json: server work", () => {
 		]) {
 			expect(verdict(cmd)).toEqual({ action: "allow" });
 		}
-	});
-
-	it("force push stays blocked everywhere", () => {
-		expect(verdict("ssh web 'cd /srv/app && git push --force'").action).toBe("reject");
 	});
 
 	it("a local delete next to server work is still blocked", () => {

@@ -7,7 +7,7 @@ that research, review and build in parallel. Web, GitHub and screenshot tools.
 Edits you can undo. A TUI built for all-day sessions. And a pi that starts as
 fast as stock, with every patch inside.
 
-**35** tools · **6** sub-agents · **20** MCP servers · **14** skills ·
+**36** tools · **6** sub-agents · **20** MCP servers · **13** skills ·
 **0.24 s** to start with every extension · on stock pi **1.5.2**
 
 ```bash
@@ -167,9 +167,12 @@ Pick by what you need back:
 - Every change is saved to disk first, so `undo_edit` and `redo_edit` work across
   restarts. They refuse when a later change or an outside edit touched the file.
 - A failed match names the first differing line, column and character.
-- [`permissions.json`](pi-setup/permissions.json): no `git add -A`, no force push,
-  no shelling out to other agents. Local `rm` is refused and points at `trash`;
-  over ssh, deletes run.
+- [`permissions.json`](pi-setup/permissions.json): no shelling out to other agents.
+  Local `rm` is refused and points at `trash`; over ssh, deletes run.
+- **Git that is safe with parallel sessions in one checkout.** `commit` stages
+  exactly the files the agent names and commits only those. `git add .`, `git add -A`,
+  `git commit -a` and force pushes are refused; `git hunks` stages part of a file.
+  No skill to load: the rules are in the tools.
 - A comment gate refuses a patch that is mostly commentary.
 
 ## 03 · Bash that cannot hang, and never runs blind
@@ -238,6 +241,11 @@ GitHub, AWS and Anthropic key formats, private keys, bearer tokens, URL
 passwords, and random-looking values next to secret names. Code that merely
 mentions a token stays readable.
 
+Every commit and push is checked inside git, on exactly what it publishes: a
+value of your own secrets or a real provider key stops it and the agent fixes it
+itself, while a fake key in a test or a password in a doc goes through with a
+note. Nothing stops an overnight run on a false alarm.
+
 ## 09 · A TUI for all day
 
 - A box-drawn editor with model, context and git branch on the border, and a
@@ -276,7 +284,7 @@ mentions a token stays readable.
 
 ## 10 · Skills
 
-14 skills load on demand: `review`, `dig` (debugging), `git`, `mat-tdd`,
+13 skills load on demand: `review`, `dig` (debugging), `mat-tdd`,
 `mat-design`, `c-sqr` (strict code review), `dm-antislop`, `design-port`,
 `server-ops`, `tmux`, `chrome-cdp`, `paper-chrome`, `dataforseo`, `jev`.
 
@@ -286,6 +294,7 @@ mentions a token stays readable.
 |---|---|
 | Files | `read` · `edit` · `write` · `undo_edit` · `redo_edit` · `grep` · `find` · `ls` |
 | Shell | `bash` · `codemode` |
+| Git | `commit` |
 | Agents | `finder` · `chad` · `oracle` · `delegate` · `librarian` · `review_code` · `agents` |
 | Web | `web_search` · `x_search` · `read_web_page` |
 | GitHub | `read_github` · `search_github` · `list_directory_github` · `list_repositories` · `glob_github` · `commit_search` · `diff` |

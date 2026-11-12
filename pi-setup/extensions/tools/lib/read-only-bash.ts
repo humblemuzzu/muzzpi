@@ -337,6 +337,11 @@ export function splitWords(segment: string): string[] {
 
 	for (let i = 0; i < segment.length; i++) {
 		const ch = segment[i];
+		// a backslash-newline outside single quotes is a line continuation: bash drops both
+		if (ch === "\\" && segment[i + 1] === "\n" && quote !== "'") {
+			i++;
+			continue;
+		}
 		if (quote) {
 			if (ch === "\\" && quote === '"') {
 				current += segment[++i] ?? "";

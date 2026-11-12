@@ -83,6 +83,7 @@ function makeWorkspace(c: Case, root: string): string {
 	git(dir, "-c", "user.name=eval", "-c", "user.email=eval@example.com", "add", "-A");
 	git(dir, "-c", "user.name=eval", "-c", "user.email=eval@example.com", "commit", "-q", "-m", "fixture");
 	if (c.fixture.afterCommit) writeFiles(dir, c.fixture.afterCommit);
+	if (c.fixture.staged) git(dir, "add", "--", ...c.fixture.staged);
 	return fs.realpathSync(dir);
 }
 

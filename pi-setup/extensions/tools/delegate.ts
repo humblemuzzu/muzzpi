@@ -30,7 +30,7 @@ import { firstLine } from "./lib/sub-agent-render";
 const BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const EXTENSION_TOOLS = [
 	"read", "grep", "find", "ls", "bash", "agents",
-	"edit", "write", "skill", "finder", "codemode",
+	"edit", "write", "commit", "skill", "finder", "codemode",
 	"web_search", "x_search", "read_web_page", "screenshot",
 ];
 
@@ -62,7 +62,7 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 		label: "Delegate",
 		description:
 			"Delegate a sub-task to a sub-agent.\n\n" +
-			"Tools: read, grep, find, ls, bash, edit, write, skill, finder, " +
+			"Tools: read, grep, find, ls, bash, edit, write, commit, skill, finder, " +
 			"web_search, x_search, read_web_page, screenshot.\n\n" +
 			"When to use delegate:\n" +
 			"- Complex multi-step tasks that are independent of your current thread\n" +

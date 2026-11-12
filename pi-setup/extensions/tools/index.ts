@@ -21,6 +21,7 @@ import { createEditTool, createWriteTool } from "./edit-write";
 import { createGrepTool } from "./grep";
 import { createGlobTool } from "./glob";
 import { createBashTool, renderJobResult } from "./bash";
+import { createCommitTool } from "./commit";
 import { BashJobs, JOB_RESULT_TYPE } from "./lib/bash-jobs";
 import { createRedoEditTool, createUndoEditTool } from "./undo-edit";
 import { createSkillTool } from "./skill";
@@ -107,6 +108,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createGrepTool());
 	pi.registerTool(createGlobTool());
 	pi.registerTool(createBashTool(jobs));
+	pi.registerTool(createCommitTool());
 	pi.registerTool(createUndoEditTool());
 	// redo is only safe because it refuses when the file moved on since the
 	// undo; see the invalidation check in undo-edit.ts.
