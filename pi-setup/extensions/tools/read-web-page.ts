@@ -11,19 +11,25 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { emptyAgentModels, mainRoute, modelParams, resolveRoute, type AgentModels, type ModelRoute } from "./lib/agent-models";
 import { osc8Link } from "./lib/box-format";
+import { getExtensionConfig } from "./lib/config";
 import { runSubAgent, toolError } from "./lib/run-sub-agent";
-import { clip, renderSubAgentResult } from "./lib/sub-agent-render";
-import { parseJson, postJson, ProviderError, retryAfterSec } from "./lib/web/http";
+import { renderSubAgentResult } from "./lib/sub-agent-render";
+import type { ToolCostDetails } from "./lib/tool-cost";
+import { clip, parseJson, postJson, ProviderError, retryAfterSec } from "./lib/web/http";
 
 export const CRAWLAPI_ENDPOINT = "https://api.crawlapi.dev/v1/scrape";
 const KEY_ENV = "CRAWLAPI_API_KEY";
-const SERVER_TIMEOUT_MS = 45_000;
-const CLIENT_TIMEOUT_MS = 55_000;
+const SERVER_TIMEOUT_MS = 60_000;
+const CLIENT_TIMEOUT_MS = 70_000;
 const MAX_CHARS = 64_000;
-const MAX_LINKS = 100;
+const SUB_AGENT_MAX_CHARS = 400_000;
 const RETRIES = 2;
 const MAX_RETRY_WAIT_SEC = 10;
 const RETRIED_CODES = new Set(["RATE_LIMITED", "ENGINE_FAILED", "INTERNAL"]);
+const CACHE_TTL_MS = 10 * 60_000;
+const CACHE_PAGES = 16;
+/** what a new account pays: the Starter pack, $10 for 15,000 credits. */
+export const DEFAULT_USD_PER_CREDIT = 10 / 15_000;
 
 const DEFAULT_PROMPT_SYSTEM = `Analyze web page content and answer questions. Be concise, answer from provided content only. No filler.`;
 
@@ -34,9 +40,8 @@ interface CrawlPage {
 	request_id: string;
 	data: {
 		metadata: { title: string; final_url: string; truncated?: boolean; login_required?: boolean };
-		links: string[];
 		markdown?: string | null;
-		json?: { tables: unknown[]; jsonld: unknown[]; embedded: unknown[]; structured?: unknown } | null;
+		json?: object | null;
 	};
 	usage: { credits: number; remaining: number };
 }
@@ -48,6 +53,20 @@ interface CrawlFailure {
 }
 
 type CrawlResponse = CrawlPage | CrawlFailure;
+
+/** a page as this process holds it: when it was fetched, so a repeat read can say how old it is. */
+export interface HeldPage {
+	page: CrawlPage;
+	fetchedAt: number;
+	/** set when this read was served from the in-process copy instead of a new request. */
+	cachedAgeMs?: number;
+}
+
+export interface ReadWebPageDetails extends ToolCostDetails {
+	credits: number;
+	requestId: string;
+	cached: boolean;
+}
 
 async function scrape(
 	endpoint: string,
@@ -83,36 +102,34 @@ export function crawlErrorText(failure: CrawlFailure, retryAfter?: number): stri
 	return `crawlapi ${code}: ${message} (${retry}; request ${failure.request_id})`;
 }
 
-function pageBody(page: CrawlPage, format: Format): string {
-	const { data } = page;
-	let body: string;
-	if (format === "json") {
-		const { structured, tables, jsonld, embedded } = data.json ?? {};
-		body = JSON.stringify({ structured, tables, jsonld, embedded });
-	} else {
-		body = data.markdown ?? "";
-	}
-	const links = [...new Set(data.links)];
-	if (!links.length) return body;
-	const hidden = links.length - MAX_LINKS;
-	const list = links.slice(0, MAX_LINKS).join("\n") + (hidden > 0 ? `\n[${hidden} more links not shown]` : "");
-	return `${body}\n\nLinks (${links.length}):\n${list}`;
+function ageText(ms: number): string {
+	const minutes = Math.floor(ms / 60_000);
+	return minutes > 0 ? `${minutes}m ago` : `${Math.max(1, Math.floor(ms / 1000))}s ago`;
 }
 
-/** the page as the model reads it: one window of the content, then crawlapi's notes. */
-export function pageResult(page: CrawlPage, format: Format, startIndex?: number, maxLength?: number): string {
-	const full = pageBody(page, format);
-	const from = Math.min(Math.max(0, Math.floor(startIndex ?? 0)), full.length);
-	const length = Math.min(Math.max(1, Math.floor(maxLength ?? MAX_CHARS)), MAX_CHARS);
-	const to = Math.min(full.length, from + length);
-
+/** crawlapi's own notes on a page: where it was read, what it cost, and what the text is not. */
+export function pageNotes(held: HeldPage): string[] {
+	const { page, cachedAgeMs } = held;
 	const { metadata } = page.data;
 	const { credits, remaining } = page.usage;
-	const notes = [
-		`crawlapi read ${metadata.final_url} ("${clip(metadata.title, 120)}") · ${credits} credit${credits === 1 ? "" : "s"}, ${remaining.toLocaleString("en-US")} left`,
-	];
+	const spent =
+		cachedAgeMs !== undefined
+			? `copy read ${ageText(cachedAgeMs)}, no credits spent`
+			: `${credits} credit${credits === 1 ? "" : "s"}, ${remaining.toLocaleString("en-US")} left`;
+	const notes = [`crawlapi read ${metadata.final_url} ("${clip(metadata.title, 120)}") · ${spent} · request ${page.request_id}`];
 	if (metadata.login_required) notes.push("sign-in wall: this is the wall's own text, not the page");
 	if (metadata.truncated) notes.push("crawlapi cut the page at its size cap; the rest of the page is not available");
+	return notes;
+}
+
+/** the page as a reader gets it: one window of the content, at most `cap` characters, then crawlapi's notes. */
+export function pageResult(held: HeldPage, format: Format, startIndex?: number, maxLength?: number, cap = MAX_CHARS): string {
+	const { data } = held.page;
+	const full = format === "json" ? JSON.stringify(data.json ?? {}) : (data.markdown ?? "");
+	const from = Math.min(Math.max(0, Math.floor(startIndex ?? 0)), full.length);
+	const length = Math.min(Math.max(1, Math.floor(maxLength ?? cap)), cap);
+	const to = Math.min(full.length, from + length);
+	const notes = pageNotes(held);
 	if (from > 0 || to < full.length) {
 		const rest = to < full.length ? `; pass start_index: ${to} for more` : "";
 		notes.push(`characters ${from}–${to} of ${full.length}${rest}`);
@@ -120,26 +137,69 @@ export function pageResult(page: CrawlPage, format: Format, startIndex?: number,
 	return `${full.slice(from, to)}\n\n${notes.map((note) => `[${note}]`).join("\n")}`;
 }
 
+/** successful reads, kept for a few minutes so another window or another question on the same page is free. */
+export class PageCache {
+	private readonly pages = new Map<string, { page: CrawlPage; fetchedAt: number }>();
+
+	constructor(private readonly now: () => number = Date.now) {}
+
+	get(url: string, format: Format): HeldPage | undefined {
+		const key = `${format} ${url}`;
+		const hit = this.pages.get(key);
+		if (!hit) return undefined;
+		const age = this.now() - hit.fetchedAt;
+		if (age >= CACHE_TTL_MS) {
+			this.pages.delete(key);
+			return undefined;
+		}
+		return { ...hit, cachedAgeMs: age };
+	}
+
+	put(url: string, format: Format, page: CrawlPage): HeldPage {
+		const key = `${format} ${url}`;
+		const held = { page, fetchedAt: this.now() };
+		this.pages.delete(key);
+		this.pages.set(key, held);
+		while (this.pages.size > CACHE_PAGES) this.pages.delete(this.pages.keys().next().value!);
+		return held;
+	}
+}
+
+/** the price of one credit, from ext-config.json `read-web-page.usdPerCredit`. */
+export function configuredUsdPerCredit(): number {
+	const { usdPerCredit } = getExtensionConfig("read-web-page", { usdPerCredit: DEFAULT_USD_PER_CREDIT });
+	return typeof usdPerCredit === "number" && usdPerCredit >= 0 ? usdPerCredit : DEFAULT_USD_PER_CREDIT;
+}
+
 export interface ReadWebPageConfig {
 	systemPrompt?: string;
 	models?: AgentModels;
 	endpoint?: string;
 	env?: Record<string, string | undefined>;
+	usdPerCredit?: number;
+	now?: () => number;
 }
 
 export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefinition {
 	const models = config.models ?? emptyAgentModels();
 	const endpoint = config.endpoint ?? CRAWLAPI_ENDPOINT;
+	const usdPerCredit = config.usdPerCredit ?? DEFAULT_USD_PER_CREDIT;
+	const cache = new PageCache(config.now);
+	const renderAgentRun = renderSubAgentResult("read_web_page");
+
 	return {
 		name: "read_web_page",
 		label: "Read Web Page",
 		description:
 			"Read the contents of a web page at a given URL.\n\n" +
-			"Returns the page content converted to Markdown, or with format \"json\" its tables, JSON-LD and embedded data. " +
+			"Returns the page as Markdown with its links inline, or with format \"json\" its structured data: what the page declares " +
+			"itself to be (a product, article, recipe, app, film or book, event, job, FAQ, business, video or X post) and its tables. " +
 			"Use it whenever you need what a web page says: never fetch a page with curl and strip its HTML yourself.\n\n" +
-			"When an objective is provided, a sub-agent returns verbatim excerpts relevant to that objective.\n\n" +
+			"Optional: an objective or a prompt hands the whole page to a small sub-agent that returns only the relevant verbatim " +
+			"excerpts or an answer, which keeps a long page out of your context.\n\n" +
 			"Pages are rendered, so content built by JavaScript is included; PDFs, Office files, CSV, JSON and feeds are read like pages. " +
 			"Public http(s) URLs only: no sign-in, no localhost. Use `curl` via Bash for local URLs, HTTP APIs, headers or raw HTML.\n\n" +
+			"Reading the same URL again within 10 minutes (the next window, another question) reuses the copy and costs nothing. " +
 			"A failure returns an error code and whether a retry can help; never retry one that says it is not retryable.",
 
 		parameters: Type.Object({
@@ -149,7 +209,7 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 			format: Type.Optional(
 				Type.Union([Type.Literal("markdown"), Type.Literal("json")], {
 					description:
-						"markdown (default) for the page's text; json for its tables, JSON-LD and embedded data. " +
+						"markdown (default) for the page's text; json for what the page declares itself to be, its tables, JSON-LD and embedded data. " +
 						"A page with no structured data answers NO_CONTENT for json.",
 				}),
 			),
@@ -189,51 +249,62 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 			}
 			const url = params.url;
 			const format: Format = params.format === "json" ? "json" : "markdown";
+			const asksSubAgent = Boolean(params.prompt || params.objective);
 
 			let route: ModelRoute = {};
-			if (params.prompt || params.objective) {
+			if (asksSubAgent) {
 				const resolved = resolveRoute(models, "read_web_page", params, ctx.modelRegistry, false, mainRoute(ctx.model));
 				if ("error" in resolved) return toolError(resolved.error);
 				route = resolved;
 			}
 
-			let page: CrawlPage;
-			try {
-				const { body, retryAfter } = await scrape(endpoint, key, url, format, signal);
-				if (body.success === false) return toolError(crawlErrorText(body, retryAfter));
-				page = body;
-			} catch (err) {
-				if (signal?.aborted) return toolError("read_web_page aborted");
-				return toolError(`read_web_page: ${(err as Error).message}`);
+			let held = cache.get(url, format);
+			if (!held) {
+				try {
+					const { body, retryAfter } = await scrape(endpoint, key, url, format, signal);
+					if (body.success === false) return toolError(crawlErrorText(body, retryAfter));
+					held = cache.put(url, format, body);
+				} catch (err) {
+					if (signal?.aborted) return toolError("read_web_page aborted");
+					return toolError(`read_web_page: ${(err as Error).message}`);
+				}
 			}
 
-			const content = pageResult(page, format, params.start_index, params.max_length);
+			const cached = held.cachedAgeMs !== undefined;
+			const credits = cached ? 0 : held.page.usage.credits;
+			const details: ReadWebPageDetails = { cost: credits * usdPerCredit, credits, requestId: held.page.request_id, cached };
 
-			if (params.prompt || params.objective) {
-				const ask = params.prompt
-					? `Answer this question: ${params.prompt}` +
-						(params.objective ? `\n\nResearch goal behind it: ${params.objective}` : "")
-					: `Quote, verbatim, every passage relevant to this goal: ${params.objective}\n\n` +
-						"Quote only — no commentary. If nothing is relevant, say so.";
-				return runSubAgent({
-					agent: "read_web_page",
-					label: params.prompt ?? params.objective,
-					working: "(analyzing...)",
-					ctx,
-					signal,
-					onUpdate,
-					spawn: {
-						task: `Here is the content of ${url}:\n\n${content}\n\n---\n\n${ask}`,
-						model: route.model,
-						thinkingLevel: route.thinking,
-						builtinTools: ["read"],
-						extensionTools: [],
-						systemPromptBody: config.systemPrompt || DEFAULT_PROMPT_SYSTEM,
-					},
-				});
+			if (!asksSubAgent) {
+				const text = pageResult(held, format, params.start_index, params.max_length);
+				return { content: [{ type: "text" as const, text }], details } as any;
 			}
 
-			return { content: [{ type: "text" as const, text: content }] } as any;
+			const content = pageResult(held, format, params.start_index, params.max_length, SUB_AGENT_MAX_CHARS);
+			const ask = params.prompt
+				? `Answer this question: ${params.prompt}` +
+					(params.objective ? `\n\nResearch goal behind it: ${params.objective}` : "")
+				: `Quote, verbatim, every passage relevant to this goal: ${params.objective}\n\n` +
+					"Quote only — no commentary. If nothing is relevant, say so.";
+			const result = await runSubAgent({
+				agent: "read_web_page",
+				label: params.prompt ?? params.objective,
+				working: "(analyzing...)",
+				ctx,
+				signal,
+				onUpdate,
+				spawn: {
+					task: `Here is the content of ${url}:\n\n${content}\n\n---\n\n${ask}`,
+					model: route.model,
+					thinkingLevel: route.thinking,
+					builtinTools: ["read"],
+					extensionTools: [],
+					systemPromptBody: config.systemPrompt || DEFAULT_PROMPT_SYSTEM,
+				},
+			});
+			const answer = result.content[result.content.length - 1];
+			if (answer?.type === "text") answer.text += `\n${pageNotes(held).map((note) => `[${note}]`).join("\n")}`;
+			result.details.cost += details.cost;
+			return result;
 		},
 
 		renderCall(args: any, theme: any, context: any) {
@@ -249,6 +320,9 @@ export function createReadWebPageTool(config: ReadWebPageConfig = {}): ToolDefin
 			return text;
 		},
 
-		renderResult: renderSubAgentResult("read_web_page"),
+		renderResult(result: any, options: any, theme: any, context: any) {
+			const fromSubAgent = typeof result.details?.agent === "string";
+			return renderAgentRun(fromSubAgent ? result : { ...result, details: undefined }, options, theme, context);
+		},
 	};
 }
