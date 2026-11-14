@@ -89,6 +89,6 @@ describe("web_search arguments through pi's validation", () => {
 	});
 
 	test("a wrong mode names the three modes", () => {
-		expect(() => prepareWebArguments({ objective: "x", mode: "hyper" })).toThrow(/mode "hyper" is not one of its values: fast \(~1s/);
+		expect(() => prepareWebArguments({ objective: "x", mode: "hyper" })).toThrow(/mode "hyper" is not one of its values: fast \(one query/);
 	});
 });

@@ -1,4 +1,6 @@
-export const PROVIDER_IDS = ["context", "deepseek", "parallel"] as const;
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+
+export const PROVIDER_IDS = ["claude", "context", "deepseek", "parallel"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export const SEARCH_MODES = ["fast", "one-shot", "agentic"] as const;
@@ -30,6 +32,8 @@ export interface ProviderResult {
 	hits: Hit[];
 	costUsd: number;
 	credits?: { used: number; remaining: number };
+	/** a synthesized answer over the hits, when the provider writes one; shown above them. */
+	summary?: string;
 	/** what this provider could not honour (a dropped filter, a failed sub-query); shown to the model. */
 	notes: string[];
 }
@@ -45,7 +49,12 @@ export interface ProviderCall {
 export interface SearchProvider {
 	id: ProviderId;
 	label: string;
-	keyEnv: string;
+	/** the environment variable holding its key; leave unset when the credential is pi's own login. */
+	keyEnv?: string;
+	/** resolves a key that is not an environment variable; undefined means not configured. */
+	resolveKey?(ctx: ExtensionToolContext | undefined): Promise<string | undefined>;
+	/** why it is not configured, for the model; used when there is no keyEnv to name. */
+	missingKey?: string;
 	/** requests this process may have in flight at once; the chain skips the provider rather than queue. */
 	maxConcurrent?: number;
 	/** a zero-hit answer ends the chain; leave unset when the provider shortens the query and so cannot vouch for an empty result. */

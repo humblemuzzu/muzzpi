@@ -6,6 +6,7 @@
 
 import * as path from "node:path";
 import { getAgentDir, type ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { boxRendererWindowed, osc8Link, type BoxSection, type Excerpt } from "./lib/box-format";
@@ -17,6 +18,7 @@ import type { ToolCostDetails } from "./lib/tool-cost";
 import { searchWithFallback, type Attempt, type ChainResult } from "./lib/web/chain";
 import { keyTag, ProviderHealth } from "./lib/web/health";
 import { ProviderError, type FailureKind } from "./lib/web/http";
+import { ANTHROPIC_MESSAGES_ENDPOINT, claudePlanToken, createClaudeProvider } from "./lib/web/providers/claude";
 import { CONTEXT_ENDPOINT, createContextProvider } from "./lib/web/providers/context";
 import { createDeepSeekProvider, DEEPSEEK_ENDPOINT } from "./lib/web/providers/deepseek";
 import { createParallelProvider, PARALLEL_ENDPOINT } from "./lib/web/providers/parallel";
@@ -45,17 +47,33 @@ export type WebSearchExtConfig = {
 	totalTimeoutSecs: number;
 	endpoints: Record<ProviderId, string>;
 	contextUsdPerCredit: number;
+	/** the model that reads and summarizes Claude's search results. */
+	claudeModel: string;
+	/** how many searches one web_search call may spend, by mode. */
+	claudeMaxUses: Record<SearchMode, number>;
+	claudeMaxConcurrent: number;
+	/** let the search model think; off matches Claude Code and leaves the output budget to the answer. */
+	claudeThinking: boolean;
 };
 
 export const CONFIG_DEFAULTS: WebSearchExtConfig = {
 	defaultMaxResults: 10,
 	defaultMode: "one-shot",
-	order: ["context", "deepseek", "parallel"],
-	orderByMode: { fast: ["deepseek", "context", "parallel"] },
-	timeoutSecs: { context: 30, deepseek: 15, parallel: 30 },
-	totalTimeoutSecs: 45,
-	endpoints: { context: CONTEXT_ENDPOINT, deepseek: DEEPSEEK_ENDPOINT, parallel: PARALLEL_ENDPOINT },
+	order: ["claude", "context", "deepseek", "parallel"],
+	orderByMode: {},
+	timeoutSecs: { claude: 60, context: 30, deepseek: 15, parallel: 30 },
+	totalTimeoutSecs: 120,
+	endpoints: {
+		claude: ANTHROPIC_MESSAGES_ENDPOINT,
+		context: CONTEXT_ENDPOINT,
+		deepseek: DEEPSEEK_ENDPOINT,
+		parallel: PARALLEL_ENDPOINT,
+	},
 	contextUsdPerCredit: 0,
+	claudeModel: "claude-haiku-5-5",
+	claudeMaxUses: { fast: 2, "one-shot": 6, agentic: 12 },
+	claudeMaxConcurrent: 8,
+	claudeThinking: false,
 };
 
 const MAX_RESULTS_CAP = 50;
@@ -78,7 +96,7 @@ export const prepareWebArguments = argumentPreparer(
 				"one-shot": ["oneshot", "default", "normal", "standard", "balanced", "auto"],
 				agentic: ["deep", "advanced", "thorough", "research", "comprehensive", "pro"],
 			},
-			valuesHelp: "fast (~1s, title and summary), one-shot (the default, matching passages), agentic (longer passages and page text)",
+			valuesHelp: "fast (one query, a short answer), one-shot (the default, several searches), agentic (the deepest, many searches)",
 		},
 		include_domains: { list: true, aliases: ["domains", "sites", "site", "include", "include_sites", "only_domains", "allowed_domains"] },
 		exclude_domains: { list: true, aliases: ["exclude", "exclude_sites", "blocked_domains", "block", "excluded_domains"] },
@@ -100,23 +118,30 @@ export const prepareWebArguments = argumentPreparer(
 
 const isPositiveInt = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1;
 const isProviderId = (v: unknown): v is ProviderId => (PROVIDER_IDS as readonly unknown[]).includes(v);
+const isSearchMode = (v: unknown): v is SearchMode => (SEARCH_MODES as readonly unknown[]).includes(v);
 const isOrder = (v: unknown) =>
 	Array.isArray(v) && v.length > 0 && v.every(isProviderId) && new Set(v).size === v.length;
 const isProviderMap = (v: unknown, check: (x: unknown) => boolean) =>
 	typeof v === "object" && v !== null && PROVIDER_IDS.every((id) => check((v as Record<string, unknown>)[id]));
+const isModeMap = (v: unknown, check: (x: unknown) => boolean) =>
+	typeof v === "object" && v !== null && SEARCH_MODES.every((mode) => check((v as Record<string, unknown>)[mode]));
 
 function isWebSearchConfig(value: Record<string, unknown>): value is WebSearchExtConfig {
 	const byMode = value.orderByMode;
 	return (
 		isPositiveInt(value.defaultMaxResults) &&
-		(SEARCH_MODES as readonly unknown[]).includes(value.defaultMode) &&
+		isSearchMode(value.defaultMode) &&
 		isOrder(value.order) &&
 		typeof byMode === "object" && byMode !== null &&
-		Object.entries(byMode).every(([mode, order]) => (SEARCH_MODES as readonly string[]).includes(mode) && isOrder(order)) &&
+		Object.entries(byMode).every(([mode, order]) => isSearchMode(mode) && isOrder(order)) &&
 		isProviderMap(value.timeoutSecs, isPositiveInt) &&
 		isPositiveInt(value.totalTimeoutSecs) &&
 		isProviderMap(value.endpoints, (e) => typeof e === "string" && /^https?:\/\//.test(e)) &&
-		typeof value.contextUsdPerCredit === "number" && value.contextUsdPerCredit >= 0
+		typeof value.contextUsdPerCredit === "number" && value.contextUsdPerCredit >= 0 &&
+		typeof value.claudeModel === "string" && value.claudeModel.trim().length > 0 &&
+		isModeMap(value.claudeMaxUses, isPositiveInt) &&
+		isPositiveInt(value.claudeMaxConcurrent) &&
+		typeof value.claudeThinking === "boolean"
 	);
 }
 
@@ -151,10 +176,19 @@ export interface WebSearchDeps {
 	health?: ProviderHealth;
 	now?: () => number;
 	providers?: Record<ProviderId, SearchProvider>;
+	/** tests and scripts: the Claude plan token, instead of asking pi's auth store. */
+	claudeToken?: (ctx: ExtensionToolContext | undefined) => Promise<string | undefined>;
 }
 
-function defaultProviders(config: WebSearchExtConfig): Record<ProviderId, SearchProvider> {
+function defaultProviders(config: WebSearchExtConfig, deps: WebSearchDeps): Record<ProviderId, SearchProvider> {
 	return {
+		claude: createClaudeProvider({
+			model: config.claudeModel,
+			maxUses: config.claudeMaxUses,
+			maxConcurrent: config.claudeMaxConcurrent,
+			thinking: config.claudeThinking,
+			token: deps.claudeToken ?? claudePlanToken,
+		}),
 		context: createContextProvider({ usdPerCredit: config.contextUsdPerCredit }),
 		deepseek: createDeepSeekProvider(),
 		parallel: createParallelProvider(),
@@ -197,10 +231,16 @@ export function buildRequest(params: Record<string, unknown>, config: WebSearchE
 	};
 }
 
-export function formatHits(hits: Hit[]): { text: string; headerLineIndices: number[] } {
-	if (!hits.length) return { text: "(no results found)", headerLineIndices: [] };
+const SUMMARY_HEADER = "**Claude's web search summary** (verify against the sources below)";
+
+export function formatHits(hits: Hit[], summary?: string): { text: string; headerLineIndices: number[] } {
 	const lines: string[] = [];
 	const headerLineIndices: number[] = [];
+	if (summary) lines.push(SUMMARY_HEADER, "", ...summary.split("\n"), "", "---", "");
+	if (!hits.length) {
+		lines.push("(no results found)");
+		return { text: lines.join("\n"), headerLineIndices };
+	}
 	hits.forEach((hit, i) => {
 		if (i > 0) lines.push("", "---", "");
 		headerLineIndices.push(lines.length);
@@ -216,8 +256,8 @@ export function formatHits(hits: Hit[]): { text: string; headerLineIndices: numb
 }
 
 /** the hits as model text, cut before the first hit that would pass the cap; one oversized first hit is cut inside itself. */
-export function formatCappedHits(hits: Hit[]): { text: string; headerLineIndices: number[] } {
-	const full = formatHits(hits);
+export function formatCappedHits(hits: Hit[], summary?: string): { text: string; headerLineIndices: number[] } {
+	const full = formatHits(hits, summary);
 	if (full.text.length <= MAX_TEXT_CHARS) return full;
 	const room = MAX_TEXT_CHARS - CUT_TRAILER.length - 2;
 	const lineStart = [0];
@@ -238,16 +278,26 @@ export function formatCappedHits(hits: Hit[]): { text: string; headerLineIndices
 	return { text: `${body}\n\n${CUT_TRAILER}`, headerLineIndices: full.headerLineIndices.filter((i) => i < keptLines) };
 }
 
-function hitsToSections(hits: Hit[]): BoxSection[] {
-	return hits.map((hit) => {
-		const lines = [{ text: osc8Link(hit.url, hit.url), highlight: true }];
-		if (hit.date) lines.push({ text: hit.date, highlight: true });
-		for (const passage of hit.passages) {
-			lines.push({ text: "", highlight: false });
-			for (const line of passage.split("\n")) lines.push({ text: line, highlight: false });
-		}
-		return { header: hit.title || "(untitled)", blocks: [{ lines }] };
-	});
+function hitsToSections(hits: Hit[], summary?: string): BoxSection[] {
+	const sections: BoxSection[] = summary
+		? [
+				{
+					header: "Claude's summary",
+					blocks: [{ lines: summary.split("\n").map((text) => ({ text, highlight: false })) }],
+				},
+			]
+		: [];
+	return sections.concat(
+		hits.map((hit) => {
+			const lines = [{ text: osc8Link(hit.url, hit.url), highlight: true }];
+			if (hit.date) lines.push({ text: hit.date, highlight: true });
+			for (const passage of hit.passages) {
+				lines.push({ text: "", highlight: false });
+				for (const line of passage.split("\n")) lines.push({ text: line, highlight: false });
+			}
+			return { header: hit.title || "(untitled)", blocks: [{ lines }] };
+		}),
+	);
 }
 
 function attemptLine(a: Attempt, label: string, maxReason = Number.POSITIVE_INFINITY): string {
@@ -277,9 +327,12 @@ export function sourceLine(
 function failureText(attempts: Attempt[], providers: Record<ProviderId, SearchProvider>): string {
 	const lines = ["web_search failed on every provider:"];
 	for (const a of attempts) lines.push(`- ${attemptLine(a, providers[a.provider].label)}`);
-	const missing = attempts.filter((a) => a.kind === "missing_key").map((a) => providers[a.provider].keyEnv);
+	const missing = attempts.filter((a) => a.kind === "missing_key");
+	const keys = missing.map((a) => providers[a.provider].keyEnv).filter((key): key is string => Boolean(key));
+	const logins = missing.filter((a) => !providers[a.provider].keyEnv).map((a) => providers[a.provider].label);
 	const credits = attempts.filter((a) => a.kind === "credits").map((a) => providers[a.provider].label);
-	if (missing.length) lines.push(`Set ${missing.join(" or ")} in ~/.zshrc, then start a new shell and pi.`);
+	if (keys.length) lines.push(`Set ${keys.join(" or ")} in ~/.zshrc, then start a new shell and pi.`);
+	if (logins.length) lines.push(`${logins.join(" and ")} needs a Claude plan login: run /login anthropic.`);
 	if (credits.length) lines.push(`Top up ${credits.join(" or ")}, or set another provider's key.`);
 	return lines.join("\n");
 }
@@ -289,7 +342,7 @@ function errorResult(text: string, details?: WebSearchDetails) {
 }
 
 export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS, deps: WebSearchDeps = {}): ToolDefinition<any> {
-	const providers = deps.providers ?? defaultProviders(config);
+	const providers = deps.providers ?? defaultProviders(config, deps);
 	const now = deps.now ?? Date.now;
 	const reuse = new SearchReuse<ChainResult>((chain) => Boolean(chain.result?.hits.length), now);
 	const timeoutMs = Object.fromEntries(PROVIDER_IDS.map((id) => [id, config.timeoutSecs[id] * 1000])) as Record<ProviderId, number>;
@@ -302,8 +355,8 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
 		description:
 			"Search the web for information relevant to a research objective.\n\n" +
 			"Use when you need up-to-date or precise documentation. Use `read_web_page` to fetch full content from a " +
-			"specific URL, and `x_search` for posts on X. Providers are tried in turn (Context.dev, DeepSeek, Parallel); " +
-			"the result ends with the one that answered.\n\n" +
+			"specific URL, and `x_search` for posts on X. Providers are tried in turn (Claude's web search, Context.dev, DeepSeek, Parallel); " +
+			"the result ends with the one that answered, and Claude's answer is a cited summary over its sources.\n\n" +
 			'Example: web_search({ objective: "The request fields of the Stripe create-customer API. Prefer Stripe\'s docs.", include_domains: ["stripe.com"] })\n' +
 			'Example: web_search({ objective: "How SvelteKit remote functions work; shipped last month.", search_queries: ["sveltekit remote functions"], freshness: "month" })',
 
@@ -324,9 +377,9 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
 				Type.Union(SEARCH_MODES.map((m) => Type.Literal(m)), {
 					description:
 						`Optional retrieval depth (default ${config.defaultMode}). ` +
-						"'fast' ~1s: title and a short summary per page — for a single fact, a version, whether an API exists. " +
-						"'one-shot' ~5–12s: the passages of each page that match the objective — the default for documentation. " +
-						"'agentic': longer passages plus page text — for comparisons and questions one passage will not answer.",
+						"'fast': one query and a short answer — the cheapest in tokens, for a single fact or a version. " +
+						"'one-shot': several searches and the passages that match the objective — the default for documentation. " +
+						"'agentic': the deepest — up to " + config.claudeMaxUses.agentic + " searches, longer passages and page detail, for comparisons and research.",
 				}),
 			),
 			include_domains: Type.Optional(
@@ -348,7 +401,7 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
 			),
 		}),
 
-		async execute(_toolCallId, params, signal) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const request = buildRequest(params as Record<string, unknown>, config);
 			if (typeof request === "string") return errorResult(request);
 
@@ -356,9 +409,11 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
 			const order = config.orderByMode[request.mode] ?? config.order;
 			const chainHealth = (health ??= new ProviderHealth(path.join(getAgentDir(), "cache", "web-search-health.json")));
 
-			const keys: Partial<Record<ProviderId, string>> = Object.fromEntries(
-				order.map((id) => [id, env[providers[id].keyEnv]?.trim() || undefined]),
-			);
+			const keys: Partial<Record<ProviderId, string>> = {};
+			for (const id of order) {
+				const provider = providers[id];
+				keys[id] = provider.keyEnv ? env[provider.keyEnv]?.trim() || undefined : await provider.resolveKey?.(ctx);
+			}
 			const reuseKey = JSON.stringify([request, order, order.map((id) => (keys[id] ? keyTag(keys[id]) : null))]);
 
 			let chain: ChainResult;
@@ -396,7 +451,7 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
 
 			const source = sourceLine(attempts, providers, result.credits);
 			const hits = result.hits.map((hit) => ({ ...hit, url: cleanUrl(hit.url) }));
-			const { text, headerLineIndices } = formatCappedHits(hits);
+			const { text, headerLineIndices } = formatCappedHits(hits, result.summary);
 			const trailer = [source, ...result.notes].map((line) => `[${line}]`).join("\n");
 			const details: WebSearchDetails = {
 				cost: result.costUsd,
@@ -405,7 +460,7 @@ export function createWebSearchTool(config: WebSearchExtConfig = CONFIG_DEFAULTS
 				credits: result.credits,
 				notes: result.notes,
 				matchLineIndices: headerLineIndices,
-				resultSections: hitsToSections(hits),
+				resultSections: hitsToSections(hits, result.summary),
 			};
 			return { content: [{ type: "text" as const, text: `${text}\n\n${trailer}` }], details };
 		},

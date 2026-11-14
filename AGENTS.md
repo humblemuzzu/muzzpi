@@ -316,10 +316,12 @@ every quantifier there**: an uncapped `[\w.-]*token[\w.-]*` took 284 s on 1 MB.
 
 `glob.ts` registers as `find`; there is no `glob` tool. The 7 GitHub tools are
 separate (`read_github` … `diff`); **there is no tool named `github`**.
-`web_search` tries `ext-config.json` `web-search.order` (Context.dev → DeepSeek → Parallel; `fast`
-starts at DeepSeek); auth and credit failures are held for every process in
-`<agent dir>/cache/web-search-health.json`. A Context.dev key allows 2 requests in flight: the chain
-skips it rather than queue.
+`web_search` tries `ext-config.json` `web-search.order` (Claude plan → Context.dev → DeepSeek →
+Parallel); Claude needs no key (pi's OAuth, skipped without a plan login), while auth and credit
+failures are held for every process in `<agent dir>/cache/web-search-health.json`. A Context.dev key
+allows 2 requests in flight: the chain skips it rather than queue. Claude searches cost plan tokens,
+not dollars; each result names its search and token counts. **Keep the Claude Code identity system
+block in that request**: without it the plan endpoint rate-limits the call (429).
 
 **`read_web_page` is one crawlapi.dev call** (`CRAWLAPI_API_KEY` in `~/.zshrc`; `POST /v1/scrape`,
 only `url`, `format`, `timeout`): crawlapi renders and converts, we keep no fetch, HTML parsing or

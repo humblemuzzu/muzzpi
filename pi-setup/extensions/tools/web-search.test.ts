@@ -7,16 +7,17 @@ import { searchWithFallback, type ChainOptions } from "./lib/web/chain";
 import { ProviderHealth } from "./lib/web/health";
 import { ProviderError } from "./lib/web/http";
 import { contextBody, createContextProvider } from "./lib/web/providers/context";
+import { claudeBody, createClaudeProvider, parseClaudeResponse } from "./lib/web/providers/claude";
 import { createDeepSeekProvider, deepseekQuery } from "./lib/web/providers/deepseek";
 import { createParallelProvider, parallelBody } from "./lib/web/providers/parallel";
 import { cleanUrl, type Hit, type ProviderCall, type ProviderId, type SearchProvider, type SearchRequest } from "./lib/web/types";
 import { buildRequest, CONFIG_DEFAULTS, createWebSearchTool, formatCappedHits, type WebSearchExtConfig } from "./web-search";
 
 type Reply = { status: number; body: unknown; delayMs?: number; headers?: Record<string, string> };
-type Route = "context" | "deepseek" | "parallel";
+type Route = "claude" | "context" | "deepseek" | "parallel";
 
 const replies: Record<Route, (body: any) => Reply> = {} as any;
-const seen: Record<Route, any[]> = { context: [], deepseek: [], parallel: [] };
+const seen: Record<Route, any[]> = { claude: [], context: [], deepseek: [], parallel: [] };
 
 const server = Bun.serve({
 	port: 0,
@@ -37,8 +38,14 @@ afterAll(() => server.stop(true));
 const base = `http://127.0.0.1:${server.port}`;
 const config: WebSearchExtConfig = {
 	...CONFIG_DEFAULTS,
-	endpoints: { context: `${base}/context`, deepseek: `${base}/deepseek`, parallel: `${base}/parallel` },
-	timeoutSecs: { context: 2, deepseek: 2, parallel: 2 },
+	orderByMode: { fast: ["deepseek", "context", "parallel"] },
+	endpoints: {
+		claude: `${base}/claude`,
+		context: `${base}/context`,
+		deepseek: `${base}/deepseek`,
+		parallel: `${base}/parallel`,
+	},
+	timeoutSecs: { claude: 2, context: 2, deepseek: 2, parallel: 2 },
 };
 const allKeys = { CONTEXT_DEV_API_KEY: "ctx-key", DEEPSEEK_API_KEY: "ds-key", PARALLEL_API_KEY: "par-key" };
 
@@ -72,11 +79,32 @@ const parallelOk: Reply = {
 	status: 200,
 	body: { search_id: "s", results: [{ url: "https://p.example.net/a", title: "P", excerpts: ["parallel excerpt"] }], usage: [{ name: "sku_search", count: 1 }] },
 };
+const claudeOk = (summary = "Claude's answer", urls = ["https://claude.example.com/a"]): Reply => ({
+	status: 200,
+	body: {
+		content: [
+			{ type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "q" } },
+			{
+				type: "web_search_tool_result",
+				tool_use_id: "srvtoolu_1",
+				content: urls.map((url, i) => ({ type: "web_search_result", title: `C${i}`, url, page_age: "2 days ago", encrypted_content: "x" })),
+			},
+			{
+				type: "text",
+				text: summary,
+				citations: [{ type: "web_search_result_location", url: urls[0], title: "C0", cited_text: "quoted passage" }],
+			},
+		],
+		stop_reason: "end_turn",
+		usage: { input_tokens: 11000, output_tokens: 400, server_tool_use: { web_search_requests: 1 } },
+	},
+});
 
 let healthFile: string;
 let health: ProviderHealth;
 beforeEach(() => {
 	for (const route of Object.keys(seen) as Route[]) seen[route] = [];
+	replies.claude = () => claudeOk();
 	replies.context = () => contextOk();
 	replies.deepseek = () => deepseekOk();
 	replies.parallel = () => parallelOk;
@@ -101,7 +129,8 @@ describe("web_search provider chain", () => {
 		expect(r.isError).toBe(false);
 		expect(r.text).toContain("### Page 0\nhttps://docs.example.com/page-0");
 		expect(r.text).toContain("passage 0a");
-		expect(r.text).toMatch(/\[via Context\.dev in \d+\.\ds \(2 credits, 998 left\)\]$/);
+		expect(r.text).toContain("[via Context.dev in ");
+		expect(r.text).toContain("(2 credits, 998 left)");
 		expect(r.details.provider).toBe("context");
 		expect(r.details.credits).toEqual({ used: 2, remaining: 998 });
 		expect(seen.deepseek).toHaveLength(0);
@@ -165,7 +194,7 @@ describe("web_search provider chain", () => {
 		const r = await run({ objective: "x" });
 		expect(r.isError).toBe(false);
 		expect(r.text).toStartWith("(no results found)");
-		expect(r.text).toContain("[Context.dev found no results]");
+		expect(r.text).toContain("[Context.dev found no results");
 		expect(r.text).not.toContain("no provider found results");
 		expect(seen.deepseek).toHaveLength(0);
 		expect(seen.parallel).toHaveLength(0);
@@ -182,14 +211,14 @@ describe("web_search provider chain", () => {
 	test("when only non-final providers find nothing, the answer says so once", async () => {
 		replies.deepseek = () => ({ status: 200, body: { results: [] } });
 		const r = await run({ objective: "x" }, { DEEPSEEK_API_KEY: "ds" });
-		expect(r.text).toContain("[DeepSeek found no results · Context.dev: not configured");
+		expect(r.text).toContain("[DeepSeek found no results · Claude: not configured");
 		expect(r.text).not.toContain("DeepSeek: no results");
 	});
 
 	test("a provider skipped for a missing key is named, so a quiet misconfiguration shows", async () => {
 		const r = await run({ objective: "x" }, { DEEPSEEK_API_KEY: "ds" });
 		expect(r.details.provider).toBe("deepseek");
-		expect(r.text).toMatch(/\[via DeepSeek in \d+\.\ds · Context\.dev: not configured — CONTEXT_DEV_API_KEY is not set\]/);
+		expect(r.text).toMatch(/\[via DeepSeek in \d+\.\ds · Claude: not configured — no Claude plan login \(run \/login anthropic\)/);
 	});
 
 	test("fast mode asks DeepSeek first", async () => {
@@ -229,6 +258,172 @@ describe("web_search provider chain", () => {
 	test("a stringified array from the model is accepted", async () => {
 		await run({ objective: "x", mode: "fast", search_queries: '["one", "two"]' });
 		expect(seen.deepseek.map((s) => s.body.query)).toEqual(["one", "two"]);
+	});
+});
+
+describe("Claude's own web search", () => {
+	test("it is the primary provider in every mode, on Haiku 5.5", () => {
+		expect(CONFIG_DEFAULTS.order[0]).toBe("claude");
+		expect(CONFIG_DEFAULTS.orderByMode).toEqual({});
+		expect(CONFIG_DEFAULTS.claudeModel).toBe("claude-haiku-5-5");
+	});
+
+	const claudeTool = (token: string) =>
+		createWebSearchTool(config, { env: allKeys, health, claudeToken: async () => token }) as any;
+	const noLoginTool = () =>
+		createWebSearchTool(config, { env: allKeys, health, claudeToken: async () => undefined }) as any;
+
+	test("answers first, with its summary, cited passages and plan token note", async () => {
+		replies.claude = () => claudeOk("Bun 1.4 is written in Rust.", ["https://bun.com/blog/bun-v1.4", "https://example.com/other"]);
+		const r = await runOn(claudeTool("sk-ant-oat-test"), { objective: "bun 1.4" });
+
+		expect(r.details.provider).toBe("claude");
+		expect(r.details.cost).toBe(0);
+		expect(r.text).toContain("**Claude's web search summary** (verify against the sources below)");
+		expect(r.text).toContain("Bun 1.4 is written in Rust.");
+		expect(r.text).toContain("### C0\nhttps://bun.com/blog/bun-v1.4\n*2 days ago*\n\nquoted passage");
+		expect(r.text).toContain("### C1\nhttps://example.com/other");
+		expect(r.text).toMatch(/\[via Claude in \d+\.\ds\]/);
+		expect(r.text).toContain("[1 search, 11.0k tokens in / 400 out (Claude plan)]");
+		expect(seen.claude[0].auth).toBe("Bearer sk-ant-oat-test");
+		expect(seen.context).toHaveLength(0);
+	});
+
+	test("without a plan login it is named and the next provider answers", async () => {
+		const r = await runOn(noLoginTool(), { objective: "x" });
+		expect(r.details.provider).toBe("context");
+		expect(r.details.attempts[0]).toMatchObject({ provider: "claude", outcome: "skipped", kind: "missing_key" });
+		expect(r.details.attempts[0].reason).toContain("no Claude plan login");
+		expect(r.text).toContain("Claude: not configured — no Claude plan login");
+		expect(seen.claude).toHaveLength(0);
+	});
+
+	test("a refusal falls through and holds Claude for later calls", async () => {
+		replies.claude = () => ({
+			status: 400,
+			body: { type: "error", error: { type: "invalid_request_error", message: "You're out of extra usage. Ask the user to raise their limit." } },
+		});
+		const first = await runOn(claudeTool("sk-ant-oat-test"), { objective: "x" });
+		expect(first.details.provider).toBe("context");
+		expect(first.text).toContain("Claude: out of credits");
+
+		const second = await runOn(claudeTool("sk-ant-oat-test"), { objective: "y" });
+		expect(second.text).toContain("Claude: out of credits");
+		expect(second.text).toContain("skipped until");
+		expect(seen.claude).toHaveLength(1);
+	});
+
+	test("a search that hit the cap is a note, not a failure", async () => {
+		replies.claude = () => ({
+			status: 200,
+			body: {
+				content: [
+					{ type: "web_search_tool_result", tool_use_id: "a", content: { type: "web_search_tool_result_error", error_code: "max_uses_exceeded" } },
+					{ type: "web_search_tool_result", tool_use_id: "b", content: [{ type: "web_search_result", title: "T", url: "https://ok.example.com/x" }] },
+					{ type: "text", text: "The answer." },
+				],
+				stop_reason: "end_turn",
+				usage: { input_tokens: 900, output_tokens: 20, server_tool_use: { web_search_requests: 2 } },
+			},
+		});
+		const r = await runOn(claudeTool("sk-ant-oat-test"), { objective: "x" });
+		expect(r.details.provider).toBe("claude");
+		expect(r.text).toContain("Claude asked for more searches than the cap allowed");
+	});
+
+	test("a paused turn keeps its partial result and says so", async () => {
+		replies.claude = () => ({
+			status: 200,
+			body: {
+				content: [
+					{ type: "web_search_tool_result", tool_use_id: "a", content: [{ type: "web_search_result", title: "T", url: "https://ok.example.com/x" }] },
+					{ type: "text", text: "Partial." },
+				],
+				stop_reason: "pause_turn",
+				usage: { input_tokens: 900, output_tokens: 20, server_tool_use: { web_search_requests: 1 } },
+			},
+		});
+		const r = await runOn(claudeTool("sk-ant-oat-test"), { objective: "x" });
+		expect(r.details.provider).toBe("claude");
+		expect(r.text).toContain("https://ok.example.com/x");
+		expect(r.text).toContain("Claude paused the search; the results may be partial");
+	});
+});
+
+describe("Claude's request and answer", () => {
+	const request = (over: Partial<SearchRequest> = {}): SearchRequest => ({
+		objective: "find the thing",
+		queries: [],
+		maxResults: 10,
+		mode: "one-shot",
+		includeDomains: [],
+		excludeDomains: [],
+		languages: [],
+		...over,
+	});
+
+	test("queries become one list and filters map onto the server tool", () => {
+		const { body, notes } = claudeBody(
+			request({ queries: ["alpha", "beta"], mode: "agentic", includeDomains: ["x.com"], excludeDomains: ["y.com"], country: "de", freshness: "week", languages: ["en"] }),
+			{ model: "claude-haiku-5-5", maxUses: 12, thinking: false },
+		);
+		const tool = (body.tools as Record<string, unknown>[])[0];
+		expect(body.model).toBe("claude-haiku-5-5");
+		expect(body.thinking).toEqual({ type: "disabled" });
+		expect(claudeBody(request(), { model: "claude-haiku-5-5", maxUses: 6, thinking: true }).body.thinking).toBeUndefined();
+		expect(tool).toMatchObject({
+			type: "web_search_20250305",
+			name: "web_search",
+			max_uses: 12,
+			allowed_domains: ["x.com"],
+			user_location: { type: "approximate", country: "DE" },
+		});
+		expect(tool.blocked_domains).toBeUndefined();
+		const content = (body.messages as { content: string }[])[0].content;
+		expect(content).toContain("for this research goal:\nfind the thing");
+		expect(content).toContain("1. alpha\n2. beta");
+		expect(content).toContain("the last week");
+		expect(notes.join(" ")).toContain("no date filter");
+		expect(notes.join(" ")).toContain("no language filter");
+	});
+
+	test("the text after the last search is the summary, and citations become passages", () => {
+		const answer = parseClaudeResponse({
+			content: [
+				{ type: "text", text: "Let me search." },
+				{ type: "server_tool_use", id: "s1", name: "web_search", input: { query: "q" } },
+				{
+					type: "web_search_tool_result",
+					tool_use_id: "s1",
+					content: [
+						{ type: "web_search_result", title: "Doc", url: "https://docs.example.com/a", page_age: "3 days ago" },
+						{ type: "web_search_result", title: "Other", url: "https://example.com/b" },
+					],
+				},
+				{ type: "web_search_tool_result", tool_use_id: "s2", content: { type: "web_search_tool_result_error", error_code: "max_uses_exceeded" } },
+				{
+					type: "text",
+					text: "It shipped.",
+					citations: [{ type: "web_search_result_location", url: "https://docs.example.com/a", cited_text: " version 1.4 shipped " }],
+				},
+			],
+			stop_reason: "end_turn",
+			usage: { input_tokens: 5000, output_tokens: 100, server_tool_use: { web_search_requests: 2 } },
+		});
+		expect(answer.summary).toBe("It shipped.");
+		expect(answer.hits).toEqual([
+			{ url: "https://docs.example.com/a", title: "Doc", date: "3 days ago", passages: ["version 1.4 shipped"] },
+			{ url: "https://example.com/b", title: "Other", date: undefined, passages: [] },
+		]);
+		expect(answer.searches).toBe(2);
+		expect(answer.errors).toEqual(["max_uses_exceeded"]);
+	});
+
+	test("a summary longer than the cap is cut, and says so", () => {
+		const answer = parseClaudeResponse({ content: [{ type: "text", text: "x".repeat(16_005) }] });
+		expect(answer.summaryCut).toBe(true);
+		expect(Array.from(answer.summary ?? "")).toHaveLength(16_000);
+		expect(answer.summary?.endsWith("…")).toBe(true);
 	});
 });
 
@@ -304,7 +499,7 @@ describe("provider request bodies", () => {
 	});
 });
 
-const PINNED_TOOL_TEXT_SHA256 = "72442a2d975b69e418df8eb9c81708d51d62a062f715afe92cdd4d81017c4139";
+const PINNED_TOOL_TEXT_SHA256 = "aa3cf6e4d11fb4b157fd22ff1b8218b6ea9fc999656baaf48182680d57028cea";
 
 test("the label, description and parameters in the cached prompt do not change", () => {
 	const t = createWebSearchTool(CONFIG_DEFAULTS, { env: {} }) as any;
@@ -315,6 +510,7 @@ test("the label, description and parameters in the cached prompt do not change",
 const fakeHit = (url: string, passage = "p"): Hit => ({ url, title: url, passages: [passage] });
 const fakeResult = (urls: string[], passage?: string) => ({ hits: urls.map((u) => fakeHit(u, passage)), costUsd: 0.01, credits: { used: 2, remaining: 98 }, notes: [] });
 const providerSet = (search: (id: ProviderId, call: ProviderCall) => Promise<ReturnType<typeof fakeResult>>): Record<ProviderId, SearchProvider> => ({
+	claude: { ...createClaudeProvider({ model: "claude-haiku-5-5", maxUses: { fast: 2, "one-shot": 6, agentic: 12 }, thinking: false, token: async () => undefined }), search: (call) => search("claude", call) },
 	context: { ...createContextProvider({ usdPerCredit: 0 }), search: (call) => search("context", call) },
 	deepseek: { ...createDeepSeekProvider(), search: (call) => search("deepseek", call) },
 	parallel: { ...createParallelProvider(), search: (call) => search("parallel", call) },
@@ -328,8 +524,8 @@ describe("the total time limit", () => {
 		order: ["context", "deepseek", "parallel"],
 		providers,
 		keys: { context: "k", deepseek: "k", parallel: "k" },
-		endpoints: { context: "http://c", deepseek: "http://d", parallel: "http://p" },
-		timeoutMs: { context: 30_000, deepseek: 15_000, parallel: 30_000 },
+		endpoints: { claude: "http://cl", context: "http://c", deepseek: "http://d", parallel: "http://p" },
+		timeoutMs: { claude: 60_000, context: 30_000, deepseek: 15_000, parallel: 30_000 },
 		health,
 		now,
 		...over,
@@ -415,15 +611,16 @@ describe("identical searches are answered once", () => {
 	});
 
 	test("the shared call outlives one caller's abort and stops when every caller has aborted", async () => {
-		const g = gate();
 		let calls = 0;
 		let providerSignal: AbortSignal | undefined;
+		let releases: (() => void)[] = [];
 		const t = fakeTool(providerSet((_id, call) => {
 			calls++;
 			providerSignal = call.signal;
+			const pending = releases;
 			return new Promise((resolve, reject) => {
 				call.signal?.addEventListener("abort", () => reject(new ProviderError("aborted", "stopped")));
-				g.opened.then(() => resolve(fakeResult(["https://a.com/1"])));
+				pending.push(() => resolve(fakeResult(["https://a.com/1"])));
 			});
 		}));
 		const a = new AbortController();
@@ -433,20 +630,23 @@ describe("identical searches are answered once", () => {
 		a.abort();
 		expect((await first).isError).toBe(true);
 		expect(providerSignal?.aborted).toBe(false);
-		g.open();
+		releases.forEach((release) => release());
 		const kept = await second;
 		expect(kept.isError).toBe(false);
 		expect(calls).toBe(1);
 
+		releases = [];
 		const c = new AbortController();
 		const d = new AbortController();
 		const third = runOn(t, { objective: "other" }, c.signal);
 		const fourth = runOn(t, { objective: "other" }, d.signal);
+		await Bun.sleep(0);
 		c.abort();
 		d.abort();
 		expect((await third).text).toContain("aborted");
 		expect((await fourth).text).toContain("aborted");
 		expect(providerSignal?.aborted).toBe(true);
+		releases.forEach((release) => release());
 	});
 
 	test("a repeat inside 30 s is served from memory with a note and no cost; after 30 s it is searched again", async () => {

@@ -73,7 +73,12 @@ export async function searchWithFallback(request: SearchRequest, opts: ChainOpti
 		const provider = opts.providers[id];
 		const key = opts.keys[id];
 		if (!key) {
-			attempts.push({ provider: id, outcome: "skipped", kind: "missing_key", reason: `${provider.keyEnv} is not set` });
+			attempts.push({
+				provider: id,
+				outcome: "skipped",
+				kind: "missing_key",
+				reason: provider.keyEnv ? `${provider.keyEnv} is not set` : (provider.missingKey ?? "not configured"),
+			});
 			continue;
 		}
 		const held = opts.health.blocked(id, key);
