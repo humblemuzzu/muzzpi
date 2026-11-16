@@ -2,12 +2,17 @@
  * ask — the agent puts its open questions to the user in the picker and waits.
  * Parent session only: no sub-agent allowlist includes it, since a child has
  * nobody to ask.
+ *
+ * The questions also go out on `broski:questions`, where the Broski app on the
+ * user's phone answers them: in a terminal the picker stays up and the first
+ * answer wins, in a session the app runs the app is the only one asked.
  */
 
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { normalizeForDisplay } from "./lib/box-format";
 import {
+	type ChoiceAnswer,
 	type ChoiceAnswers,
 	type ChoiceQuestion,
 	canShowChoiceDialog,
@@ -116,6 +121,76 @@ async function askWithBasicDialogs(ui: any, questions: ChoiceQuestion[], signal?
 	return answers;
 }
 
+/** Pi's event bus, as far as the tool needs it. */
+interface Events {
+	emit(channel: string, data: unknown): void;
+}
+
+interface Remote {
+	/** Something took the questions and will answer them. */
+	readonly claimed: boolean;
+	/** Never settles when nothing claimed them. */
+	readonly answers: Promise<ChoiceAnswers | undefined>;
+	/** Answered here, or no longer wanted: the other side drops its card. */
+	end(): void;
+}
+
+function askRemotely(events: Events | undefined, title: string, questions: AskQuestion[], signal?: AbortSignal): Remote {
+	const ended = new AbortController();
+	signal?.addEventListener("abort", () => ended.abort(), { once: true });
+	let claimed = false;
+	const answers = new Promise<ChoiceAnswers | undefined>((resolve) => {
+		if (events === undefined || signal?.aborted) return;
+		events.emit("broski:questions", {
+			title,
+			questions,
+			signal: ended.signal,
+			claim: () => {
+				claimed = true;
+			},
+			answer: (given: unknown) => resolve(choiceAnswersOf(given, questions.length)),
+		});
+	});
+	return {
+		get claimed() {
+			return claimed;
+		},
+		answers,
+		end: () => ended.abort(),
+	};
+}
+
+/** `[{ selected, custom? }]` per question, in order, as Broski sends them; anything else is no answer. */
+function choiceAnswersOf(given: unknown, count: number): ChoiceAnswers | undefined {
+	if (!Array.isArray(given)) return undefined;
+	return Array.from({ length: count }, (_, index): ChoiceAnswer | undefined => {
+		const entry: unknown = given[index];
+		if (!isRecord(entry)) return undefined;
+		const picked = Array.isArray(entry.selected) ? entry.selected.filter((label): label is string => typeof label === "string") : [];
+		const typed = typeof entry.custom === "string" ? entry.custom.trim() : "";
+		if (picked.length === 0 && typed === "") return undefined;
+		return typed === "" ? { picked } : { picked, typed };
+	});
+}
+
+/** The picker in the terminal and the phone at once; whichever answers first is the answer. */
+async function askBoth(
+	ctx: any,
+	spec: Parameters<typeof openChoiceDialog>[1],
+	remote: Remote,
+	signal?: AbortSignal,
+): Promise<ChoiceAnswers | undefined> {
+	const local = new AbortController();
+	const dialogSignal = signal ? AbortSignal.any([signal, local.signal]) : local.signal;
+	let fromPhone: { answers: ChoiceAnswers | undefined } | undefined;
+	void remote.answers.then((answers) => {
+		fromPhone = { answers };
+		local.abort();
+	});
+	const fromTerminal = await openChoiceDialog(ctx, spec, dialogSignal);
+	return fromPhone !== undefined ? fromPhone.answers : fromTerminal;
+}
+
 function result(text: string, details: AskDetails, terminate = false) {
 	return { content: [{ type: "text" as const, text }], details, ...(terminate ? { terminate: true } : {}) };
 }
@@ -127,7 +202,7 @@ function reuseText(context: any, text: string) {
 	return component;
 }
 
-export function createAskTool(): ToolDefinition {
+export function createAskTool(events?: Events): ToolDefinition {
 	return {
 		name: "ask",
 		label: "Ask",
@@ -175,12 +250,15 @@ export function createAskTool(): ToolDefinition {
 			const title = questions.length > 1 ? `${questions.length} questions` : oneLine(questions[0]!.header || "Question");
 
 			ctx.ui.setWorkingVisible?.(false);
+			const remote = askRemotely(events, title, questions, signal);
 			let answers: ChoiceAnswers | undefined;
 			try {
-				answers = canShowChoiceDialog(ctx)
-					? await openChoiceDialog(ctx, { title, questions: choices, notify: questions[0]!.question, notes: true }, signal)
-					: await askWithBasicDialogs(ctx.ui, choices, signal);
+				const spec = { title, questions: choices, notify: questions[0]!.question, notes: true };
+				if (canShowChoiceDialog(ctx)) answers = await askBoth(ctx, spec, remote, signal);
+				else if (remote.claimed) answers = await remote.answers;
+				else answers = await askWithBasicDialogs(ctx.ui, choices, signal);
 			} finally {
+				remote.end();
 				ctx.ui.setWorkingVisible?.(true);
 			}
 

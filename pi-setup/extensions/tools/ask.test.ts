@@ -160,6 +160,59 @@ describe("execute", () => {
 	});
 });
 
+/** Pi's event bus with the Broski app listening on `broski:questions`. */
+function broski(claims = true) {
+	const asked: any[] = [];
+	return {
+		asked,
+		events: {
+			emit: (channel: string, data: any) => {
+				if (channel !== "broski:questions") return;
+				asked.push(data);
+				if (claims) data.claim();
+			},
+		},
+	};
+}
+
+const runWith = (events: unknown, ctx: unknown, questions: unknown[] = [store]) =>
+	(createAskTool(events as any) as any).execute("call-1", { questions }, undefined, undefined, ctx);
+
+describe("the Broski app on the phone", () => {
+	test("in a terminal, a phone answer closes the picker and is the answer", async () => {
+		const app = broski();
+		const running = runWith(app.events, tuiCtx([]).ctx);
+		expect(app.asked[0]).toMatchObject({ title: "Store", questions: [store] });
+		app.asked[0].answer([{ selected: [], custom: "Postgres" }]);
+		const result = await running;
+		expect(result.content[0].text).toBe('The user answered:\n- Which store? → in their own words: "Postgres"');
+		expect(app.asked[0].signal.aborted).toBe(true);
+	});
+
+	test("in a terminal, a picker answer withdraws the question from the phone", async () => {
+		const app = broski();
+		const result = await runWith(app.events, tuiCtx(["2"]).ctx);
+		expect(result.content[0].text).toBe("The user answered:\n- Which store? → SQLite");
+		expect(app.asked[0].signal.aborted).toBe(true);
+	});
+
+	test("in a session the app runs, only the app is asked: no dialog per question", async () => {
+		const app = broski();
+		const ui = { select: async () => "Redis", input: async () => "x" };
+		const running = runWith(app.events, { hasUI: true, mode: "rpc", ui }, [store, { question: "Open?" }]);
+		app.asked[0].answer([{ selected: ["Redis"] }, { selected: [], custom: "soon" }]);
+		const result = await running;
+		expect(result.content[0].text).toBe('The user answered:\n- Which store? → Redis\n- Open? → in their own words: "soon"');
+	});
+
+	test("with nothing listening, nothing changes: RPC still gets pi's dialogs", async () => {
+		const app = broski(false);
+		const ui = { select: async () => "Redis", input: async () => "x" };
+		const result = await runWith(app.events, { hasUI: true, mode: "rpc", ui });
+		expect(result.content[0].text).toBe("The user answered:\n- Which store? → Redis");
+	});
+});
+
 describe("transcript rows", () => {
 	test("the call and the result reuse their component, so each caches per width", async () => {
 		const call = tool.renderCall({ questions: [store, { question: "Tone?", header: "Tone" }] }, plain, {});

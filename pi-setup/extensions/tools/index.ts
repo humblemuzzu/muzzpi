@@ -184,7 +184,7 @@ export default function (pi: ExtensionAPI) {
 		systemPrompt: readAgentPrompt("prompt.amp.read-session.md"),
 		models,
 	}));
-	pi.registerTool(createAskTool());
+	pi.registerTool(createAskTool(pi.events));
 	// herdr's own pi extension listens for this; without herdr nobody does.
 	setBlockedReporter((active, label) => pi.events.emit("herdr:blocked", { active, label }));
 
