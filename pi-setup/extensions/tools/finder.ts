@@ -18,6 +18,7 @@ import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
+import { AGENT_BACKGROUND_NOTE } from "./lib/agent-channel";
 import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { requireParam } from "./lib/params";
 
@@ -50,6 +51,8 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
 	return {
 		name: "finder",
 		label: "Finder",
+		// a codemode script must never start an agent: it is declared to the model only
+		exposure: "model-only",
 		description:
 			"Intelligently search your codebase: Use it for complex, multi-step search tasks " +
 			"where you need to find code based on functionality or concepts rather than exact matches. " +
@@ -70,7 +73,7 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
 			"3. Name concrete artifacts, patterns, or APIs to narrow scope.\n" +
 			"4. State explicit success criteria so the agent knows when to stop.\n" +
 			"5. Never issue vague or exploratory commands.\n\n" +
-			runs.backgroundNote +
+			AGENT_BACKGROUND_NOTE +
 			'Example: finder({ query: "where is the session JSONL written to disk, and what names the file?" })',
 
 		parameters: Type.Object({
@@ -84,14 +87,13 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
 			...modelParams(models, "finder"),
 		}),
 
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const resolved = requireParam(params as Record<string, unknown>, FINDER_PARAM_NAMES, "finder");
 			if ("error" in resolved) return resolved.error;
 			return runs.launch(
 				{
 					agent: "finder",
 					label: resolved.value,
-					working: "(searching...)",
 					models,
 					params: params as Record<string, unknown>,
 					spawn: {
@@ -101,10 +103,7 @@ export function createFinderTool(config: FinderConfig = {}): ToolDefinition {
 						systemPromptBody: config.systemPrompt,
 					},
 				},
-				toolCallId,
 				ctx,
-				signal,
-				onUpdate,
 			);
 		},
 

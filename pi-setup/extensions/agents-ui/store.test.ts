@@ -28,11 +28,10 @@ describe("RunStore", () => {
 		expect(store.version).toBe(3);
 	});
 
-	test("background and live are what the dock counts", () => {
+	test("live is what the dock counts: running and queued runs", () => {
 		const store = new RunStore();
-		store.ingest([run({ id: "fg", background: false }), run({ id: "bg" }), run({ id: "q", status: "queued" }), finished({ id: "d" })]);
-		expect(store.background().map((r) => r.id)).toEqual(["bg", "q", "d"]);
-		expect(store.live().map((r) => r.id)).toEqual(["bg", "q"]);
+		store.ingest([run({ id: "r" }), run({ id: "q", status: "queued" }), finished({ id: "d" })]);
+		expect(store.live().map((r) => r.id)).toEqual(["r", "q"]);
 	});
 
 	test("neighbour wraps around the list in both directions", () => {

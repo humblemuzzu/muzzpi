@@ -81,7 +81,7 @@ for it; a call can pass `model` / `thinking` to override:
 - `delegate` — full resumable sub-agent for parallel independent work
 - `read_web_page` — static web page reader; `prompt` / `objective` spawn a Q&A / excerpt child
 
-**Other tools:** `commit` (stages exactly the files named, commits only those, optionally pushes), `agents` (list, stop or wait for background agents), `read_session` (one reader
+**Other tools:** `commit` (stages exactly the files named, commits only those, optionally pushes), `agents` (list or stop background agents and jobs), `read_session` (one reader
 model, no tools, reads a whole past session with secrets redacted), `search_sessions`, `screenshot`,
 `web_search` (Context.dev, then DeepSeek, then Parallel), `x_search` (X through the Grok CLI login),
 `ask` (questions to you in a picker), `codemode` (pi's built-in, on by default), and the goal tools

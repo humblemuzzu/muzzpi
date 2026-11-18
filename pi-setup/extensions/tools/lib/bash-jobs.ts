@@ -481,7 +481,6 @@ export class BashJobs {
 				agent: BASH_JOB_AGENT,
 				label: job.label,
 				status: job.status,
-				background: true,
 				queuedAt: job.process.startedAt,
 				startedAt: job.process.startedAt,
 				endedAt: job.endedAt,
@@ -494,6 +493,7 @@ export class BashJobs {
 				stopping: job.stopping && isLive(job),
 				control: job.control,
 				output: job.process.lastLines(VIEW_LINES).join("\n"),
+				command: job.command,
 			};
 		});
 	}

@@ -1,5 +1,11 @@
 /**
- * one instance per extension load. `/reload` interrupts the runs, then the
+ * Every agent runs in the background: its tool call returns a continueId at
+ * once and the answer reaches the session by itself. A session that can be
+ * woken (the TUI, an RPC parent) gets it as a message that starts a turn. One
+ * that cannot (a sub-agent, print mode) gets it as a steer, and is held at
+ * `agent_before_settle` until its agents report, as bash jobs are.
+ *
+ * One instance per extension load. `/reload` interrupts the runs, then the
  * reloaded extension continues them and reports what was unreported
  * (`shutdown(true)` / `takeReloadHandoff`); it shares plain data only, since the
  * reload brings a fresh copy of this module.
@@ -20,16 +26,15 @@ import {
 	type Overlap,
 	type RunReport,
 } from "./agent-notice";
-import { finishedResult, progressUpdate, sessionIdOf, toolError } from "./run-sub-agent";
+import { sessionIdOf, toolError } from "./run-sub-agent";
 import { repairInterrupted, subAgentSessionFile } from "./session-repair";
-import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
-import { clip, getFinalOutput, slimMessages, toolArgSummary, type SingleResult } from "./sub-agent-render";
+import { clip, formatDuration, getFinalOutput, slimMessages, toolArgSummary } from "./sub-agent-render";
 import { resolveParam } from "./params";
 
 export const AGENT_RUN_ENTRY = "agent-run";
 export const MAX_RUNNING = 16;
-const MAX_WAIT_SEC = 600;
 const LISTED_FINISHED = 20;
+const HEARTBEAT_MS = 60_000;
 const BATCH_MS = 1_500;
 const BROADCAST_MS = 250;
 const SHUTDOWN_GRACE_MS = 1_500;
@@ -44,7 +49,7 @@ const USER_STEER_PREFIX = "Message from the user while you work:";
 
 /** the session-side effects; each call is wrapped, since a stale session throws. */
 export interface RunHost {
-	/** `wake`: start a turn when idle, steer when busy; otherwise only add it to the session. */
+	/** `wake`: start a turn when idle, steer when busy; otherwise steer when busy, or only add it to the session when idle. */
 	notify(content: string, details: AgentResultDetails, wake: boolean): void;
 	broadcast(runs: RunSnapshot[]): void;
 	record(entry: RunEntry): void;
@@ -55,9 +60,6 @@ export type RunEntry = Omit<RunReport, "messages" | "files" | "overlaps"> & { st
 export interface LaunchSpec {
 	agent: SubAgent;
 	label: string;
-	/** progress text while the child has produced no answer yet. */
-	working: string;
-	returnImages?: boolean;
 	models: AgentModels;
 	params: Record<string, unknown>;
 	spawn: Omit<PiSpawnConfig, "cwd" | "signal" | "onUpdate" | "onEvent" | "sessionId" | "session" | "model" | "thinkingLevel">;
@@ -76,9 +78,8 @@ interface Run {
 	label: string;
 	continueId: string;
 	resuming: boolean;
-	background: boolean;
-	/** called from a codemode script, which cannot be woken: it always blocks. */
-	nested: boolean;
+	/** the session that started it can be woken; otherwise its answer is a steer, and the run is held for it */
+	wakes: boolean;
 	status: RunStatus;
 	queuedAt: number;
 	startedAt?: number;
@@ -100,7 +101,6 @@ interface Run {
 	control?: ControlOutcome;
 	ended: Promise<void>;
 	markEnded: () => void;
-	onProgress?: () => void;
 }
 
 const LIVE: ReadonlySet<RunStatus> = new Set(["queued", "running"]);
@@ -143,18 +143,10 @@ export class AgentRuns {
 	private broadcastTimer?: ReturnType<typeof setTimeout>;
 	private closed = false;
 	private carried: RunReport[] = [];
+	/** ends the current hold; `sent`: an answer went out, which continues the run */
+	private holder?: (sent: boolean) => void;
 
-	/** false inside a sub-agent and without a host: nothing can wake the caller, so every run blocks. */
-	private readonly wakes: boolean;
-	/** what an agent tool's description says about running in the background; fixed for the process. */
-	readonly backgroundNote: string;
-
-	constructor(private host?: RunHost, private readonly sessionDir: string = SUB_AGENT_SESSION_DIR) {
-		this.wakes = !!host && !process.env[SUB_AGENT_TOOLS_ENV]?.trim();
-		this.backgroundNote = this.wakes
-			? "Unless this session cannot be woken (print mode), it runs in the background: the call returns a continueId at once, and the answer arrives later as a notification that wakes you.\n\n"
-			: "";
-	}
+	constructor(private host?: RunHost, private readonly sessionDir: string = SUB_AGENT_SESSION_DIR) {}
 
 	static takeReloadHandoff(): ReloadHandoff | undefined {
 		const slot = globalThis as { [RELOAD_SLOT]?: ReloadHandoff };
@@ -192,11 +184,7 @@ export class AgentRuns {
 		return { continueId };
 	}
 
-	private canBackground(ctx: LaunchContext): boolean {
-		return this.wakes && wakeable(ctx.mode);
-	}
-
-	async launch(spec: LaunchSpec, toolCallId: string, ctx: LaunchContext, signal?: AbortSignal, onUpdate?: (update: any) => void): Promise<any> {
+	async launch(spec: LaunchSpec, ctx: LaunchContext): Promise<any> {
 		if (this.closed) return toolError("This session is closing; no new agent can start in it.");
 		const continueId = continueIdOf(spec.params);
 		if (continueId) {
@@ -214,11 +202,8 @@ export class AgentRuns {
 		const route = resolveRoute(spec.models, spec.agent, spec.params, ctx.modelRegistry, !!continueId, mainRoute(ctx.model));
 		if ("error" in route) return toolError(route.error);
 
-		/* a script cannot be woken, so its calls wait; everywhere else a woken session never waits on an agent */
-		const nested = toolCallId.includes("/");
-		const background = !nested && this.canBackground(ctx);
 		const id = continueId ?? newSessionId(spec.agent);
-		const run = this.add(spec, id, !!continueId, background, {
+		const run = this.add(spec, id, !!continueId, wakeable(ctx.mode), {
 			...spec.spawn,
 			cwd: ctx.cwd,
 			sessionId: sessionIdOf(ctx),
@@ -228,10 +213,8 @@ export class AgentRuns {
 			session: { id, dir: this.sessionDir },
 			ownProcessGroup: ctx.mode === "tui",
 		});
-		run.nested = nested;
 		this.pump();
-		if (background) return this.stub(run);
-		return this.attend(run, spec, signal, onUpdate);
+		return this.stub(run);
 	}
 
 	async stop(ids: string[]): Promise<{ text: string; details: AgentResultDetails }> {
@@ -260,7 +243,7 @@ export class AgentRuns {
 	async control(request: ControlRequest): Promise<void> {
 		if (this.closed) return;
 		if (request.action === "stopAll") {
-			for (const run of this.runs) if (run.background && LIVE.has(run.status)) this.requestStop(run, true);
+			for (const run of this.runs) if (LIVE.has(run.status)) this.requestStop(run, true);
 			return;
 		}
 		const run = this.latest(request.id);
@@ -286,7 +269,7 @@ export class AgentRuns {
 				? `${previous.continueId} ran in an earlier session; ask the main agent to continue it by continueId.`
 				: unresumableReason(previous.continueId, previous.spawn.cwd, previous.agent, this.sessionDir);
 		if (refusal) return this.answer(previous, "continue", false, refusal);
-		const run = this.newRun(previous.agent, previous.label, previous.continueId, true, true, { ...previous.spawn, task: text, followUp: undefined });
+		const run = this.newRun(previous.agent, previous.label, previous.continueId, true, previous.wakes, { ...previous.spawn, task: text, followUp: undefined });
 		run.control = { action: "continue", ok: true, text: "Continuing with your message.", at: Date.now() };
 		this.runs.push(run);
 		this.changed();
@@ -307,36 +290,37 @@ export class AgentRuns {
 		this.changed();
 	}
 
-	async wait(ids: string[], timeoutSec: number, signal?: AbortSignal): Promise<{ text: string; details: AgentResultDetails }> {
-		const targets = ids.length > 0
-			? ids.map((id) => this.latest(id)).filter((run): run is Run => !!run?.background)
-			: this.runs.filter((run) => run.background && (LIVE.has(run.status) || !run.delivered));
-		const unknown = ids.filter((id) => !this.latest(id));
-		const foreground = ids.filter((id) => this.latest(id) && !this.latest(id)!.background);
-		let onAbort = () => {};
-		const aborted = new Promise<void>((resolve) => {
-			onAbort = () => resolve();
+	/**
+	 * for a session nothing can wake, at the end of its run: waits while an agent
+	 * it started runs, until one has reported (as a steer, which continues the
+	 * run). true when an answer went out. `status` says what it waits for, which
+	 * also keeps an RPC parent's stall watchdog fed.
+	 */
+	async hold(signal: AbortSignal | undefined, status: (text: string | undefined) => void): Promise<boolean> {
+		const waiting = () => this.runs.filter((run) => !run.wakes && LIVE.has(run.status));
+		if (waiting().length === 0 || this.closed || signal?.aborted) return false;
+		return new Promise((resolve) => {
+			const beat = () => {
+				const now = Date.now();
+				const what = waiting().map((run) => {
+					const took = formatDuration(now - (run.startedAt ?? run.queuedAt));
+					return `${run.continueId} (${took})${run.activity ? `: ${run.activity}` : ""}`;
+				});
+				if (what.length > 0) status(`waiting for ${what.join("; ")}`);
+			};
+			beat();
+			const timer = setInterval(beat, HEARTBEAT_MS);
+			const done = (sent: boolean) => {
+				clearInterval(timer);
+				status(undefined);
+				signal?.removeEventListener("abort", onAbort);
+				this.holder = undefined;
+				resolve(sent);
+			};
+			const onAbort = () => done(false);
 			signal?.addEventListener("abort", onAbort, { once: true });
+			this.holder = done;
 		});
-		await Promise.race([Promise.all(targets.map((run) => run.ended)), sleep(Math.min(timeoutSec, MAX_WAIT_SEC) * 1000), aborted]);
-		signal?.removeEventListener("abort", onAbort);
-
-		const reports: RunReport[] = [];
-		const parts: string[] = [];
-		for (const run of targets) {
-			if (LIVE.has(run.status)) parts.push(`${run.continueId}: still ${run.status}`);
-			else if (run.delivered) parts.push(`${run.continueId}: ${run.status}, its result was already delivered`);
-			else {
-				run.delivered = true;
-				this.pending = this.pending.filter((p) => p !== run);
-				const report = this.report(run);
-				reports.push(report);
-				parts.push(runReportText(report));
-			}
-		}
-		for (const id of foreground) parts.push(`${id}: runs in the foreground; its result returns to the call that started it`);
-		for (const id of unknown) parts.push(`${id}: no agent with that continueId ran in this session`);
-		return { text: parts.join("\n\n"), details: { runs: reports } };
 	}
 
 	list(): string {
@@ -388,7 +372,7 @@ export class AgentRuns {
 		await Promise.race([allEnded(), sleep(SHUTDOWN_GRACE_MS)]);
 		for (const run of live) if (LIVE.has(run.status)) run.child?.kill();
 		await Promise.race([allEnded(), sleep(KILL_WAIT_MS)]);
-		const unreported = this.runs.filter((run) => run.background && !run.delivered && !LIVE.has(run.status));
+		const unreported = this.runs.filter((run) => !run.delivered && !LIVE.has(run.status));
 		this.pending = [];
 		if (reload) this.handOff(unreported);
 		else this.deliver(unreported, false);
@@ -416,14 +400,14 @@ export class AgentRuns {
 		this.broadcastTimer = undefined;
 	}
 
-	private add(spec: LaunchSpec, id: string, resuming: boolean, background: boolean, spawn: PiSpawnConfig): Run {
-		const run = this.newRun(spec.agent, spec.label, id, resuming, background, spawn);
+	private add(spec: LaunchSpec, id: string, resuming: boolean, wakes: boolean, spawn: PiSpawnConfig): Run {
+		const run = this.newRun(spec.agent, spec.label, id, resuming, wakes, spawn);
 		this.runs.push(run);
 		this.changed();
 		return run;
 	}
 
-	private newRun(agent: string, label: string, continueId: string, resuming: boolean, background: boolean, spawn: PiSpawnConfig): Run {
+	private newRun(agent: string, label: string, continueId: string, resuming: boolean, wakes: boolean, spawn: PiSpawnConfig): Run {
 		let markEnded!: () => void;
 		const ended = new Promise<void>((resolve) => { markEnded = resolve; });
 		return {
@@ -431,8 +415,7 @@ export class AgentRuns {
 			label: clip(label.trim().split("\n")[0] ?? "", 80),
 			continueId,
 			resuming,
-			background,
-			nested: false,
+			wakes,
 			status: "queued",
 			queuedAt: Date.now(),
 			toolCount: 0,
@@ -481,7 +464,6 @@ export class AgentRuns {
 				...run.spawn,
 				onUpdate: (partial) => {
 					run.result = partial;
-					run.onProgress?.();
 					this.changed();
 				},
 				onEvent: (event) => this.onChildEvent(run, event),
@@ -532,10 +514,16 @@ export class AgentRuns {
 		const { messages: _messages, files: _files, overlaps: _overlaps, ...entry } = this.report(run);
 		this.call((host) => host.record({ ...entry, startedAt: run.startedAt ?? run.queuedAt }));
 		run.markEnded();
-		if (run.background && !run.delivered && !this.closed) {
-			this.pending.push(run);
-			this.batchTimer ??= setTimeout(() => this.flush(), BATCH_MS);
+		if (!run.delivered && !this.closed) {
+			if (run.wakes) {
+				this.pending.push(run);
+				this.batchTimer ??= setTimeout(() => this.flush(), BATCH_MS);
+			} else {
+				this.deliver([run], false);
+				this.holder?.(true);
+			}
 		}
+		if (!this.runs.some((other) => !other.wakes && LIVE.has(other.status))) this.holder?.(false);
 		this.changed();
 		this.pump();
 	}
@@ -598,27 +586,6 @@ export class AgentRuns {
 		};
 	}
 
-	private async attend(run: Run, spec: LaunchSpec, signal?: AbortSignal, onUpdate?: (update: any) => void): Promise<any> {
-		const details: SingleResult = { agent: run.agent, task: run.label, exitCode: -1, messages: [], usage: zeroUsage(), continueId: run.continueId };
-		run.onProgress = () => onUpdate?.(progressUpdate(details, run.result, spec.working));
-		const onAbort = () => {
-			if (run.child) run.child.stop();
-			else this.end(run, { ...run.result, exitCode: 1, stopReason: "aborted" });
-		};
-		if (signal?.aborted) onAbort();
-		else signal?.addEventListener("abort", onAbort, { once: true });
-		try {
-			await run.ended;
-		} finally {
-			signal?.removeEventListener("abort", onAbort);
-			run.onProgress = undefined;
-		}
-		run.delivered = true;
-		const result = { ...run.result, session: { continueId: run.continueId, sessionDir: this.sessionDir } };
-		if (run.status === "interrupted") Object.assign(result, { stopReason: "error", errorMessage: run.failure });
-		return finishedResult(details, result, spec.returnImages);
-	}
-
 	/** "finished" when the run ended before it took the message, so the caller continues it instead. */
 	private async steer(run: Run, text: string, prefix = STEER_PREFIX): Promise<any> {
 		const message = `${prefix}\n\n${text}`;
@@ -628,8 +595,7 @@ export class AgentRuns {
 		}
 		const error = await run.child.steer(message);
 		if (!error) {
-			const where = run.background ? "Its result still arrives as an agent-result notification." : "Its result is still returned by the call that started it.";
-			return { content: [{ type: "text", text: `Sent to the running ${run.agent} (continueId: ${run.continueId}); it reads this before its next step. ${where}` }] };
+			return { content: [{ type: "text", text: `Sent to the running ${run.agent} (continueId: ${run.continueId}); it reads this before its next step. Its result still arrives as an agent-result notification.` }] };
 		}
 		await Promise.race([run.ended, sleep(STEER_FALLBACK_MS)]);
 		if (!LIVE.has(run.status)) return "finished";
@@ -651,7 +617,6 @@ export class AgentRuns {
 			agent: run.agent,
 			label: run.label,
 			status: run.status,
-			background: run.background,
 			queuedAt: run.queuedAt,
 			startedAt: run.startedAt,
 			endedAt: run.endedAt,

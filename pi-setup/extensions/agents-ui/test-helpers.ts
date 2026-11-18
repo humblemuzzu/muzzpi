@@ -51,7 +51,6 @@ export function run(overrides: Partial<RunSnapshot> = {}): RunSnapshot {
 		agent: "chad",
 		label: `task number ${counter}`,
 		status: "running",
-		background: true,
 		queuedAt: T0,
 		startedAt: T0,
 		model: "deepseek/deepseek-flash",

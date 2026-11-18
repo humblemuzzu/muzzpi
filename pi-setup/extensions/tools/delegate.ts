@@ -24,6 +24,7 @@ import { requireParam, resolveParam } from "./lib/params";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
+import { AGENT_BACKGROUND_NOTE } from "./lib/agent-channel";
 import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { firstLine } from "./lib/sub-agent-render";
 
@@ -60,6 +61,8 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 	return {
 		name: "delegate",
 		label: "Delegate",
+		// a codemode script must never start an agent: it is declared to the model only
+		exposure: "model-only",
 		description:
 			"Delegate a sub-task to a sub-agent.\n\n" +
 			"Tools: read, grep, find, ls, bash, edit, write, commit, skill, finder, " +
@@ -79,7 +82,7 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 			"- Tell it how to verify its own work.\n" +
 			"- To redirect a running delegate or ask a finished one a follow-up, pass its `continueId` " +
 			"instead of starting a new delegate — it keeps its full history.\n\n" +
-			runs.backgroundNote +
+			AGENT_BACKGROUND_NOTE +
 			'Example: delegate({ prompt: "In /repo, convert src/auth/*.ts to strict mode. Run `bun test` and report failures.", description: "auth strict mode" })',
 
 		parameters: Type.Object({
@@ -99,15 +102,13 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 			...modelParams(models, "delegate"),
 		}),
 
-		async execute(toolCallId, params: any, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
 			const prompt = requireParam(params, PROMPT_PARAMS, "delegate");
 			if ("error" in prompt) return prompt.error as any;
 			return runs.launch(
 				{
 					agent: "delegate",
 					label: resolveParam(params, DESCRIPTION_PARAMS) ?? firstLine(prompt.value, "delegated task"),
-					working: "(working...)",
-					returnImages: true,
 					models,
 					params,
 					spawn: {
@@ -117,10 +118,7 @@ export function createDelegateTool(config: DelegateConfig = {}): ToolDefinition 
 						systemPromptBody: config.systemPrompt,
 					},
 				},
-				toolCallId,
 				ctx,
-				signal,
-				onUpdate,
 			);
 		},
 

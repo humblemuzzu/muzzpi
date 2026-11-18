@@ -2,7 +2,10 @@ import type { Message } from "@mariozechner/pi-ai";
 import type { UsageStats } from "./pi-spawn";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
 
-/** a message can start a turn here: the interactive TUI or an RPC parent, never a sub-agent or print mode */
+/**
+ * a message can start a turn here: the interactive TUI or an RPC parent, never a sub-agent or print mode.
+ * Background work started where nothing can wake the session holds its run open until it reports.
+ */
 export function wakeable(mode: string | undefined): boolean {
 	return !process.env[SUB_AGENT_TOOLS_ENV]?.trim() && (mode === "tui" || mode === "rpc");
 }
@@ -15,8 +18,13 @@ export const AGENT_RESULT_TYPE = "agent-result";
 /** `pi.events` channel carrying a RunSnapshot[] of this session's agent runs whenever one changes. */
 export const AGENT_RUNS_CHANNEL = "muzzpi:agent-runs";
 
-/** the `setStatus` key a sub-agent shows its running bash jobs under while it is held for them; its parent shows it as the run's activity. */
+/** the `setStatus` key a sub-agent shows the bash jobs and agents it is held for under; its parent shows it as the run's activity. */
 export const JOB_STATUS_KEY = "bash-jobs";
+
+/** what every agent tool's description says about how its run reaches the caller. */
+export const AGENT_BACKGROUND_NOTE =
+	"It runs in the background: the call returns a continueId at once, and the answer arrives later by itself as a " +
+	"notification. Never wait or poll for it: keep working, or end your turn and the answer picks the conversation up.\n\n";
 
 /** the `setStatus` key a sub-agent's long foreground bash command beats under, so its parent's stall watchdog knows it is alive. */
 export const RUN_STATUS_KEY = "bash-running";
@@ -53,7 +61,6 @@ export interface RunSnapshot {
 	agent: string;
 	label: string;
 	status: RunStatus;
-	background: boolean;
 	queuedAt: number;
 	startedAt?: number;
 	endedAt?: number;
@@ -70,4 +77,6 @@ export interface RunSnapshot {
 	control?: ControlOutcome;
 	/** a bash job's latest output lines; agents have `messages` instead */
 	output?: string;
+	/** a bash job's command, whole */
+	command?: string;
 }

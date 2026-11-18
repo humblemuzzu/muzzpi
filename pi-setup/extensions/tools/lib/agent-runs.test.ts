@@ -67,18 +67,14 @@ function setup(mode = "tui", host = new FakeHost()) {
 	const runs = new AgentRuns(host, sessions);
 	const ctx = { cwd: dir, mode };
 	let calls = 0;
-	const launch = (task: string, params: Record<string, unknown> = {}, agent: "chad" | "delegate" = "chad", options: { toolCallId?: string; signal?: AbortSignal } = {}) =>
-		runs.launch(
-			{ agent, label: task, working: "(working...)", models, params, spawn: { task } },
-			options.toolCallId ?? `call-${++calls}`,
-			ctx,
-			options.signal,
-		);
+	const launch = (task: string, params: Record<string, unknown> = {}, agent: "chad" | "delegate" = "chad") =>
+		runs.launch({ agent, label: task, models, params, spawn: { task } }, ctx);
 	return { host, runs, launch };
 }
 
 const idOf = (result: any): string => /continueId: ([\w-]+)/.exec(result.content.at(-1).text)![1]!;
 const textOf = (result: any): string => result.content.at(-1).text;
+const reportedRuns = (host: FakeHost) => host.notified.flatMap((n) => n.runs);
 
 async function until(check: () => boolean, ms = 8_000): Promise<void> {
 	const deadline = Date.now() + ms;
@@ -86,6 +82,11 @@ async function until(check: () => boolean, ms = 8_000): Promise<void> {
 		if (Date.now() > deadline) throw new Error("timed out");
 		await Bun.sleep(25);
 	}
+}
+
+/** resolves once `id`'s answer has reached the session `times` times. */
+function reported(host: FakeHost, id: string, times = 1): Promise<void> {
+	return until(() => reportedRuns(host).filter((run) => run.continueId === id).length >= times);
 }
 
 function argvOf(id: string, nth = 0): string[] {
@@ -130,17 +131,6 @@ describe("a background run", () => {
 		expect(host.texts[0]).toContain("2 background sub-agents finished.");
 	}, 20000);
 
-	test("a result taken by wait is never notified again", async () => {
-		const { host, runs, launch } = setup();
-		const id = idOf(await launch("SLEEP 0.3 quick"));
-		const waited = await runs.wait([id], 10);
-		expect(waited.details.runs.map((r) => r.continueId)).toEqual([id]);
-		expect(waited.text).toContain("answer: Task: SLEEP 0.3 quick");
-		await Bun.sleep(2_000);
-		expect(host.notified).toHaveLength(0);
-		expect((await runs.wait([id], 1)).text).toContain("already delivered");
-	}, 20000);
-
 	test("a child learns its own id, by which the file lock names its holder", async () => {
 		const { host, launch } = setup();
 		const id = idOf(await launch("SLEEP 0.1 who am i"));
@@ -172,15 +162,16 @@ describe("a background run", () => {
 	}, 20000);
 
 	test("runs that did not overlap in time, or changed different files, say nothing", async () => {
-		const { host, runs, launch } = setup();
+		const { host, launch } = setup();
 		const earlier = idOf(await launch("SLEEP 0.2 TOOL shared.ts"));
-		await runs.wait([earlier], 10);
+		await reported(host, earlier);
 		const later = idOf(await launch("SLEEP 0.4 TOOL shared.ts"));
 		const other = idOf(await launch("SLEEP 0.4 TOOL other.ts"));
-		const waited = await runs.wait([later, other], 10);
-		expect(waited.details.runs.map((r) => r.overlaps)).toEqual([[], []]);
-		expect(waited.text).not.toContain("also changed by");
-		expect(host.notified).toHaveLength(0);
+		await reported(host, later);
+		await reported(host, other);
+		const byId = new Map(reportedRuns(host).map((r) => [r.continueId, r]));
+		expect([byId.get(later)!.overlaps, byId.get(other)!.overlaps]).toEqual([[], []]);
+		expect(host.texts.join("\n")).not.toContain("also changed by");
 	}, 20000);
 
 	test("a failed run is reported as failed with the provider's error", async () => {
@@ -190,15 +181,6 @@ describe("a background run", () => {
 		expect(host.notified[0]!.runs[0]).toMatchObject({ status: "failed", errorMessage: "provider exploded" });
 	}, 20000);
 
-	test("wait returns at its timeout with what is still running", async () => {
-		const { runs, launch } = setup();
-		const id = idOf(await launch("SLEEP 30 slow"));
-		const started = Date.now();
-		const waited = await runs.wait([id], 1);
-		expect(Date.now() - started).toBeLessThan(2_000);
-		expect(waited.text).toBe(`${id}: still running`);
-		await runs.stop([id]);
-	}, 20000);
 });
 
 describe("control requests from the agents UI", () => {
@@ -220,22 +202,22 @@ describe("control requests from the agents UI", () => {
 	test("stop on a finished run is refused on that run", async () => {
 		const { host, runs, launch } = setup();
 		const id = idOf(await launch("SLEEP 0.1 quick"));
-		await runs.wait([id], 10);
+		await reported(host, id);
 		await runs.control({ action: "stop", id });
 		await until(() => snapshotOf(host, id).control !== undefined);
 		expect(snapshotOf(host, id).control).toMatchObject({ action: "stop", ok: false });
 		expect(snapshotOf(host, id).control!.text).toContain("already finished");
 	}, 20000);
 
-	test("stopAll stops every live background run and nothing else", async () => {
+	test("stopAll stops every live run and nothing else", async () => {
 		const { host, runs, launch } = setup();
 		const a = idOf(await launch("SLEEP 30 one"));
 		const b = idOf(await launch("SLEEP 30 two"));
 		const done = idOf(await launch("SLEEP 0.1 quick"));
-		await runs.wait([done], 10);
+		await reported(host, done);
 		await runs.control({ action: "stopAll" });
-		await until(() => host.notified.flatMap((n) => n.runs).length >= 2);
-		expect(host.notified.flatMap((n) => n.runs.map((r) => [r.continueId, r.status])).sort()).toEqual([[a, "stopped"], [b, "stopped"]].sort());
+		await until(() => reportedRuns(host).length >= 3);
+		expect(reportedRuns(host).map((r) => [r.continueId, r.status]).sort()).toEqual([[a, "stopped"], [b, "stopped"], [done, "done"]].sort());
 	}, 20000);
 
 	test("steer on a running agent reaches it as a message from the user", async () => {
@@ -253,7 +235,7 @@ describe("control requests from the agents UI", () => {
 	test("steer on a finished run is refused and says to continue", async () => {
 		const { host, runs, launch } = setup();
 		const id = idOf(await launch("SLEEP 0.1 quick"));
-		await runs.wait([id], 10);
+		await reported(host, id);
 		await runs.control({ action: "steer", id, text: "more" });
 		await until(() => snapshotOf(host, id).control !== undefined);
 		expect(snapshotOf(host, id).control).toMatchObject({ action: "steer", ok: false });
@@ -263,12 +245,12 @@ describe("control requests from the agents UI", () => {
 	test("continue starts the same conversation again with the user's message and reports the new answer", async () => {
 		const { host, runs, launch } = setup();
 		const id = idOf(await launch("SLEEP 0.1 first"));
-		await runs.wait([id], 10);
+		await reported(host, id);
 		saveHeader(id);
 		await runs.control({ action: "continue", id, text: "now the second part" });
-		await until(() => host.notified.length > 0);
-		expect(host.notified[0]!.runs[0]).toMatchObject({ continueId: id, status: "done" });
-		expect(host.texts[0]).toContain("answer: Task: now the second part");
+		await reported(host, id, 2);
+		expect(host.notified.at(-1)!.runs[0]).toMatchObject({ continueId: id, status: "done" });
+		expect(host.texts.at(-1)).toContain("answer: Task: now the second part");
 		const continued = argvOf(id, 1);
 		expect(continued[continued.indexOf("--session-id") + 1]).toBe(id);
 	}, 20000);
@@ -325,29 +307,29 @@ describe("continueId", () => {
 	}, 20000);
 
 	test("of a finished agent continues it as a new run on the same conversation", async () => {
-		const { host, runs, launch } = setup();
+		const { host, launch } = setup();
 		const id = idOf(await launch("first question"));
-		await runs.wait([id], 10);
+		await reported(host, id);
 		saveHeader(id);
 		const again = await launch("second question", { continueId: id });
 		expect(idOf(again)).toBe(id);
-		await until(() => host.notified.length > 0);
-		expect(host.notified[0]!.runs[0]!.status).toBe("done");
-		expect(host.texts[0]).toContain("answer: Task: second question");
+		await reported(host, id, 2);
+		expect(host.notified.at(-1)!.runs[0]!.status).toBe("done");
+		expect(host.texts.at(-1)).toContain("answer: Task: second question");
 		const argv = argvOf(id, 1);
 		expect(argv[argv.indexOf("--session-id") + 1]).toBe(id);
 		expect(argv).not.toContain("--model");
 	}, 20000);
 
 	test("repairs a conversation its earlier process left mid-tool before continuing it", async () => {
-		const { runs, launch } = setup();
+		const { host, launch } = setup();
 		const manager = SessionManager.create(dir, sessions, { id: "chad-orphan" });
 		manager.appendMessage({ role: "user", content: [{ type: "text", text: "go" }], timestamp: Date.now() } as any);
 		manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "c9", name: "bash", arguments: {} }], stopReason: "toolUse", timestamp: Date.now() } as any);
 		await launch("what happened?", { continueId: "chad-orphan" });
 		const last = SessionManager.open(manager.getSessionFile()!).buildSessionContext().messages.at(-1) as any;
 		expect(last).toMatchObject({ role: "toolResult", toolCallId: "c9", isError: true });
-		await runs.wait(["chad-orphan"], 10);
+		await reported(host, "chad-orphan");
 	}, 20000);
 
 	test("that no agent saved is refused", async () => {
@@ -357,43 +339,69 @@ describe("continueId", () => {
 	});
 });
 
-describe("blocking runs", () => {
-	test("print mode, a sub-agent and a codemode script block; nothing else does", async () => {
-		const blocked = async (result: any) => {
-			expect(result.details.background).toBeUndefined();
-			expect(textOf(result)).toContain("answer: Task: hi");
-			expect(textOf(result)).toContain("continueId: chad-");
-		};
-		await blocked(await setup("print").launch("hi"));
-		await blocked(await setup().launch("hi", {}, "chad", { toolCallId: "call-1/2" }));
-		const habit = await setup().launch("hi", { background: false });
-		expect(habit.details.background).toBe(true);
-		process.env[SUB_AGENT_TOOLS_ENV] = "read,finder";
-		try {
-			await blocked(await setup("rpc").launch("hi"));
-		} finally {
-			delete process.env[SUB_AGENT_TOOLS_ENV];
-		}
-	}, 30000);
+/** `role` set: a sub-agent, whose RPC parent closes it when its run settles, so nothing can wake it. */
+async function launchedAs<T>(role: string | undefined, launch: () => Promise<T>): Promise<T> {
+	if (role === undefined) return launch();
+	process.env[SUB_AGENT_TOOLS_ENV] = role;
+	try {
+		return await launch();
+	} finally {
+		delete process.env[SUB_AGENT_TOOLS_ENV];
+	}
+}
 
-	test("Esc stops a blocking run", async () => {
-		const controller = new AbortController();
-		const { launch } = setup();
-		const pending = launch("SLEEP 30", {}, "chad", { toolCallId: "call-3/1", signal: controller.signal });
-		await Bun.sleep(300);
-		controller.abort();
-		const result = await pending;
-		expect(result.isError).toBe(true);
-		expect(textOf(result)).toContain("Stopped before the sub-agent finished");
+describe("a session nothing can wake", () => {
+	const unwakeable = [
+		["print mode", "print", undefined],
+		["a sub-agent", "rpc", "read,finder"],
+	] as const;
+
+	for (const [where, mode, role] of unwakeable) {
+		test(`${where} gets a continueId at once too, and the answer as a steer that ends its hold`, async () => {
+			const { host, runs, launch } = setup(mode);
+			const started = Date.now();
+			const stub = await launchedAs(role, () => launch("SLEEP 0.8 dig"));
+			expect(Date.now() - started).toBeLessThan(500);
+			expect(textOf(stub)).toContain("is running in the background");
+			const status: (string | undefined)[] = [];
+			const held = await runs.hold(undefined, (text) => status.push(text));
+			expect(held).toBe(true);
+			expect(status[0]).toStartWith(`waiting for ${idOf(stub)} (`);
+			expect(status.at(-1)).toBeUndefined();
+			expect(host.wakes).toEqual([false]);
+			expect(host.texts[0]).toContain("answer: Task: SLEEP 0.8 dig");
+		}, 20000);
+	}
+
+	test("with nothing running, nothing holds it", async () => {
+		const { runs } = setup("print");
+		expect(await runs.hold(undefined, () => {})).toBe(false);
+	});
+
+	test("a hold ends without news when its agent ends with nothing to report, and at its run's abort", async () => {
+		const { runs, launch } = setup("print");
+		const id = idOf(await launch("SLEEP 30 stopped"));
+		const held = runs.hold(undefined, () => {});
+		await runs.stop([id]);
+		expect(await held).toBe(false);
+
+		const other = idOf(await launch("SLEEP 30 aborted"));
+		const abort = new AbortController();
+		const aborted = runs.hold(abort.signal, () => {});
+		abort.abort();
+		expect(await aborted).toBe(false);
+		await runs.stop([other]);
 	}, 20000);
 
+	test("a session that can be woken is never held: its answers wake it instead", async () => {
+		const { host, runs, launch } = setup("rpc");
+		const id = idOf(await launch("SLEEP 0.3 quick"));
+		expect(await runs.hold(undefined, () => {})).toBe(false);
+		await reported(host, id);
+		expect(host.wakes).toEqual([true]);
+	}, 20000);
 });
 
-test("pi still names a codemode script's tool calls <callerId>/<n>, which is how a nested run is told apart", () => {
-	const pi = join(import.meta.dir, "..", "node_modules", "@mariozechner", "pi-coding-agent");
-	const source = readFileSync(join(pi, "dist", "core", "nested-tool-calls.js"), "utf-8");
-	expect(source).toContain("id: `${callerId}/${scope.nextId++}`");
-});
 
 describe("the queue", () => {
 	test(`at most ${MAX_RUNNING} run at once; the rest start in order as slots free`, async () => {
@@ -411,10 +419,10 @@ describe("the queue", () => {
 
 describe("a child held for its bash jobs", () => {
 	test("its job status becomes the run's activity; other status keys do not", async () => {
-		const { host, runs, launch } = setup();
+		const { host, launch } = setup();
 		const id = idOf(await launch("SLEEP 1 JOBSTATUS"));
 		await until(() => host.last.find((run) => run.id === id)?.activity === "waiting for bash-1a2b (5s): tick");
-		await runs.wait([id], 10);
+		await reported(host, id);
 	});
 
 	test("a stop ends it at once: an abort cannot reach a run held at its end", async () => {

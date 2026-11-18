@@ -28,6 +28,7 @@ import { requireParam, resolveParam } from "./lib/params";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
+import { AGENT_BACKGROUND_NOTE } from "./lib/agent-channel";
 import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { firstLine } from "./lib/sub-agent-render";
 
@@ -77,6 +78,8 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 	return {
 		name: "chad",
 		label: "Chad",
+		// a codemode script must never start an agent: it is declared to the model only
+		exposure: "model-only",
 		description:
 			"Deep read-only research agent. Several can be launched at once for genuinely " +
 			"parallel research.\n\n" +
@@ -102,7 +105,7 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 			"citations you can check.\n" +
 			"- To redirect a running chad or push a finished one further, pass its `continueId` rather than " +
 			"starting a new one — it keeps its full history.\n\n" +
-			runs.backgroundNote +
+			AGENT_BACKGROUND_NOTE +
 			'Example: chad({ prompt: "In /repo, how does the session file get written and what names it? Start from src/session/. Answer with the exact function and path:line.", description: "session file naming" })',
 
 		parameters: Type.Object({
@@ -125,15 +128,13 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 			...modelParams(models, "chad"),
 		}),
 
-		async execute(toolCallId, params: any, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
 			const prompt = requireParam(params, PROMPT_PARAMS, "chad");
 			if ("error" in prompt) return prompt.error as any;
 			return runs.launch(
 				{
 					agent: "chad",
 					label: resolveParam(params, DESCRIPTION_PARAMS) ?? firstLine(prompt.value, "research task"),
-					working: "(researching...)",
-					returnImages: true,
 					models,
 					params,
 					spawn: {
@@ -144,10 +145,7 @@ export function createChadTool(config: ChadConfig = {}): ToolDefinition {
 						systemPromptBody: config.systemPrompt,
 					},
 				},
-				toolCallId,
 				ctx,
-				signal,
-				onUpdate,
 			);
 		},
 

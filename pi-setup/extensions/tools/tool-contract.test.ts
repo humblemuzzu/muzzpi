@@ -333,39 +333,29 @@ describe("tool contract: every sub-agent takes a model and a thinking level", ()
 	});
 });
 
-describe("tool contract: background is offered only where a result can wake the caller", () => {
+describe("tool contract: every agent runs in the background, and only the model starts one", () => {
 	const host = { notify() {}, broadcast() {}, record() {} };
 	const toolsWith = (runs: AgentRuns) => [
 		createLibrarianTool({ runs }), createOracleTool({ runs }), createDelegateTool({ runs }),
 		createChadTool({ runs }), createFinderTool({ runs }), createCodeReviewTool({ runs }),
 	] as any[];
 
-	test("in the main session every agent tool says so, and offers no way to wait for it", () => {
-		const saved = process.env[SUB_AGENT_TOOLS_ENV];
-		delete process.env[SUB_AGENT_TOOLS_ENV];
-		try {
-			for (const tool of toolsWith(new AgentRuns(host))) {
-				expect(tool.description).toContain("it runs in the background");
-				expect(tool.parameters.properties.background).toBeUndefined();
-				expect(tool.parameters.properties.continueId.type).toBe("string");
+	for (const [where, role] of [["the main session", undefined], ["a sub-agent", "read,finder"]] as const) {
+		test(`in ${where} every agent tool says it runs in the background, is model-only and offers no way to wait`, () => {
+			const saved = process.env[SUB_AGENT_TOOLS_ENV];
+			if (role === undefined) delete process.env[SUB_AGENT_TOOLS_ENV];
+			else process.env[SUB_AGENT_TOOLS_ENV] = role;
+			try {
+				for (const tool of toolsWith(new AgentRuns(host))) {
+					expect(tool.description).toContain("It runs in the background: the call returns a continueId at once");
+					expect([tool.name, tool.exposure]).toEqual([tool.name, "model-only"]);
+					expect(tool.parameters.properties.background).toBeUndefined();
+					expect(tool.parameters.properties.continueId.type).toBe("string");
+				}
+			} finally {
+				if (saved === undefined) delete process.env[SUB_AGENT_TOOLS_ENV];
+				else process.env[SUB_AGENT_TOOLS_ENV] = saved;
 			}
-		} finally {
-			if (saved !== undefined) process.env[SUB_AGENT_TOOLS_ENV] = saved;
-		}
-	});
-
-	test("inside a sub-agent, where every call blocks, none of them mentions it", () => {
-		const saved = process.env[SUB_AGENT_TOOLS_ENV];
-		process.env[SUB_AGENT_TOOLS_ENV] = "read,finder";
-		try {
-			for (const tool of toolsWith(new AgentRuns(host))) {
-				expect(tool.description).not.toContain("background");
-				expect(tool.parameters.properties.background).toBeUndefined();
-				expect(tool.parameters.properties.continueId).toBeDefined();
-			}
-		} finally {
-			if (saved === undefined) delete process.env[SUB_AGENT_TOOLS_ENV];
-			else process.env[SUB_AGENT_TOOLS_ENV] = saved;
-		}
-	});
+		});
+	}
 });

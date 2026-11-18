@@ -182,7 +182,8 @@ Pick by what you need back:
   agent gets its output so far and keeps working or ends its turn; the result
   wakes it when the command ends, or as soon as a line matches its `wake_on`
   pattern. Jobs show in the agents dock. Sub-agents get the same, and wait for
-  their jobs before they report.
+  their jobs and agents before they report. Agents always run in the background,
+  and never from a codemode script.
 - A test, build or install piped into `tail`/`head`/`grep`, or sent to a file, is
   refused: the pipe hides its progress and replaces its exit code. So is a bare
   `sleep` of 30 s or more.

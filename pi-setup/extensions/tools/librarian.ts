@@ -25,6 +25,7 @@ import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
+import { AGENT_BACKGROUND_NOTE } from "./lib/agent-channel";
 import { AGENT_SHELL, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { requireParam, stringList } from "./lib/params";
 
@@ -65,6 +66,8 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 	return {
 		name: "librarian",
 		label: "Librarian",
+		// a codemode script must never start an agent: it is declared to the model only
+		exposure: "model-only",
 		description:
 			"The Librarian — a specialized codebase understanding agent that helps answer " +
 			"questions about large, complex codebases across GitHub repositories.\n\n" +
@@ -86,7 +89,7 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 			"- Provide context about what you're trying to achieve\n" +
 			"- The Librarian explores thoroughly before providing comprehensive answers\n" +
 			"- When getting an answer from the Librarian, show it to the user in full, do not summarize it.\n\n" +
-			runs.backgroundNote +
+			AGENT_BACKGROUND_NOTE +
 			'Example: librarian({ repository: ["xai-org/grok-build"], query: "how are sub-agent results rendered in the TUI?" })',
 
 		parameters: Type.Object({
@@ -111,7 +114,7 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 			...modelParams(models, "librarian"),
 		}),
 
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const resolved = requireParam(params as Record<string, unknown>, LIBRARIAN_PARAM_NAMES, "librarian");
 			if ("error" in resolved) return resolved.error;
 
@@ -128,7 +131,6 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 				{
 					agent: "librarian",
 					label: resolved.value,
-					working: "(exploring...)",
 					models,
 					params: params as Record<string, unknown>,
 					spawn: {
@@ -138,10 +140,7 @@ export function createLibrarianTool(config: LibrarianConfig = {}): ToolDefinitio
 						systemPromptBody: config.systemPrompt,
 					},
 				},
-				toolCallId,
 				ctx,
-				signal,
-				onUpdate,
 			);
 		},
 

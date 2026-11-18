@@ -138,8 +138,8 @@ idle. That message is an automated event, not the user speaking. Until it
 arrives you know nothing about the result: never guess, predict or report it,
 and never poll or sleep for it. Meanwhile do work that does not overlap with
 it, or tell the user what you launched and end your turn. If the user asks
-before it arrives, say it is still running. A call that returns the answer
-itself (a run with no one to wake) is simply done.
+before it arrives, say it is still running. Agent tools are never callable from a
+`codemode` script: call them directly.
 
 **Give the user the number and the sequencing they asked for.**
 

@@ -381,10 +381,12 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
   with `pi-spawn.ts` `startChild`, in RPC mode (task over stdin, closed on `agent_settled`). RPC
   gives a child `hasUI`: its dialogs are answered cancelled, and `approval.ts` treats
   `PI_SUBAGENT_TOOLS` as no UI.
-- **Agent tools run in the background** only where a result can wake the caller (TUI or RPC parent;
-  never `-p`, a child or a codemode script). Results come back once, as one `agent-result` message
-  per batch (`triggerTurn` + `deliverAs: "steer"`) unless `agents stop` took them. Esc does
-  not stop them. `session_shutdown` does, and adds unreported results to the session unwoken; on
+- **Agent tools always run in the background**: the call returns a `continueId` at once, everywhere.
+  A session `wakeable()` says can be woken (TUI or RPC parent) gets results once, as one `agent-result`
+  message per batch (`triggerTurn` + `deliverAs: "steer"`) unless `agents stop` took them; a child or a
+  `-p` run gets each as a steer and is held at `agent_before_settle` while its agents run, beside its
+  bash jobs (one `JOB_STATUS_KEY` heartbeat for both). The six are `exposure: "model-only"`, so a
+  codemode script can neither see nor call them. Esc does not stop them. `session_shutdown` does, and adds unreported results to the session unwoken; on
   `/reload` the new load continues them (`takeReloadHandoff`).
 - **All six persist `<agent>-<uuid>` sessions**; `unresumableReason` refuses another agent's id
   (pre-`AGENT_NAMED_IDS_SINCE` ids are all `delegate-`, so chad may resume those). `continueId`
@@ -493,7 +495,10 @@ moves), `PI_SPAWN_STALL_SEC`, `PI_SPAWN_RELEASE_MS` (the 10 s grace, for tests),
 - A sub-agent's foreground command beats `RUN_STATUS_KEY` once a minute (feeds L3); a child held for its
   jobs (`JOB_STATUS_KEY`) is stopped with SIGTERM at once. Package scripts are judged by the nearest package.json.
 - Job output is no tool result: the host scrubs it before `sendMessage`. Jobs share the agents broadcast
-  (dock, prompt-cache keep-alive) and `agents` list/stop (no wait: results arrive by themselves); bash-running children get `agents` too.
+  (dock, prompt-cache keep-alive, and `broski:tasks` for the Broski app, which keeps a phone-hosted session open
+  while the list is not empty) and `agents` list/stop (no wait: results arrive by themselves); bash-running
+  children get `agents` too. A command never inherits the sub-agent role (`PI_SUBAGENT_TOOLS`, `PI_SUBAGENT_ID`,
+  `PI_BASH_READ_ONLY`; `commandEnv`): a tmux server or daemon it starts would hand it to every `pi` it runs later.
   `/reload` hands live jobs over (`takeHandoff`); any other shutdown stops them and reports unwoken.
 - **Refused before running** (`lib/command-shape.ts`, top-level parse, fails open): a test, build, type
   check or install piped into a consumer that holds output (`tail`, `head`, `grep`…) or redirected to a

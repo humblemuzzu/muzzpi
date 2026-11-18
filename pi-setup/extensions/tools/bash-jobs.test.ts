@@ -139,7 +139,7 @@ describe("a long command moves to the background instead of holding the agent", 
 		const id = jobIdOf(text);
 		await until(() => shown.some((list) => list.some((run) => run.id === id && run.status === "running" && run.output?.includes("tick2"))));
 		const running = shown.flat().find((run) => run.id === id && run.status === "running")!;
-		expect(running).toMatchObject({ agent: "bash", background: true, label: TICKS });
+		expect(running).toMatchObject({ agent: "bash", label: TICKS, command: TICKS });
 		await until(() => shown.some((list) => list.some((run) => run.id === id && run.status === "done")));
 		const done = shown.flat().findLast((run) => run.id === id)!;
 		expect(done.activity).toBe("exit 0 · tick4");

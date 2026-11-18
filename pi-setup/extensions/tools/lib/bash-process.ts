@@ -12,6 +12,23 @@ import { OutputBuffer, headTailChars } from "./output-buffer";
 import { FullOutput, type FinishedOutput } from "./full-output";
 import { SLEEP_JUMP_MS, watchdogTickMs, watchdogVerdict } from "./watchdog";
 import { sampleGroupCpuSeconds } from "./proc-cpu";
+import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
+import { HOLDER_ENV } from "./file-lock";
+import { READ_ONLY_BASH_ENV } from "./read-only-bash";
+
+/**
+ * What makes this pi a sub-agent describes this process, not the commands it runs. A tmux server or a
+ * daemon a command starts keeps its environment for good, and every pi it later runs would believe it is a
+ * sub-agent: no background agents, the sub-agent prompt, approvals refused.
+ */
+const ROLE_ENV: readonly string[] = [SUB_AGENT_TOOLS_ENV, HOLDER_ENV, READ_ONLY_BASH_ENV];
+
+/** the environment a command starts with: this process's, minus its sub-agent role. */
+export function commandEnv(base: NodeJS.ProcessEnv, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...UNBUFFERED, ...base, ...extra };
+	for (const name of ROLE_ENV) delete env[name];
+	return env;
+}
 
 export const HEAD_LINES = 50;
 export const TAIL_LINES = 50;
@@ -245,7 +262,7 @@ export class BashProcess {
 	private run(resolve: (end: ProcessEnd) => void): void {
 		const { command, cwd, timeoutSec, idleSec } = this.spec;
 		const { shell, args } = getShell();
-		const env = { ...UNBUFFERED, ...process.env, ...this.spec.env };
+		const env = commandEnv(process.env, this.spec.env);
 		const startedAt = performance.now();
 		const child = spawn(shell, [...args, command], {
 			cwd,

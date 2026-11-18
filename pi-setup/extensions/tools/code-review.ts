@@ -16,6 +16,7 @@ import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns, continueIdOf } from "./lib/agent-runs";
+import { AGENT_BACKGROUND_NOTE } from "./lib/agent-channel";
 import { AGENT_SHELL, fileCount, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { getFinalOutput } from "./lib/sub-agent-render";
 import { requireParam } from "./lib/params";
@@ -246,6 +247,8 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 	return {
 		name: "review_code",
 		label: "Code Review",
+		// a codemode script must never start an agent: it is declared to the model only
+		exposure: "model-only",
 		description:
 			"Review code changes for bugs: uncommitted work, a commit, a range or a branch. " +
 			"Use when asked to review changes, check them for bugs, or analyze uncommitted work.\n\n" +
@@ -259,7 +262,7 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 			"review again. To review again after fixing, pass the earlier review's continueId: it then checks " +
 			"only what changed and does not repeat itself. After three rounds, stop and tell the user what is " +
 			"still open instead of starting another.\n\n" +
-			runs.backgroundNote +
+			AGENT_BACKGROUND_NOTE +
 			'Example: review_code({ diff_description: "uncommitted changes on the current branch vs HEAD" })',
 
 		parameters: Type.Object({
@@ -298,7 +301,7 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 			...modelParams(models, "review_code"),
 		}),
 
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const resolved = requireParam(
 				params as Record<string, unknown>,
 				CODE_REVIEW_PARAM_NAMES,
@@ -317,8 +320,6 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 				{
 					agent: "review_code",
 					label: resolved.value,
-					working: "(reviewing...)",
-					returnImages: true,
 					models,
 					params: params as Record<string, unknown>,
 					spawn: {
@@ -329,10 +330,7 @@ export function createCodeReviewTool(config: CodeReviewConfig = {}): ToolDefinit
 						followUp,
 					},
 				},
-				toolCallId,
 				ctx,
-				signal,
-				onUpdate,
 			);
 		},
 

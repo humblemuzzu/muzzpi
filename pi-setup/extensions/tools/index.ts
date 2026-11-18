@@ -69,16 +69,43 @@ import { requestApproval } from "./lib/approval";
 import { setBlockedReporter } from "./lib/choice-dialog";
 import { describeMcpCall, destructiveMcpReason, mcpCallOf } from "./lib/destructive-mcp";
 import { peakPriced } from "./lib/deepseek-cost";
+import { agentActivity, BROSKI_TASKS_CHANNEL, broskiTasks, jobActivity } from "./lib/broski";
+
+/** true once one hold sent news, false once every hold ended without any. */
+function firstNews(holds: readonly Promise<boolean>[]): Promise<boolean> {
+	return new Promise((resolve) => {
+		let left = holds.length;
+		if (left === 0) resolve(false);
+		for (const hold of holds) {
+			void hold.then((sent) => {
+				if (sent) resolve(true);
+				else if (--left === 0) resolve(false);
+			});
+		}
+	});
+}
 
 export default function (pi: ExtensionAPI) {
 	// read once: the schema enums and the resolver must agree for the whole session.
 	const models = loadAgentModels();
 	/* one broadcast carries both, so the agents UI and the prompt cache see every background run. */
 	const shown: { agents: RunSnapshot[]; jobs: RunSnapshot[] } = { agents: [], jobs: [] };
-	const broadcast = () => pi.events.emit(AGENT_RUNS_CHANNEL, [...shown.agents, ...shown.jobs]);
+	let announced = "[]";
+	const broadcast = () => {
+		const all = [...shown.agents, ...shown.jobs];
+		pi.events.emit(AGENT_RUNS_CHANNEL, all);
+		const tasks = broskiTasks(all);
+		const text = JSON.stringify(tasks);
+		if (text === announced) return;
+		announced = text;
+		pi.events.emit(BROSKI_TASKS_CHANNEL, tasks);
+	};
 	const runs = new AgentRuns({
 		notify: (content, details, wake) =>
-			pi.sendMessage({ customType: AGENT_RESULT_TYPE, content, display: true, details }, wake ? { triggerTurn: true, deliverAs: "steer" } : {}),
+			pi.sendMessage(
+				{ customType: AGENT_RESULT_TYPE, content, display: true, details: { ...details, broski: agentActivity(details.runs) } },
+				wake ? { triggerTurn: true, deliverAs: "steer" } : {},
+			),
 		broadcast: (snapshot) => {
 			shown.agents = snapshot;
 			broadcast();
@@ -88,12 +115,13 @@ export default function (pi: ExtensionAPI) {
 	/* a job's output is not a tool result, so the tool_result scrubber never sees it: scrub it here. */
 	const jobs = new BashJobs({
 		notify: (content, details, wake) =>
-			makeScrubber().then((scrub) =>
+			makeScrubber().then((scrub) => {
+				const scrubbed = details.jobs.map((job) => ({ ...job, command: scrub(job.command), text: scrub(job.text) }));
 				pi.sendMessage(
-					{ customType: JOB_RESULT_TYPE, content: scrub(content), display: true, details: { jobs: details.jobs.map((job) => ({ ...job, command: scrub(job.command), text: scrub(job.text) })) } },
+					{ customType: JOB_RESULT_TYPE, content: scrub(content), display: true, details: { jobs: scrubbed, broski: jobActivity(scrubbed) } },
 					wake ? { triggerTurn: true, deliverAs: "steer" } : {},
-				),
-			).catch(() => {}),
+				);
+			}).catch(() => {}),
 		broadcast: (snapshot) => {
 			shown.jobs = snapshot;
 			broadcast();
@@ -158,13 +186,20 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createAgentsTool(runs, jobs));
 	pi.registerMessageRenderer(AGENT_RESULT_TYPE, renderAgentResult);
 	pi.registerMessageRenderer(JOB_RESULT_TYPE, renderJobResult);
-	// a session nothing can wake ends its run only once its background jobs have reported
+	// a session nothing can wake ends its run only once its background jobs and agents have reported
 	pi.on("agent_before_settle", async (_event, ctx) => {
-		const sent = await jobs.hold(ctx.signal, (text) => {
+		const waits = new Map<string, string>();
+		const show = (source: string) => (text: string | undefined) => {
+			if (text) waits.set(source, text);
+			else waits.delete(source);
 			try {
-				ctx.ui.setStatus(JOB_STATUS_KEY, text);
+				ctx.ui.setStatus(JOB_STATUS_KEY, waits.size > 0 ? [...waits.values()].join("; ") : undefined);
 			} catch {}
-		});
+		};
+		const released = new AbortController();
+		const signal = ctx.signal ? AbortSignal.any([ctx.signal, released.signal]) : released.signal;
+		const sent = await firstNews([jobs.hold(signal, show("jobs")), runs.hold(signal, show("agents"))]);
+		released.abort();
 		return sent ? { continue: true } : undefined;
 	});
 	pi.registerTool(createReadWebPageTool({
@@ -229,6 +264,9 @@ export default function (pi: ExtensionAPI) {
 		stopControl?.();
 		stopControl = undefined;
 		await Promise.all([runs.shutdown(event.reason === "reload"), jobs.shutdown(event.reason === "reload")]);
+		// a closed registry broadcasts nothing more; a reload re-announces what it took over
+		announced = "[]";
+		pi.events.emit(BROSKI_TASKS_CHANNEL, []);
 	});
 
 	// github tools — used by librarian sub-agent, also available to main agent

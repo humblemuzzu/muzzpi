@@ -50,13 +50,8 @@ export class RunStore {
 		return this.runs.get(id);
 	}
 
-	/** background runs: the ones a blocking tool row does not already show. */
-	background(): RunSnapshot[] {
-		return this.all().filter((run) => run.background);
-	}
-
 	live(): RunSnapshot[] {
-		return this.background().filter(isLive);
+		return this.all().filter(isLive);
 	}
 
 	/** the id that follows `id` in list order, wrapping around. */

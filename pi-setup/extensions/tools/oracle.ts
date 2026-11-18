@@ -19,6 +19,7 @@ import { Type } from "@sinclair/typebox";
 import { resolveAliases } from "./lib/pi-spawn";
 import { emptyAgentModels, modelParams, type AgentModels } from "./lib/agent-models";
 import { AgentRuns } from "./lib/agent-runs";
+import { AGENT_BACKGROUND_NOTE } from "./lib/agent-channel";
 import { AGENT_SHELL, fileCount, renderAgentCall, renderAgentRunResult } from "./lib/agent-inline";
 import { requireParam } from "./lib/params";
 
@@ -61,6 +62,8 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 	return {
 		name: "oracle",
 		label: "Oracle",
+		// a codemode script must never start an agent: it is declared to the model only
+		exposure: "model-only",
 		description:
 			"Consult the oracle - an AI advisor powered by a reasoning model " +
 			"that can plan, review, and provide expert guidance.\n\n" +
@@ -85,7 +88,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 			"Usage guidelines:\n" +
 			"- Be specific about what you want reviewed, planned, or debugged\n" +
 			"- Provide relevant context. If you know which files are involved, list them.\n\n" +
-			runs.backgroundNote +
+			AGENT_BACKGROUND_NOTE +
 			'Example: oracle({ task: "is this retry loop correct under concurrent writes?", files: ["src/queue.ts"] })',
 
 		parameters: Type.Object({
@@ -108,7 +111,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 			...modelParams(models, "oracle"),
 		}),
 
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const resolved = requireParam(params as Record<string, unknown>, ORACLE_PARAM_NAMES, "oracle");
 			if ("error" in resolved) return resolved.error;
 
@@ -132,8 +135,6 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 				{
 					agent: "oracle",
 					label: resolved.value,
-					working: "(thinking...)",
-					returnImages: true,
 					models,
 					params: params as Record<string, unknown>,
 					spawn: {
@@ -143,10 +144,7 @@ export function createOracleTool(config: OracleConfig = {}): ToolDefinition {
 						systemPromptBody: config.systemPrompt,
 					},
 				},
-				toolCallId,
 				ctx,
-				signal,
-				onUpdate,
 			);
 		},
 

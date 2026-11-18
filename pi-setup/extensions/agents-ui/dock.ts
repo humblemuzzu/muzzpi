@@ -134,9 +134,9 @@ export class Dock implements Component, Focusable {
 		this.host.requestRender();
 	}
 
-	/** this period's background runs, in dock order, without what the user dismissed. */
+	/** this period's runs, in dock order, without what the user dismissed. */
 	private shown(): RunSnapshot[] {
-		const mine = this.store.background().filter((run) => !this.dismissed.has(dismissalKey(run)) && (isLive(run) || (run.endedAt ?? 0) >= this.periodStart));
+		const mine = this.store.all().filter((run) => !this.dismissed.has(dismissalKey(run)) && (isLive(run) || (run.endedAt ?? 0) >= this.periodStart));
 		const live = dockOrder(mine.filter(isLive));
 		const finished = dockOrder(mine.filter((run) => !isLive(run))).slice(0, FINISHED_ROWS);
 		return [...live, ...finished];

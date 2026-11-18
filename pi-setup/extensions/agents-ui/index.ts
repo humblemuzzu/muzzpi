@@ -106,7 +106,7 @@ export default function agentsUi(pi: ExtensionAPI): void {
 
 	const syncTicker = () => {
 		const running = (run: RunSnapshot) => run.status === "running";
-		const shown = dockView !== "off" && store.background().some(running);
+		const shown = dockView !== "off" && store.all().some(running);
 		const animated = shown || (viewOpen && store.all().some(running));
 		const ms = viewOpen || dock?.focused ? TICK_MS : REST_TICK_MS;
 		if (animated && ticker?.ms === ms) return;

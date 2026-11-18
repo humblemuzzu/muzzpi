@@ -38,11 +38,11 @@ describe("when the dock is there", () => {
 		expect(lines()).toEqual([]);
 	});
 
-	test("it appears when the first background run starts, and not for a blocking one", () => {
+	test("it appears when the first run starts", () => {
 		const { store, dock } = setup();
-		store.ingest([run({ background: false })]);
+		store.ingest([]);
 		expect(dock.mode()).toBe("hidden");
-		store.ingest([run({ background: false }), run()]);
+		store.ingest([run()]);
 		expect(dock.mode()).toBe("line");
 		dock.view = "full";
 		expect(dock.mode()).toBe("full");

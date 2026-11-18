@@ -25,6 +25,9 @@ export const SUB_AGENT_TOOLS_ENV = "PI_SUBAGENT_TOOLS";
  */
 const FAST_WORKER_MODEL = /deepseek|glm|kimi|qwen|minimax|flash/i;
 
+/** tools whose work can go on after their call returns: a bash job, or an agent. */
+const BACKGROUND_TOOLS: ReadonlySet<string> = new Set(["bash", "finder", "oracle", "delegate", "chad", "librarian", "review_code"]);
+
 export function isFastWorkerModel(model: { provider?: string; id?: string } | undefined): boolean {
 	if (!model || model.provider === "anthropic") return false;
 	return FAST_WORKER_MODEL.test(`${model.provider ?? ""}/${model.id ?? ""}`);
@@ -63,6 +66,14 @@ export function buildSubAgentPrompt(identity: string, toolCsv: string, readOnlyB
 			: [];
 	// grammar matters here: read_web_page children get exactly
 	// one tool, and "These 1 are the only tools" reads like a bug.
+	const startsBackgroundWork = tools.some((tool) => BACKGROUND_TOOLS.has(tool));
+	const backgroundRules = startsBackgroundWork
+		? [
+			"- **Background work keeps this session open.** A bash job or agent you started reports back to you",
+			"  before anything goes to the main agent, so you may end your turn while one runs. Write your final",
+			"  answer once everything you need has reported.",
+		]
+		: [];
 	const countLine =
 		tools.length === 1
 			? "That is the only tool registered in this session. Nothing else exists"
@@ -90,6 +101,7 @@ export function buildSubAgentPrompt(identity: string, toolCsv: string, readOnlyB
 		"- **Verify.** After an edit: imports resolve, signatures match callers, tests pass.",
 		"- **Match the surrounding style** — naming, indentation, error handling.",
 		...bashRules,
+		...backgroundRules,
 		"- **Fix the root cause of the task you were given** and finish it. Name anything",
 		"  blocked or unverified instead of implying it is done.",
 		"- Your final message is the entire answer returned to the main agent — make it",
