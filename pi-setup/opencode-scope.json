@@ -25,10 +25,5 @@
   "opencode-go/qwen3.8-flash",
   "opencode-go/qwen3.8-max",
   "opencode-go/qwen4-max",
-  "opencode-go/step-5-preview",
-  "opencode/kimi-k3",
-  "opencode/muse-ember-1.0",
-  "opencode/muse-spark-1.3",
-  "opencode/muse-wonder-1.0",
-  "opencode/qwen3.6-plus"
+  "opencode-go/step-5-preview"
 ]
