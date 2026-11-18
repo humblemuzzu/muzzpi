@@ -257,6 +257,7 @@ holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent). Chinese public holidays are off-peak: `peak.ts` `CHINA_HOLIDAYS` needs each November's State Council notice |
 | `agents-ui/` | the background agents on screen: a dock under the editor (one grey line; `/agents dock line\|full\|off`), `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
 | `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
+| `agy/` | provider `agy`: Gemini 4 Carbon/Argon/Hydrogen on Gemini Code Assist's `v1internal` API through agy's own OAuth client. `/login agy` imports the keychain item agy writes (`security find-generic-password -s gemini -a antigravity`), else runs the browser flow. **agy's OAuth client id and secret are never in this repo** (it is public): `client.ts` reads them from the installed agy binary and caches the pair that refreshes in `~/.pi/agent/agy-client.json` (0600). Wire rules that break silently: `sessionId` is the JSON **string** `-3750763034362895579`; tool results are `model` turns; a `thoughtSignature` must be echoed verbatim; thinking blocks are never sent back; tool schemas are rewritten (upper-case types, unknown keys dropped, `const` and literal unions folded into `enum`). **pi's `<docs>` index line alone turns a turn into `429 RESOURCE_EXHAUSTED`**, so that section is replaced with one sentence (`agySafeInstruction`) — never send the raw section, and do not read the 429 as quota: `/agy-quota` stays at 100%. `/agy-quota` reads both plan pools; `PI_AGY_PAYLOAD_LOG=<file>` dumps each request. Parent only |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
 | `ideas/` | `/idea <text>` parks an idea per project, `pi:` in front (or any idea in the repo holding `pi-setup/extensions/ideas`) files it under the harness; `/idea` lists. `<agent dir>/ideas/*.jsonl` is append-only user data, never rewritten; the `.md` views are regenerated. `cli.js` is herdr's ⌘I popup. Parent only |
@@ -282,6 +283,11 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
 
 ### Extension rules learned the hard way
 
+- **A deployed extension may import `@earendil-works/pi-ai` (root), `/compat`, `/models`, `/oauth`,
+  `/providers/all` and nothing deeper.** pi's loader aliases exactly those (plus `@mariozechner/*`,
+  agent-core, pi-tui, typebox); any other subpath (`/utils/*`, `/api/*`) resolves to nothing at runtime
+  although `tsconfig` paths hide it. `sanitizeSurrogates`, `buildBaseOptions`, the error formatter and
+  the provider-retry loop are inlined in `agy/` for that reason.
 - **Every transcript component caches its lines per width.** In fullscreen mode pi-tui renders the
   whole transcript every frame (a fresh cache per frame, `layout.js`), and `Box` reuses its output
   only when child lines come back unchanged. One row rebuilding its lines made each keystroke cost
@@ -413,7 +419,7 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
 - **Don't use `--no-tools`** for sub-agents: it empties the registry; nothing can be re-activated.
 - **A child reply that repeats itself** (`lib/repetition.ts`, droid's thresholds; symbol-only units
   ignored) is aborted and re-prompted, twice at most; the third time the child is stopped.
-- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub, prompt-cache) via
+- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub, prompt-cache, agy) via
   `--no-extensions -e`, plus `-e builtin:codemode` when their tools include `codemode` (a script
   reaches only the child's tools; `--no-extensions` drops pi's built-ins too). An extension a child
   needs goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1` restores the full set; `verify-patches.sh`

@@ -21,7 +21,8 @@
     "~/.pi/agent/extensions/prompt-cache.js",
     "~/.pi/agent/extensions/goal",
     "~/.pi/agent/extensions/agents-ui",
-    "~/.pi/agent/extensions/ideas"
+    "~/.pi/agent/extensions/ideas",
+    "~/.pi/agent/extensions/agy"
   ],
   "compaction": {
     "enabled": true,
@@ -49,7 +50,15 @@
     "deepseek/deepseek-v4-pro",
     "river/deepseek-ai/DeepSeek-V4.1-Flash",
     
-    "openrouter/z-ai/glm-5.3-flash"
+    "openrouter/z-ai/glm-5.3-flash",
+    "agy/gemini-4-carbon-medium",
+    "agy/gemini-4-carbon-high",
+    "agy/gemini-4-argon-medium",
+    "agy/gemini-4-argon-high",
+    "agy/gemini-4-hydrogen-low",
+    "agy/gemini-4-hydrogen-medium",
+    "agy/gemini-4-hydrogen-high",
+    "agy/gemini-4-hydrogen-xhigh"
   ],
   "steeringMode": "all",
   "followUpMode": "all",
