@@ -430,7 +430,7 @@ ok "git helpers installed ($PI_AGENT/git)"
 
 # ── Config files ──
 info "Installing settings, models, sub-agent models, keybindings, permissions..."
-for cfg in settings.json models.json agent-models.json keybindings.json permissions.json; do
+for cfg in settings.json models.json agent-models.json keybindings.json permissions.json opencode-scope.json; do
     if [ -f "$SCRIPT_DIR/$cfg" ]; then install_file "$SCRIPT_DIR/$cfg" "$PI_AGENT/$cfg"; fi
 done
 ok "Config files installed"

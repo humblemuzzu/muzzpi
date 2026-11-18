@@ -63,6 +63,19 @@ else
          "cp pi-setup/pi-core-patches/session-selector.js $PI_DIST/modes/interactive/components/session-selector.js && cp pi-setup/pi-core-patches/keybindings.js $PI_DIST/core/keybindings.js"
 fi
 
+# ── pi core: the model picker's third "opencode" scope ──
+if grep -q "LOCAL PATCH (muzzpi): a third \"opencode\" scope" "$PI_DIST/modes/interactive/components/model-selector.js" 2>/dev/null; then
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d,list) and d and all(isinstance(x,str) and "/" in x for x in d) else 1)' "$PI_AGENT/opencode-scope.json" 2>/dev/null; then
+        pass "pi core: model picker has an opencode scope, allowlist valid ($(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$PI_AGENT/opencode-scope.json")) ids)"
+    else
+        fail "pi core: opencode scope allowlist missing or invalid" \
+             "cp pi-setup/opencode-scope.json $PI_AGENT/opencode-scope.json"
+    fi
+else
+    fail "pi core: model picker opencode scope" \
+         "cp pi-setup/pi-core-patches/model-selector.js $PI_DIST/modes/interactive/components/model-selector.js && node pi-setup/pi-bundle/build-pi-bundle.mjs --pkg $PI_PKG"
+fi
+
 # ── pi core: fast /resume (stock decodes every tool result of every session, and re-scans every session per keystroke) ──
 if grep -q "LOCAL PATCH: fast /resume" "$PI_DIST/core/session-manager.js" 2>/dev/null && \
    grep -q "LOCAL PATCH: fast /resume search" "$PI_DIST/modes/interactive/components/session-selector-search.js" 2>/dev/null; then

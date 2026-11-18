@@ -6,6 +6,7 @@ PI_CORE_PATCHES=(
     core/resource-loader.js
     modes/interactive/components/session-selector.js
     modes/interactive/components/session-selector-search.js
+    modes/interactive/components/model-selector.js
     core/session-manager.js
     core/keybindings.js
     extensions/mcp/index.js=mcp-index.js
