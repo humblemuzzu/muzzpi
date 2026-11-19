@@ -85,11 +85,19 @@ export function convertTranscript(context: TranscriptContext): ConvertedTranscri
 			.map((item) => item.text)
 			.join("\n");
 		const images = message.content.filter((item) => item.type === "image");
-		const response: { output?: string; error?: string; parts?: InlineDataPart[] } = message.isError
+		const response = message.isError
 			? { error: text || "(no output)" }
 			: { output: text || (images.length > 0 ? "(see attached image)" : "") };
-		if (images.length > 0) response.parts = images.map((image) => imagePart(image.mimeType, image.data));
-		const part: Part = { functionResponse: { id: message.toolCallId, name: message.toolName, response } };
+		// Images go beside `response`, never in it: Gemini reads `response` as JSON text, so an image there
+		// is billed as its base64 and never seen.
+		const part: Part = {
+			functionResponse: {
+				id: message.toolCallId,
+				name: message.toolName,
+				response,
+				...(images.length > 0 ? { parts: images.map((image) => imagePart(image.mimeType, image.data)) } : {}),
+			},
+		};
 		const last = contents[contents.length - 1];
 		if (last?.role === "model" && last.parts.some((entry) => "functionResponse" in entry)) {
 			last.parts.push(part);

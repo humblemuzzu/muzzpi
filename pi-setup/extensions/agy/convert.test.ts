@@ -88,12 +88,49 @@ describe("contents match the shape agy sends", () => {
 						functionResponse: {
 							id: "call_2",
 							name: "read",
-							response: { error: "boom", parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }] },
+							response: { error: "boom" },
+							parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }],
 						},
 					},
 				],
 			},
 		]);
+	});
+
+	test("a tool's images go beside its response, so Gemini sees them as images and not as JSON text", () => {
+		const converted = convertTranscript(
+			transcript([
+				{ role: "system", content: SYSTEM, timestamp: 0 },
+				{ role: "user", content: "screenshot it", timestamp: 0 },
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call_1", name: "screenshot", arguments: {}, thoughtSignature: "CCCC" }],
+					timestamp: 0,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call_1",
+					toolName: "screenshot",
+					content: [
+						{ type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+						{ type: "image", mimeType: "image/jpeg", data: "/9j/4AAQ" },
+					],
+					isError: false,
+					timestamp: 0,
+				},
+			]),
+		);
+		const result = converted.contents[2]!.parts[0] as { functionResponse: Record<string, unknown> };
+		expect(result.functionResponse).toEqual({
+			id: "call_1",
+			name: "screenshot",
+			response: { output: "(see attached image)" },
+			parts: [
+				{ inlineData: { mimeType: "image/png", data: "iVBORw0KGgo=" } },
+				{ inlineData: { mimeType: "image/jpeg", data: "/9j/4AAQ" } },
+			],
+		});
+		expect(JSON.stringify(result.functionResponse.response)).not.toContain("iVBOR");
 	});
 
 	test("agy's replay shape: two calls in one turn, results as model turns", () => {

@@ -43,7 +43,8 @@ export interface FunctionResponsePart {
 	functionResponse: {
 		id: string;
 		name: string;
-		response: { output?: string; error?: string; parts?: InlineDataPart[] };
+		response: { output?: string; error?: string };
+		parts?: InlineDataPart[];
 	};
 }
 
