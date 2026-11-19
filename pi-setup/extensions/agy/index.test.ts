@@ -45,7 +45,16 @@ describe("extension registration", () => {
 		expect(typeof provider.streamSimple).toBe("function");
 		expect(provider.auth.oauth?.name).toBe("Antigravity");
 		expect(harness.commands).toEqual(["agy-quota"]);
-		expect(harness.events).toEqual(["session_start"]);
+		expect(harness.events).toEqual([
+			"session_start",
+			"session_shutdown",
+			"session_compact",
+			"session_tree",
+			"model_select",
+			"context",
+			"before_provider_request",
+			"message_end",
+		]);
 	});
 
 	test("the registered models carry the provider id and the custom api", () => {

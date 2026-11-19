@@ -1,6 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { FAMILIES, MODELS, resolveModel } from "./catalog";
-import { buildEnvelope, completeCall, newWireState, recordRequest, SESSION_ID, STREAM_URL, USER_AGENT } from "./wire";
+import {
+	agySessionId,
+	buildEnvelope,
+	completeCall,
+	keepAliveEnvelope,
+	newWireState,
+	recordRequest,
+	STREAM_URL,
+	USER_AGENT,
+} from "./wire";
+
+const AGY_SESSION_ID = "-3750763034362895579";
+const SESSION = agySessionId("01a1f2a2-d95d-7718-826d-2f920777cbaf");
 
 const AGY_USER_AGENT =
 	"antigravity/cli/1.5.12 (aidev_client; os_type=darwin; arch=arm64; cl=1024904911; auth_method=consumer)";
@@ -18,15 +30,24 @@ function envelopeOf(modelId: string) {
 		systemInstruction: { role: "user", parts: [{ text: "sys" }] },
 		tools: [{ functionDeclarations: [{ name: "read", description: "read", parameters: { type: "OBJECT" } }] }],
 		maxOutputTokens: resolved.family.maxOutputTokens,
+		sessionId: SESSION,
 		now: 1794993179992,
 	});
 }
 
 describe("wire matches agy byte for byte", () => {
-	test("endpoint, user agent, session id", () => {
+	test("endpoint and user agent", () => {
 		expect(STREAM_URL).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
 		expect(USER_AGENT).toBe(AGY_USER_AGENT);
-		expect(SESSION_ID).toBe("-3750763034362895579");
+	});
+
+	test("the session id hashes like agy's: an empty key gives agy's constant, each pi session its own", () => {
+		expect(agySessionId("")).toBe(AGY_SESSION_ID);
+		expect(agySessionId("a")).toBe(BigInt.asIntN(64, 0xaf63dc4c8601ec8cn).toString());
+		expect(SESSION).toMatch(/^-?\d+$/);
+		expect(SESSION).not.toBe(AGY_SESSION_ID);
+		expect(agySessionId("01a1f2a2-d95d-7718-826d-2f920777cbaf")).toBe(SESSION);
+		expect(agySessionId("01a1f25a-0cac-72f8-9d0f-e97b92edf135")).not.toBe(SESSION);
 	});
 
 	test("envelope key order is the order agy sends", () => {
@@ -65,8 +86,7 @@ describe("wire matches agy byte for byte", () => {
 			maxOutputTokens: 262144,
 			thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
 		});
-		expect(envelope.request.sessionId).toBe(SESSION_ID);
-		expect(JSON.parse(JSON.stringify(envelope)).request.sessionId).toBe("-3750763034362895579");
+		expect(JSON.parse(JSON.stringify(envelope)).request.sessionId).toBe(SESSION);
 		expect(envelope.model).toBe("gemini-4-hydrogen-low");
 		expect(envelope.userAgent).toBe("antigravity");
 		expect(envelope.requestType).toBe("agent");
@@ -96,6 +116,7 @@ describe("wire matches agy byte for byte", () => {
 			],
 			tools: [],
 			maxOutputTokens: 10,
+			sessionId: SESSION,
 		});
 		expect("last_execution_id" in midTurn.request.labels).toBe(false);
 
@@ -111,6 +132,7 @@ describe("wire matches agy byte for byte", () => {
 			],
 			tools: [],
 			maxOutputTokens: 10,
+			sessionId: SESSION,
 		});
 		expect(newTurn.request.labels.last_execution_id).toBe("11111111-2222-3333-4444-555555555555");
 		expect(Object.keys(newTurn.request.labels).slice(0, 2)).toEqual(["cascade_id", "last_execution_id"]);
@@ -129,6 +151,7 @@ describe("wire matches agy byte for byte", () => {
 			contents: [{ role: "user", parts: [{ text: "hi" }] }],
 			tools: [],
 			maxOutputTokens: 10,
+			sessionId: SESSION,
 		});
 		expect(first.request.labels.request_id.endsWith("-0")).toBe(true);
 		recordRequest(state);
@@ -143,6 +166,7 @@ describe("wire matches agy byte for byte", () => {
 			contents: [{ role: "user", parts: [{ text: "hi" }] }],
 			tools: [],
 			maxOutputTokens: 10,
+			sessionId: SESSION,
 		});
 		expect(second.request.labels.request_id.endsWith("-1")).toBe(true);
 		expect("last_execution_id" in second.request.labels).toBe(false);
@@ -176,6 +200,22 @@ describe("wire matches agy byte for byte", () => {
 			expect(envelope.request.labels.used_claude).toBe("false");
 			expect(envelope.request.labels.used_non_gemini_model).toBe("false");
 		}
+	});
+
+	test("a keep-alive read is the request again, stamped now, labelled, one output token", () => {
+		const envelope = envelopeOf("gemini-4-neon-high");
+		const before = JSON.stringify(envelope);
+		const ping = keepAliveEnvelope(envelope, 1795000000000);
+		expect(JSON.stringify(envelope)).toBe(before);
+		expect(ping.request.contents).toBe(envelope.request.contents);
+		expect(ping.request.systemInstruction).toBe(envelope.request.systemInstruction);
+		expect(ping.request.tools).toBe(envelope.request.tools);
+		expect(ping.request.sessionId).toBe(envelope.request.sessionId);
+		expect(ping.request.generationConfig).toEqual({ ...envelope.request.generationConfig, maxOutputTokens: 1 });
+		expect(ping.request.labels).toEqual({ ...envelope.request.labels, prompt_cache_keep_alive: "true" });
+		const [kind, cascade, , trajectory, step] = envelope.requestId.split("/");
+		expect(ping.requestId).toBe(`${kind}/${cascade}/1795000000000/${trajectory}/${step}`);
+		expect(Object.keys(ping)).toEqual(Object.keys(envelope));
 	});
 
 	test("no model advertises a level it cannot send", () => {

@@ -19,7 +19,7 @@ import { convertTranscript, toToolDeclarations } from "./convert";
 import { projectFor } from "./quota";
 import { errorText, retryRequest } from "./retry";
 import { readSse } from "./sse";
-import { buildEnvelope, completeCall, conversation, recordRequest, type Envelope, STREAM_URL, USER_AGENT } from "./wire";
+import { agySessionId, buildEnvelope, completeCall, conversation, recordRequest, type Envelope, STREAM_URL, USER_AGENT } from "./wire";
 
 interface WirePart {
 	text?: string;
@@ -255,6 +255,31 @@ async function consume(
 }
 
 
+/** One keep-alive read: the stream is read to its end for the usage it reports last. Undefined when it failed. */
+export async function sendKeepAlive(
+	apiKey: string,
+	payload: Envelope,
+	signal: AbortSignal,
+	doFetch: typeof fetch = fetch,
+): Promise<Usage | undefined> {
+	try {
+		const response = await send(apiKey, payload, signal, doFetch);
+		if (!response.body) return undefined;
+		let reported: WireUsage | undefined;
+		for await (const raw of readSse(response.body)) {
+			const frame = raw as WireFrame;
+			if (frame.error !== undefined) return undefined;
+			reported = frame.response?.usageMetadata ?? reported;
+		}
+		if (!reported) return undefined;
+		const usage = emptyUsage();
+		applyUsage(usage, reported);
+		return usage;
+	} catch {
+		return undefined;
+	}
+}
+
 async function logPayload(payload: Envelope): Promise<void> {
 	try {
 		const { appendFile } = await import("node:fs/promises");
@@ -298,6 +323,7 @@ async function run(
 			systemInstruction: transcript.systemInstruction,
 			tools: toToolDeclarations(getCurrentTools(context.messages)),
 			maxOutputTokens: Math.min(options.maxTokens ?? resolved.family.maxOutputTokens, resolved.family.maxOutputTokens),
+			sessionId: agySessionId(options.sessionId ?? ""),
 		});
 
 		recordRequest(conversation);
@@ -347,6 +373,7 @@ export const streamSimple: StreamFunction<Api, SimpleStreamOptions> = (model, co
 		maxTokens: options?.maxTokens ?? model.maxTokens,
 		signal: options?.signal,
 		apiKey,
+		sessionId: options?.sessionId,
 		fetch: options?.fetch,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,

@@ -8,8 +8,22 @@ export const FALLBACK_PROJECT = "aicode-consumers";
 
 export const USER_AGENT = "antigravity/cli/1.5.12 (aidev_client; os_type=darwin; arch=arm64; cl=1024904911; auth_method=consumer)";
 
-/** agy sends this constant, as a JSON string, on every request; it is the int64 of FNV-1a's 64-bit offset basis. */
-export const SESSION_ID = "-3750763034362895579";
+const FNV_OFFSET = 0xcbf29ce484222325n;
+const FNV_PRIME = 0x100000001b3n;
+
+/**
+ * Proxies to this endpoint measured implicit-cache affinity keyed on `sessionId` (a random one per request
+ * never hit; one shared by parallel conversations evicted them), so each conversation gets its own. agy
+ * sends the signed FNV-1a-64 of an empty key ("-3750763034362895579"); this hashes pi's session id the
+ * same way, and an empty key gives agy's value.
+ */
+export function agySessionId(key: string): string {
+	let hash = FNV_OFFSET;
+	for (const byte of new TextEncoder().encode(key)) {
+		hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * FNV_PRIME);
+	}
+	return BigInt.asIntN(64, hash).toString();
+}
 
 export interface TextPart {
 	text: string;
@@ -110,6 +124,7 @@ export interface EnvelopeInput {
 	systemInstruction?: { role: "user"; parts: { text: string }[] };
 	tools: ToolGroup[];
 	maxOutputTokens: number;
+	sessionId: string;
 	now?: number;
 }
 
@@ -140,7 +155,7 @@ export function buildEnvelope(input: EnvelopeInput): Envelope {
 			maxOutputTokens: input.maxOutputTokens,
 			thinkingConfig: { includeThoughts: true, thinkingLevel: input.tier.thinkingLevel },
 		},
-		sessionId: SESSION_ID,
+		sessionId: input.sessionId,
 	};
 	return {
 		project: input.project,
@@ -149,5 +164,23 @@ export function buildEnvelope(input: EnvelopeInput): Envelope {
 		model: `${input.family.id}-${input.tier.name}`,
 		userAgent: "antigravity",
 		requestType: "agent",
+	};
+}
+
+/**
+ * agy's own keep-alive read (`modelapiccpa.keepAlives`, server-gated off): the last request again,
+ * stamped now, labelled `prompt_cache_keep_alive`, one output token. Contents stay byte for byte,
+ * so the read covers the whole cached prefix.
+ */
+export function keepAliveEnvelope(envelope: Envelope, now: number): Envelope {
+	const [kind, cascade, , trajectory, step] = envelope.requestId.split("/");
+	return {
+		...envelope,
+		requestId: `${kind}/${cascade}/${now}/${trajectory}/${step}`,
+		request: {
+			...envelope.request,
+			labels: { ...envelope.request.labels, prompt_cache_keep_alive: "true" },
+			generationConfig: { ...envelope.request.generationConfig, maxOutputTokens: 1 },
+		},
 	};
 }
