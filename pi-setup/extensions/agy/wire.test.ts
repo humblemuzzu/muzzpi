@@ -3,7 +3,7 @@ import { FAMILIES, MODELS, resolveModel } from "./catalog";
 import { buildEnvelope, completeCall, newWireState, recordRequest, SESSION_ID, STREAM_URL, USER_AGENT } from "./wire";
 
 const AGY_USER_AGENT =
-	"antigravity/cli/1.5.11 (aidev_client; os_type=darwin; arch=arm64; cl=1024248524; auth_method=consumer)";
+	"antigravity/cli/1.5.12 (aidev_client; os_type=darwin; arch=arm64; cl=1024904911; auth_method=consumer)";
 
 function envelopeOf(modelId: string) {
 	const resolved = resolveModel(modelId);
@@ -162,6 +162,10 @@ describe("wire matches agy byte for byte", () => {
 			"gemini-4-hydrogen-medium": ["MODEL_PLACEHOLDER_M526", 262144, "MEDIUM"],
 			"gemini-4-hydrogen-high": ["MODEL_PLACEHOLDER_M525", 262144, "HIGH"],
 			"gemini-4-hydrogen-xhigh": ["MODEL_PLACEHOLDER_M528", 262144, 100],
+			"gemini-4-neon-low": ["MODEL_PLACEHOLDER_M534", 262144, "LOW"],
+			"gemini-4-neon-medium": ["MODEL_PLACEHOLDER_M533", 262144, "MEDIUM"],
+			"gemini-4-neon-high": ["MODEL_PLACEHOLDER_M532", 262144, "HIGH"],
+			"gemini-4-neon-xhigh": ["MODEL_PLACEHOLDER_M535", 262144, 100],
 		};
 		expect(MODELS.map((model) => model.id).sort()).toEqual(Object.keys(expected).sort());
 		for (const [id, [modelEnum, maxOutputTokens, thinkingLevel]] of Object.entries(expected)) {

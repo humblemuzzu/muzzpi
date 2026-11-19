@@ -58,7 +58,11 @@
     "agy/gemini-4-hydrogen-low",
     "agy/gemini-4-hydrogen-medium",
     "agy/gemini-4-hydrogen-high",
-    "agy/gemini-4-hydrogen-xhigh"
+    "agy/gemini-4-hydrogen-xhigh",
+    "agy/gemini-4-neon-low",
+    "agy/gemini-4-neon-medium",
+    "agy/gemini-4-neon-high",
+    "agy/gemini-4-neon-xhigh"
   ],
   "steeringMode": "all",
   "followUpMode": "all",

@@ -6,7 +6,7 @@ export const LOAD_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v
 export const QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 export const FALLBACK_PROJECT = "aicode-consumers";
 
-export const USER_AGENT = "antigravity/cli/1.5.11 (aidev_client; os_type=darwin; arch=arm64; cl=1024248524; auth_method=consumer)";
+export const USER_AGENT = "antigravity/cli/1.5.12 (aidev_client; os_type=darwin; arch=arm64; cl=1024904911; auth_method=consumer)";
 
 /** agy sends this constant, as a JSON string, on every request; it is the int64 of FNV-1a's 64-bit offset basis. */
 export const SESSION_ID = "-3750763034362895579";

@@ -40,7 +40,7 @@ describe("extension registration", () => {
 		expect(provider.name).toBe("Antigravity");
 		expect(provider.baseUrl).toBe(BASE_URL);
 		expect(provider.getModels().map((model) => model.id)).toEqual(MODELS.map((model) => model.id));
-		expect(provider.getModels()).toHaveLength(8);
+		expect(provider.getModels()).toHaveLength(12);
 		expect(typeof provider.stream).toBe("function");
 		expect(typeof provider.streamSimple).toBe("function");
 		expect(provider.auth.oauth?.name).toBe("Antigravity");

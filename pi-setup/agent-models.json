@@ -16,6 +16,10 @@
     "hydrogen-medium": { "id": "agy/gemini-4-hydrogen-medium", "about": "Antigravity plan: Gemini 4 Hydrogen (Medium); one fixed tier, pick another tier to think harder" },
     "hydrogen-high": { "id": "agy/gemini-4-hydrogen-high", "about": "Antigravity plan: Gemini 4 Hydrogen (High); one fixed tier, pick another tier to think harder" },
     "hydrogen-xhigh": { "id": "agy/gemini-4-hydrogen-xhigh", "about": "Antigravity plan: Gemini 4 Hydrogen (XHigh); one fixed tier, pick another tier to think harder" },
+    "neon-low": { "id": "agy/gemini-4-neon-low", "about": "Antigravity plan: Gemini 4 Neon (Low); one fixed tier, pick another tier to think harder" },
+    "neon-medium": { "id": "agy/gemini-4-neon-medium", "about": "Antigravity plan: Gemini 4 Neon (Medium); one fixed tier, pick another tier to think harder" },
+    "neon-high": { "id": "agy/gemini-4-neon-high", "about": "Antigravity plan: Gemini 4 Neon (High); one fixed tier, pick another tier to think harder" },
+    "neon-xhigh": { "id": "agy/gemini-4-neon-xhigh", "about": "Antigravity plan: Gemini 4 Neon (XHigh); one fixed tier, pick another tier to think harder" },
     "main": { "id": "$main" }
   },
   "agents": {

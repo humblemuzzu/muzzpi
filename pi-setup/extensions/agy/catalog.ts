@@ -55,6 +55,18 @@ export const FAMILIES: readonly Family[] = [
 			{ name: "xhigh", title: "XHigh", modelEnum: "MODEL_PLACEHOLDER_M528", thinkingLevel: 100 },
 		],
 	},
+	{
+		id: "gemini-4-neon",
+		name: "Gemini 4 Neon",
+		contextWindow: 1_048_576,
+		maxOutputTokens: 262_144,
+		tiers: [
+			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M534", thinkingLevel: "LOW" },
+			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M533", thinkingLevel: "MEDIUM" },
+			{ name: "high", title: "High", modelEnum: "MODEL_PLACEHOLDER_M532", thinkingLevel: "HIGH" },
+			{ name: "xhigh", title: "XHigh", modelEnum: "MODEL_PLACEHOLDER_M535", thinkingLevel: 100 },
+		],
+	},
 ];
 
 export interface ResolvedModel {
