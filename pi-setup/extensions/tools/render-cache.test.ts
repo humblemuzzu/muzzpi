@@ -11,7 +11,7 @@ import { renderAgentTree, type SingleResult } from "./lib/sub-agent-render";
 // frame, so a row that rebuilds its lines makes each keystroke cost O(session).
 const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
-function rendersFromCache(component: { render(width: number): string[]; invalidate(): void }, width = 120): void {
+function rendersFromCache(component: { render(width: number): readonly string[]; invalidate(): void }, width = 120): void {
 	const first = component.render(width);
 	expect(component.render(width)).toBe(first);
 	expect(component.render(width - 10)).not.toBe(first);

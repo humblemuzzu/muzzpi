@@ -105,7 +105,7 @@ export function show(text: string, excerpts: Excerpt[], width: number, paddingX 
 		return { visualLines: [], skippedRanges: [] };
 	}
 
-	const allVisualLines = new Text(text, paddingX, 0).render(width);
+	const allVisualLines = [...new Text(text, paddingX, 0).render(width)];
 
 	if (excerpts.length === 0) {
 		return { visualLines: allVisualLines, skippedRanges: [] };

@@ -268,7 +268,9 @@ export class DefaultResourceLoader {
             agentDir: this.agentDir,
             settingsManager: this.settingsManager,
             builtinExtensions: [...this.builtinExtensions.keys()],
+            commandOutput: options.packageCommandOutput,
         });
+        this.packageManager.setProgressCallback(options.onPackageProgress);
         this.additionalExtensionPaths = options.additionalExtensionPaths ?? [];
         this.additionalSkillPaths = options.additionalSkillPaths ?? [];
         this.additionalPromptTemplatePaths = options.additionalPromptTemplatePaths ?? [];

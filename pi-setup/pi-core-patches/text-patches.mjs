@@ -61,7 +61,7 @@ export const PATCHES = [
 		test: "cd pi-setup/extensions/tools && bun test markdown-stream.test.ts",
 		package: "@earendil-works/pi-tui",
 		file: "dist/components/markdown.js",
-		stock: "409a6c0f8d7d94c1e724ae81f82226d8d0cf8af8c3445dd4457bc36cdd2c7f36",
+		stock: "88a6fd1b0388719335b38e6bdf614e2e5a8f68ccddcc5d0307b20146e768db88",
 		requires: { marked: "18.0.11" },
 		edits: [
 			["const markdownParser = new Marked();\n", `${MARKDOWN_LEX}const markdownParser = new Marked();\n`],
@@ -94,7 +94,7 @@ export const PATCHES = [
 		test: "cd pi-setup/extensions/tools && bun test markdown-stream.test.ts",
 		package: "@earendil-works/pi-coding-agent",
 		file: "dist/modes/interactive/components/assistant-message.js",
-		stock: "d4820673a831e7d0470b29e09d3dadedbeaaac4c149893ef58dcae8e5a11d661",
+		stock: "e0eb20c46afce9bfe0294b2a4f8412312f2575c01344107f7a43ee4eccd71dd5",
 		edits: [
 			[
 				`                    transform: createMarkdownTransform("assistant", () => this.isStreaming, this.markdownTransformers, this.messageId, this.timestamp),\n`,
@@ -112,7 +112,7 @@ export const PATCHES = [
 		test: "cd pi-setup/extensions/tools && bun test core-patches.test.ts",
 		package: "@earendil-works/pi-coding-agent",
 		file: "dist/modes/interactive/interactive-mode.js",
-		stock: "a316502682c68544e1950b80e3b19d584c7a43331cfb7029765b5c04d18e4465",
+		stock: "8c98aa79a90070c5df772b308fcfe3643656ebcd6fc909b52c25a6aa98153129",
 		edits: [
 			[
 				"component.updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs });",

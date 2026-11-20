@@ -203,8 +203,10 @@ function addClusterAdvance(src) {
     if (!src.includes("function graphemeWidth(segment)")) return "no-graphemeWidth";
     if (!src.includes("eastAsianWidth")) return "no-eastAsianWidth";
 
-    // isolate the graphemeWidth function body (ends at first column-0 "}")
-    const fnStart = src.indexOf("function graphemeWidth(segment)");
+    // pi-tui 1.6 split graphemeWidth(): it caches single code units and calls clusterWidth() for the measuring
+    const signature = src.includes("function clusterWidth(segment)") ? "function clusterWidth(segment)" : "function graphemeWidth(segment)";
+    // isolate the function body (ends at first column-0 "}")
+    const fnStart = src.indexOf(signature);
     const fnEnd = src.indexOf("\n}", fnStart);
     if (fnEnd === -1) return "no-fn-end";
     let fn = src.slice(fnStart, fnEnd + 2);

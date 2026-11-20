@@ -609,6 +609,8 @@ async function readSessionInfo(filePath, signal, stats) {
                 firstMessage = textContent;
             }
         }
+        // An abort after the last read, while the final lines were parsed.
+        signal?.throwIfAborted();
         if (!header)
             return null;
         const cwd = typeof header.cwd === "string" ? header.cwd : "";

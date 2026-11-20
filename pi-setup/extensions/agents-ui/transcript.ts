@@ -118,6 +118,6 @@ export class TranscriptRenderer {
 	}
 
 	private prose(text: string, width: number): string[] {
-		return new Markdown(normalizeForDisplay(text), 0, 0, getMarkdownTheme()).render(width);
+		return [...new Markdown(normalizeForDisplay(text), 0, 0, getMarkdownTheme()).render(width)];
 	}
 }

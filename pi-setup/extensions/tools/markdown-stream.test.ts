@@ -53,7 +53,7 @@ function document(): string {
 	return rand() < 0.1 ? doc.replaceAll("\n", "\r\n") : doc;
 }
 
-const same = (a: string[], b: string[]) => a.length === b.length && a.every((line, i) => line === b[i]);
+const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((line, i) => line === b[i]);
 
 /** Streams `doc` in `chunks` into a streaming Markdown and into a stock one; counts frames that differ and pieced lexes. */
 function stream(doc: string, width: number, chunks: () => number) {
