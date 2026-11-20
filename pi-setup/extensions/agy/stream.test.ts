@@ -102,6 +102,18 @@ describe("how a reply finishes", () => {
 		expect(isRetryableAssistantError(message)).toBe(true);
 	});
 
+	test("the reply keeps Gemini's own finish reason beside pi's", async () => {
+		const cases: Array<[string, AssistantMessage["stopReason"]]> = [
+			["STOP", "stop"],
+			["CONTINUATION", "length"],
+			["MALFORMED_FUNCTION_CALL", "error"],
+		];
+		for (const [reason, stopReason] of cases) {
+			const { message } = await reply(text("ok"), finish(reason));
+			expect([message.rawStopReason, message.stopReason]).toEqual([reason, stopReason]);
+		}
+	});
+
 	test("a refusal is an error pi does not retry", async () => {
 		const { message } = await reply(finish("SAFETY"));
 		expect(message.errorMessage).toBe("Antigravity stopped with SAFETY");

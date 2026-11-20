@@ -261,6 +261,7 @@ async function consume(
 				}
 			}
 			if (candidate.finishReason) {
+				output.rawStopReason = candidate.finishReason;
 				const finish = finishOf(candidate.finishReason, candidate.finishMessage);
 				output.stopReason = finish.stopReason;
 				if (finish.stopReason === "error") output.errorMessage = finish.errorMessage;
