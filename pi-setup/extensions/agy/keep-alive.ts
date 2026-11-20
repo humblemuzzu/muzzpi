@@ -2,9 +2,8 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { type Envelope, keepAliveEnvelope } from "./wire";
 
 /**
- * Gemini 4 sets no fixed cache lifetime ("retention varies with backend load and capacity"): on Cloud
- * Code one Neon entry was gone 40 s after its reply, another alive after 90 s. A read every 30 s kept two
- * entries alive through 5 idle minutes while both unread controls missed (19 Nov 2026).
+ * Gemini 4 sets no fixed cache lifetime: an entry nobody read was gone after 45 s in one test and still
+ * there after 300 s in another, while one read every 30 s keeps an entry alive.
  */
 export const LIFETIME_MS = 45_000;
 export const PING_AFTER_MS = 30_000;
@@ -15,8 +14,8 @@ export const RETRY_AFTER_MS = 3_000;
 
 /** Gemini 4 re-reads the last 2,050 tokens of the previous request at the full rate when a request adds fewer. */
 const RE_READ_TOKENS = 2_050;
-/** A cached token costs a tenth of a fresh one (the 90% implicit-cache discount). */
-const CACHED_WEIGHT = 0.1;
+/** A cached token costs a twentieth of a fresh one: Gemini 4's price, which the plan's quota follows. */
+const CACHED_WEIGHT = 0.05;
 /** Gemini 4 caches no prefix shorter than this. */
 const MIN_CACHED_TOKENS = 4_096;
 /** Reads that found the cache already gone, in a row: past this, pings only cost, so they stop for the session. */

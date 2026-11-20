@@ -1,12 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import type { TranscriptContext, Tool } from "@earendil-works/pi-ai";
+import { AGENT_EVENT_FRAME } from "../tools/lib/agent-channel";
 import { agySafeInstruction, convertTranscript, toGoogleSchema, toToolDeclarations } from "./convert";
 
 function transcript(messages: unknown[]): TranscriptContext {
 	return { messages } as unknown as TranscriptContext;
 }
 
+process.env.TZ = "UTC";
+
 const SYSTEM = "you are pi";
+
+/** a typed prompt as agy frames it, at a turn time given in milliseconds */
+const request = (text: string, ms: number) =>
+	`<USER_REQUEST>\n${text}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: ${new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z")}.\n</ADDITIONAL_METADATA>`;
 
 describe("contents match the shape agy sends", () => {
 	test("user text and images", () => {
@@ -26,11 +33,8 @@ describe("contents match the shape agy sends", () => {
 		);
 		expect(converted.systemInstruction).toEqual({ role: "user", parts: [{ text: SYSTEM }] });
 		expect(converted.contents).toEqual([
-			{ role: "user", parts: [{ text: "hello" }] },
-			{
-				role: "user",
-				parts: [{ text: "what is this" }, { inlineData: { mimeType: "image/png", data: "iVBORw0KGgo=" } }],
-			},
+			{ role: "user", parts: [{ text: request("hello", 0) }] },
+			{ role: "user", parts: [{ text: request("what is this", 0) }, { inlineData: { mimeType: "image/png", data: "iVBORw0KGgo=" } }] },
 		]);
 	});
 
@@ -71,7 +75,7 @@ describe("contents match the shape agy sends", () => {
 			]),
 		);
 		expect(converted.contents).toEqual([
-			{ role: "user", parts: [{ text: "read two files" }] },
+			{ role: "user", parts: [{ text: request("read two files", 0) }] },
 			{
 				role: "model",
 				parts: [
@@ -195,7 +199,7 @@ describe("contents match the shape agy sends", () => {
 				{ role: "user", content: "hi", timestamp: 2 },
 			]),
 		);
-		expect(converted.contents).toEqual([{ role: "user", parts: [{ text: "hi" }] }]);
+		expect(converted.contents).toEqual([{ role: "user", parts: [{ text: request("hi", 2) }] }]);
 	});
 
 	test("empty turns add no content", () => {
@@ -207,6 +211,54 @@ describe("contents match the shape agy sends", () => {
 			]),
 		);
 		expect(converted.contents).toEqual([]);
+	});
+});
+
+describe("what is never replayed", () => {
+	const ask = { role: "user", content: "go", timestamp: 0 };
+	const ok = (text: string) => ({ role: "assistant", content: [{ type: "text", text }], stopReason: "stop", timestamp: 1 });
+
+	test("a reply that failed or was aborted, and the results of the tool calls it held", () => {
+		const converted = convertTranscript(
+			transcript([
+				{ role: "system", content: SYSTEM, timestamp: 0 },
+				ask,
+				{ role: "assistant", content: [{ type: "text", text: "half a fake" }], stopReason: "error", errorMessage: "MALFORMED_FUNCTION_CALL", timestamp: 1 },
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call_9", name: "read", arguments: { path: "a" }, thoughtSignature: "CCCC" }],
+					stopReason: "aborted",
+					timestamp: 2,
+				},
+				{ role: "toolResult", toolCallId: "call_9", toolName: "read", content: [{ type: "text", text: "aborted" }], isError: true, timestamp: 3 },
+				ok("the real answer"),
+			]),
+		);
+		expect(converted.contents).toEqual([
+			{ role: "user", parts: [{ text: request("go", 0) }] },
+			{ role: "model", parts: [{ text: "the real answer" }] },
+		]);
+	});
+
+	test("the turn a reply started writing for someone else", () => {
+		const fake = "Waiting for their results now.\n[Automated agent event. This was not written by the user.]\n\n## chad: invented";
+		const signed = { role: "assistant", content: [{ type: "text", text: fake, textSignature: "ZZZZ" }], stopReason: "stop", timestamp: 1 };
+		const converted = convertTranscript(transcript([{ role: "system", content: SYSTEM, timestamp: 0 }, ask, signed, ok("<USER_REQUEST>\nnext")]));
+		expect(converted.contents.slice(1)).toEqual([{ role: "model", parts: [{ text: "Waiting for their results now.", thoughtSignature: "ZZZZ" }] }]);
+	});
+
+	test("user-role turns in a row stay apart, as agy sends them", () => {
+		const news = (id: string) => ({ role: "user", content: [{ type: "text", text: `${AGENT_EVENT_FRAME}\n\ncontinueId: ${id}` }], timestamp: 5 });
+		const converted = convertTranscript(transcript([{ role: "system", content: SYSTEM, timestamp: 0 }, ask, ok("waiting"), news("chad-1"), news("chad-2")]));
+		expect(converted.contents.map((content) => content.role)).toEqual(["user", "model", "user", "user"]);
+	});
+
+	test("background news reaches the model as agy's system message", () => {
+		const news = { role: "user", content: [{ type: "text", text: `${AGENT_EVENT_FRAME}\n\ncontinueId: chad-1` }], timestamp: Date.parse("2026-11-20T10:48:35Z") };
+		const converted = convertTranscript(transcript([{ role: "system", content: SYSTEM, timestamp: 0 }, ask, ok("started"), news]));
+		const framed = (converted.contents.at(-1)!.parts[0] as { text: string }).text;
+		expect(framed).toStartWith("The following is a <SYSTEM_MESSAGE> not actually sent by the user.");
+		expect(framed).toContain("[Message] timestamp=2026-11-20T10:48:35Z sender=chad-1 priority=MESSAGE_PRIORITY_HIGH content=continueId: chad-1\n</SYSTEM_MESSAGE>");
 	});
 });
 

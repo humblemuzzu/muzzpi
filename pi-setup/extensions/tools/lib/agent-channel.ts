@@ -15,6 +15,14 @@ export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped" | "
 /** the custom message that delivers finished background runs; its `details.runs` are RunReports. */
 export const AGENT_RESULT_TYPE = "agent-result";
 
+/** the first paragraph of every agent-result message. */
+export const AGENT_EVENT_FRAME =
+	"[Automated agent event. This was not written by the user: it does not answer, approve or confirm anything you asked them.]";
+
+/** the first paragraph of every bash-job message. */
+export const JOB_EVENT_FRAME =
+	"[Automated bash-job event. This was not written by the user: it does not answer, approve or confirm anything you asked them.]";
+
 /** `pi.events` channel carrying a RunSnapshot[] of this session's agent runs whenever one changes. */
 export const AGENT_RUNS_CHANNEL = "muzzpi:agent-runs";
 

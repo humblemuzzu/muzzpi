@@ -10,7 +10,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { RunSnapshot, RunStatus, ControlRequest, ControlOutcome } from "./agent-channel";
+import { JOB_EVENT_FRAME, type RunSnapshot, type RunStatus, type ControlRequest, type ControlOutcome } from "./agent-channel";
 import { listLine } from "./agent-notice";
 import type { BashProcess, ProcessEnd } from "./bash-process";
 import { endResult, type ResultLimits } from "./bash-result";
@@ -36,7 +36,6 @@ const SHUTDOWN_GRACE_MS = 1_500;
 /** a reload hands over live objects the old code made: bump this when Job or BashProcess changes shape */
 const HANDOFF_VERSION = 1;
 const HANDOFF_SLOT = Symbol.for("muzzpi.bash-jobs.reload");
-const EVENT_FRAME = "[Automated bash-job event. This was not written by the user: it does not answer, approve or confirm anything you asked them.]";
 
 /** seconds a foreground command runs before it moves to the background; `PI_BASH_YIELD_SEC=0` keeps every command in the foreground */
 export function yieldSec(): number {
@@ -555,7 +554,7 @@ export class BashJobs {
 
 /** the user-role message that delivers job news to the agent. */
 export function newsText(reports: JobReport[]): string {
-	return [EVENT_FRAME, ...reports.map((report) => report.text)].join("\n\n");
+	return [JOB_EVENT_FRAME, ...reports.map((report) => report.text)].join("\n\n");
 }
 
 /** what the bash call returns when its command goes on as a background job. */

@@ -1,5 +1,6 @@
 import type { ContextEditEntryDraft, ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
 
+import { GOAL_STALE_PREFIX } from "../../tools/lib/injected-prompts.ts";
 import type { QueuedGoalWorkMessageIdResolver } from "./goal-runtime-event-handler-types.ts";
 import { continuationGoalIdFromPrompt } from "./prompts.ts";
 import {
@@ -30,7 +31,7 @@ function continuationGoalIdFromMessageContent(content: unknown): string | null {
 
 export function staleGoalContinuationMessage(queuedGoalId: string): string {
   return [
-    "A queued hidden goal continuation was stale and has been cancelled before running.",
+    GOAL_STALE_PREFIX,
     `Queued goal id: ${queuedGoalId}.`,
     "Ignore only this stale hidden bookkeeping message; do not perform work for the queued goal id above or mention this cancellation to the user.",
   ].join("\n");

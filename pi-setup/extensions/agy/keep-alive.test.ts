@@ -12,7 +12,7 @@ function envelope(marker: string): Envelope {
 		request: {
 			contents: [{ role: "user", parts: [{ text: marker }] }],
 			labels: { request_id: "t-2" },
-			generationConfig: { maxOutputTokens: 262144, thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" } },
+			generationConfig: { maxOutputTokens: 262144, thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" }, stopSequences: [] },
 			sessionId: "-1",
 		},
 		model: "gemini-4-neon-high",
@@ -90,9 +90,10 @@ function harness(replies: Reply[] = []) {
 
 describe("ping budget", () => {
 	test("reads are allowed up to the price of the rebuild they prevent", () => {
-		expect(pingBudget(700_000)).toBe(8);
-		expect(pingBudget(36_000)).toBe(5);
-		expect(pingBudget(10_000)).toBe(2);
+		expect(pingBudget(920_000)).toBe(18);
+		expect(pingBudget(700_000)).toBe(17);
+		expect(pingBudget(36_000)).toBe(8);
+		expect(pingBudget(10_000)).toBe(3);
 		expect(pingBudget(4_095)).toBe(0);
 		expect(pingBudget(0)).toBe(0);
 	});
@@ -104,11 +105,11 @@ describe("Gemini keep-alive", () => {
 		h.keepAlive.request(envelope("turn"));
 		h.keepAlive.answered(10_000);
 		await h.advanceTo(10 * 60 * SECOND);
-		expect(h.pings.map((p) => p.at)).toEqual([PING_AFTER_MS, 2 * PING_AFTER_MS]);
+		expect(h.pings.map((p) => p.at)).toEqual([PING_AFTER_MS, 2 * PING_AFTER_MS, 3 * PING_AFTER_MS]);
 		expect(h.pings.every((p) => p.payload.request.generationConfig.maxOutputTokens === 1)).toBe(true);
 		expect(h.pings.every((p) => p.payload.request.labels.prompt_cache_keep_alive === "true")).toBe(true);
 		expect(h.pings[0]!.payload.request.contents).toEqual(envelope("turn").request.contents);
-		expect(h.warmed).toEqual([PING_AFTER_MS, 2 * PING_AFTER_MS]);
+		expect(h.warmed).toEqual([PING_AFTER_MS, 2 * PING_AFTER_MS, 3 * PING_AFTER_MS]);
 	});
 
 	test("never reads while a request is in flight, and a new request takes over from its reply", async () => {
@@ -209,8 +210,8 @@ describe("Gemini keep-alive", () => {
 		h.keepAlive.answered(10_000);
 		await h.advanceTo(5 * 60 * SECOND);
 		const retry = PING_AFTER_MS + RETRY_AFTER_MS;
-		expect(h.pings.map((p) => p.at)).toEqual([PING_AFTER_MS, retry, retry + PING_AFTER_MS]);
-		expect(h.warmed).toEqual([retry, retry + PING_AFTER_MS]);
+		expect(h.pings.map((p) => p.at)).toEqual([PING_AFTER_MS, retry, retry + PING_AFTER_MS, retry + 2 * PING_AFTER_MS]);
+		expect(h.warmed).toEqual([retry, retry + PING_AFTER_MS, retry + 2 * PING_AFTER_MS]);
 	});
 
 	test("two failed reads in a row drop the entry until the next reply", async () => {

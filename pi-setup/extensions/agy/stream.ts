@@ -13,9 +13,13 @@ import type {
 	TranscriptContext,
 	Usage,
 } from "@earendil-works/pi-ai";
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { calculateCost, createAssistantMessageEventStream, getCurrentTools } from "@earendil-works/pi-ai";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { API_ID, type ResolvedModel, resolveModel } from "./catalog";
 import { convertTranscript, toToolDeclarations } from "./convert";
+import { foreignTurnAt, searchFrom, STOP_SEQUENCES } from "./framing";
 import { projectFor } from "./quota";
 import { errorText, retryRequest } from "./retry";
 import { readSse } from "./sse";
@@ -31,6 +35,8 @@ interface WirePart {
 interface WireCandidate {
 	content?: { parts?: WirePart[] };
 	finishReason?: string;
+	/** the only account Gemini gives of a failed finish, such as what was malformed */
+	finishMessage?: string;
 }
 
 interface WireUsage {
@@ -53,29 +59,23 @@ interface WireFrame {
 	error?: { message?: string; status?: string; code?: number } | string;
 }
 
-const ERROR_FINISH_REASONS = new Set([
-	"SAFETY",
-	"RECITATION",
-	"BLOCKLIST",
-	"PROHIBITED_CONTENT",
-	"SPII",
-	"IMAGE_SAFETY",
-	"IMAGE_PROHIBITED_CONTENT",
-	"IMAGE_RECITATION",
-	"IMAGE_OTHER",
-	"MALFORMED_FUNCTION_CALL",
-	"UNEXPECTED_TOOL_CALL",
-	"TOO_MANY_TOOL_CALLS",
-	"LANGUAGE",
-	"NO_IMAGE",
-	"FINISH_REASON_UNSPECIFIED",
-	"OTHER",
-]);
+/** CONTINUATION: the reply outgrew one 65,536-token segment, and continuing a segment is not supported. */
+const TRUNCATED_FINISHES = new Set(["MAX_TOKENS", "CONTINUATION"]);
 
-function stopReasonFor(finish: string): AssistantMessage["stopReason"] {
-	if (finish === "MAX_TOKENS") return "length";
-	if (ERROR_FINISH_REASONS.has(finish)) return "error";
-	return "stop";
+/**
+ * Finishes another attempt can get past. Their error asks to try again, the wording pi's own retry
+ * recognises: it drops the failed reply from the context and sends the request again.
+ */
+const TRANSIENT_FINISHES = new Set(["MALFORMED_FUNCTION_CALL", "MALFORMED_RESPONSE", "UNEXPECTED_TOOL_CALL", "OTHER", "FINISH_REASON_UNSPECIFIED"]);
+
+type Finish = { stopReason: "stop" | "length" } | { stopReason: "error"; errorMessage: string };
+
+/** Every finish but STOP and the truncations is an error, so a reason Gemini adds later is never taken for success. */
+export function finishOf(reason: string, message: string | undefined): Finish {
+	if (reason === "STOP") return { stopReason: "stop" };
+	if (TRUNCATED_FINISHES.has(reason)) return { stopReason: "length" };
+	const detail = message ? `${reason}: ${message}` : reason;
+	return { stopReason: "error", errorMessage: `Antigravity stopped with ${detail}${TRANSIENT_FINISHES.has(reason) ? "; try your request again" : ""}` };
 }
 
 function emptyUsage(): Usage {
@@ -159,6 +159,10 @@ function frameErrorText(error: WireFrame["error"]): string {
 	return JSON.stringify(error);
 }
 
+/**
+ * Reads the reply into `output`. A reply that starts writing a turn that is not its own (the stop sequences
+ * missed it, or it opened the reply) is cut there and ends the turn; the text it was cutting is returned.
+ */
 async function consume(
 	body: ReadableStream<Uint8Array>,
 	output: AssistantMessage,
@@ -166,7 +170,7 @@ async function consume(
 	resolved: ResolvedModel,
 	events: AssistantMessageEventStream,
 	options: StreamOptions,
-): Promise<void> {
+): Promise<string | undefined> {
 	let openIndex = -1;
 	let syntheticIds = 0;
 
@@ -193,7 +197,8 @@ async function consume(
 		openIndex = contentIndex;
 	};
 
-	for await (const raw of readSse(body)) {
+	let foreign: string | undefined;
+	frames: for await (const raw of readSse(body)) {
 		const frame = raw as WireFrame;
 		await options.onProviderStreamEvent?.(frame, model);
 		if (frame.error !== undefined) throw new Error(`Antigravity stream error: ${frameErrorText(frame.error)}`);
@@ -201,6 +206,7 @@ async function consume(
 		if (!response) continue;
 		if (!output.responseId && response.responseId) output.responseId = response.responseId;
 		if (response.modelVersion) output.responseModel = response.modelVersion;
+		if (response.usageMetadata) applyUsage(output.usage, response.usageMetadata);
 
 		for (const candidate of response.candidates ?? []) {
 			for (const part of candidate.content?.parts ?? []) {
@@ -214,9 +220,21 @@ async function consume(
 						block.thinkingSignature = part.thoughtSignature || block.thinkingSignature;
 						events.push({ type: "thinking_delta", contentIndex: openIndex, delta: part.text, partial: output });
 					} else {
-						block.text += part.text;
+						const before = block.text.length;
+						const grown = block.text + part.text;
+						const cut = foreignTurnAt(grown, searchFrom(before));
 						block.textSignature = part.thoughtSignature || block.textSignature;
-						events.push({ type: "text_delta", contentIndex: openIndex, delta: part.text, partial: output });
+						if (cut < 0) {
+							block.text = grown;
+							events.push({ type: "text_delta", contentIndex: openIndex, delta: part.text, partial: output });
+						} else {
+							block.text = grown.slice(0, cut).trimEnd();
+							const delta = block.text.slice(before);
+							if (delta) events.push({ type: "text_delta", contentIndex: openIndex, delta, partial: output });
+							foreign = grown.slice(cut);
+							output.stopReason = "stop";
+							break frames;
+						}
 					}
 				}
 				if (part.functionCall) {
@@ -243,17 +261,28 @@ async function consume(
 				}
 			}
 			if (candidate.finishReason) {
-				output.stopReason = stopReasonFor(candidate.finishReason);
-				if (output.stopReason === "error") output.errorMessage = `Antigravity stopped with ${candidate.finishReason}`;
+				const finish = finishOf(candidate.finishReason, candidate.finishMessage);
+				output.stopReason = finish.stopReason;
+				if (finish.stopReason === "error") output.errorMessage = finish.errorMessage;
 			}
 		}
-		if (response.usageMetadata) applyUsage(output.usage, response.usageMetadata);
 	}
 
 	closeCurrent();
 	output.providerThinkingLevel = resolved.tier.name;
+	return foreign;
 }
 
+/** One line per reply cut for writing someone else's turn: how often it happens, and how deep into the context. */
+async function logForeignTurn(entry: Record<string, unknown>): Promise<void> {
+	try {
+		const file = join(getAgentDir(), "cache", "agy-foreign-turns.jsonl");
+		await mkdir(dirname(file), { recursive: true });
+		await appendFile(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+	} catch {
+		// a log line never fails a reply
+	}
+}
 
 /** One keep-alive read: the stream is read to its end for the usage it reports last. Undefined when it failed. */
 export async function sendKeepAlive(
@@ -282,7 +311,6 @@ export async function sendKeepAlive(
 
 async function logPayload(payload: Envelope): Promise<void> {
 	try {
-		const { appendFile } = await import("node:fs/promises");
 		await appendFile(process.env.PI_AGY_PAYLOAD_LOG as string, `${JSON.stringify(payload)}\n`);
 	} catch {
 		// a debug log never fails a request
@@ -323,6 +351,7 @@ async function run(
 			systemInstruction: transcript.systemInstruction,
 			tools: toToolDeclarations(getCurrentTools(context.messages)),
 			maxOutputTokens: Math.min(options.maxTokens ?? resolved.family.maxOutputTokens, resolved.family.maxOutputTokens),
+			stopSequences: STOP_SEQUENCES,
 			sessionId: agySessionId(options.sessionId ?? ""),
 		});
 
@@ -341,7 +370,16 @@ async function run(
 		if (!response.body) throw new Error("Antigravity returned an empty response body");
 
 		events.push({ type: "start", partial: output });
-		await consume(response.body, output, model, resolved, events, options);
+		const foreign = await consume(response.body, output, model, resolved, events, options);
+		if (foreign !== undefined) {
+			await logForeignTurn({
+				at: new Date().toISOString(),
+				session: options.sessionId,
+				model: model.id,
+				contextTokens: output.usage.input + output.usage.cacheRead,
+				cut: foreign.slice(0, 200),
+			});
+		}
 
 		if (options.signal?.aborted) throw new Error("Request was aborted");
 		if (output.stopReason === "pending") throw new Error("Antigravity stream ended without a finish reason");

@@ -6,7 +6,7 @@ export const LOAD_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v
 export const QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 export const FALLBACK_PROJECT = "aicode-consumers";
 
-export const USER_AGENT = "antigravity/cli/1.5.12 (aidev_client; os_type=darwin; arch=arm64; cl=1024904911; auth_method=consumer)";
+export const USER_AGENT = "antigravity/cli/1.5.13 (aidev_client; os_type=darwin; arch=arm64; cl=1025641825; auth_method=consumer)";
 
 const FNV_OFFSET = 0xcbf29ce484222325n;
 const FNV_PRIME = 0x100000001b3n;
@@ -68,6 +68,7 @@ export interface ToolGroup {
 export interface GenerationConfig {
 	maxOutputTokens: number;
 	thinkingConfig: { includeThoughts: true; thinkingLevel: string | number };
+	stopSequences: string[];
 }
 
 export interface EnvelopeRequest {
@@ -125,6 +126,7 @@ export interface EnvelopeInput {
 	systemInstruction?: { role: "user"; parts: { text: string }[] };
 	tools: ToolGroup[];
 	maxOutputTokens: number;
+	stopSequences: readonly string[];
 	sessionId: string;
 	now?: number;
 }
@@ -155,6 +157,7 @@ export function buildEnvelope(input: EnvelopeInput): Envelope {
 		generationConfig: {
 			maxOutputTokens: input.maxOutputTokens,
 			thinkingConfig: { includeThoughts: true, thinkingLevel: input.tier.thinkingLevel },
+			stopSequences: [...input.stopSequences],
 		},
 		sessionId: input.sessionId,
 	};

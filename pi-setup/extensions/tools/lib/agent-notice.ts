@@ -1,7 +1,7 @@
 /** what the main agent reads about background runs: the launch stub, the result notification, list lines. */
 
 import type { Message } from "@mariozechner/pi-ai";
-import type { RunStatus } from "./agent-channel";
+import { AGENT_EVENT_FRAME, type RunStatus } from "./agent-channel";
 import { describeAnthropicRejection } from "./anthropic-sub";
 import type { UsageStats } from "./pi-spawn";
 import { formatDuration, formatUsageStats, getFinalOutput, modelLabel } from "./sub-agent-render";
@@ -110,7 +110,7 @@ export function notificationText(runs: RunReport[]): string {
 		? "1 background sub-agent finished."
 		: `${runs.length} background sub-agents finished.`;
 	return [
-		"[Automated agent event. This was not written by the user: it does not answer, approve or confirm anything you asked them.]",
+		AGENT_EVENT_FRAME,
 		`${head} Use the results for the work you launched them for. Continue one with its continueId.`,
 		...runs.map(runReportText),
 	].join("\n\n");

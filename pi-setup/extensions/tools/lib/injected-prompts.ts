@@ -6,6 +6,9 @@
 
 export const GOAL_CONTINUATION_PREFIX = '<pi_goal_continuation goal_id="';
 export const YSK_PROMPT_PREFIX = "A side agent flagged this while you were working:";
+/** openings of the goal's own notices: custom messages, not prompts */
+export const GOAL_BUDGET_PREFIX = "The active thread goal has reached its token budget.";
+export const GOAL_STALE_PREFIX = "A queued hidden goal continuation was stale and has been cancelled before running.";
 
 export type InjectedKind = "goal" | "ysk";
 

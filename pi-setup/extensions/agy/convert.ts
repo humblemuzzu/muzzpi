@@ -1,5 +1,6 @@
 import type { Tool, TranscriptContext } from "@earendil-works/pi-ai";
 import { collapseSystemMessages, getInitialSystemMessage, getSystemMessageText, withoutInitialSystemMessage } from "@earendil-works/pi-ai";
+import { frameUserTurn, withoutForeignTurn } from "./framing";
 import { sanitizeSurrogates } from "./text";
 import type { Content, InlineDataPart, Part, ToolGroup } from "./wire";
 
@@ -29,12 +30,16 @@ export function agySafeInstruction(text: string): string {
 	return text.replace(DOCS_SECTION, SHORT_DOCS);
 }
 
-/** Thinking blocks are stored for the UI but never sent back: agy replays only text and tool
- * parts, and the reasoning signature rides on the text part that closed the turn. */
+/**
+ * Thinking blocks are stored for the UI but never sent back: agy replays only text and tool parts, and the
+ * reasoning signature rides on the text part that closed the turn. A reply that failed or was aborted is
+ * never replayed (pi's rule for its own providers), nor are the results of the tool calls it held.
+ */
 export function convertTranscript(context: TranscriptContext): ConvertedTranscript {
 	const collapsed = collapseSystemMessages(context);
 	const system = getInitialSystemMessage(collapsed.messages);
 	const contents: Content[] = [];
+	const replayedCalls = new Set<string>();
 
 	for (const message of withoutInitialSystemMessage(collapsed.messages)) {
 		if (message.role === "user") {
@@ -52,20 +57,23 @@ export function convertTranscript(context: TranscriptContext): ConvertedTranscri
 					}
 				}
 			}
-			if (parts.length > 0) contents.push({ role: "user", parts });
+			if (parts.length > 0) contents.push({ role: "user", parts: frameUserTurn(parts, message.timestamp) });
 			continue;
 		}
 
 		if (message.role === "assistant") {
+			if (message.stopReason === "error" || message.stopReason === "aborted") continue;
 			const parts: Part[] = [];
 			for (const block of message.content) {
 				if (block.type === "thinking") continue;
 				if (block.type === "text") {
 					const signature = usableSignature(block.textSignature);
-					if (!block.text && !signature) continue;
-					parts.push({ text: sanitizeSurrogates(block.text), ...(signature ? { thoughtSignature: signature } : {}) });
+					const text = withoutForeignTurn(sanitizeSurrogates(block.text));
+					if (!text && !signature) continue;
+					parts.push({ text, ...(signature ? { thoughtSignature: signature } : {}) });
 					continue;
 				}
+				replayedCalls.add(block.id);
 				const signature = usableSignature(block.thoughtSignature);
 				parts.push({
 					functionCall: { id: block.id, name: block.name, args: block.arguments ?? {} },
@@ -76,10 +84,10 @@ export function convertTranscript(context: TranscriptContext): ConvertedTranscri
 			continue;
 		}
 
-		if (message.role !== "toolResult") continue;
+		if (message.role !== "toolResult" || !replayedCalls.has(message.toolCallId)) continue;
 
-		// Cloud Code Assist takes tool results as a model turn, and agy merges consecutive
-		// results into one turn. A user turn here is rejected or ignored by the model.
+		// agy sends tool results as a model turn, consecutive results merged into one. The API takes a
+		// user turn as well; this is the form Gemini 4 meets in agy's own conversations.
 		const text = message.content
 			.filter((item) => item.type === "text")
 			.map((item) => item.text)

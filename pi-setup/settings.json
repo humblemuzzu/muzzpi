@@ -34,7 +34,19 @@
       "deepseek/deepseek-flash": { "reserveTokens": 30000 },
       "deepseek/deepseek-v4-pro": { "reserveTokens": 30000 },
       "river/deepseek-ai/DeepSeek-V4.1-Flash": { "reserveTokens": 78576 },
-      "openrouter/z-ai/glm-5.3-flash": { "reserveTokens": 78575 }
+      "openrouter/z-ai/glm-5.3-flash": { "reserveTokens": 78575 },
+      "agy/gemini-4-carbon-medium": { "reserveTokens": 128576 },
+      "agy/gemini-4-carbon-high": { "reserveTokens": 128576 },
+      "agy/gemini-4-argon-medium": { "reserveTokens": 128576 },
+      "agy/gemini-4-argon-high": { "reserveTokens": 128576 },
+      "agy/gemini-4-hydrogen-low": { "reserveTokens": 128576 },
+      "agy/gemini-4-hydrogen-medium": { "reserveTokens": 128576 },
+      "agy/gemini-4-hydrogen-high": { "reserveTokens": 128576 },
+      "agy/gemini-4-hydrogen-xhigh": { "reserveTokens": 128576 },
+      "agy/gemini-4-neon-low": { "reserveTokens": 128576 },
+      "agy/gemini-4-neon-medium": { "reserveTokens": 128576 },
+      "agy/gemini-4-neon-high": { "reserveTokens": 128576 },
+      "agy/gemini-4-neon-xhigh": { "reserveTokens": 128576 }
     }
   },
   "cacheWarming": "off",

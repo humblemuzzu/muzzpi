@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FAMILIES, MODELS, resolveModel } from "./catalog";
+import { STOP_SEQUENCES } from "./framing";
 import {
 	agySessionId,
 	buildEnvelope,
@@ -15,7 +16,7 @@ const AGY_SESSION_ID = "-3750763034362895579";
 const SESSION = agySessionId("01a1f2a2-d95d-7718-826d-2f920777cbaf");
 
 const AGY_USER_AGENT =
-	"antigravity/cli/1.5.12 (aidev_client; os_type=darwin; arch=arm64; cl=1024904911; auth_method=consumer)";
+	"antigravity/cli/1.5.13 (aidev_client; os_type=darwin; arch=arm64; cl=1025641825; auth_method=consumer)";
 
 function envelopeOf(modelId: string) {
 	const resolved = resolveModel(modelId);
@@ -30,6 +31,7 @@ function envelopeOf(modelId: string) {
 		systemInstruction: { role: "user", parts: [{ text: "sys" }] },
 		tools: [{ functionDeclarations: [{ name: "read", description: "read", parameters: { type: "OBJECT" } }] }],
 		maxOutputTokens: resolved.family.maxOutputTokens,
+		stopSequences: STOP_SEQUENCES,
 		sessionId: SESSION,
 		now: 1794993179992,
 	});
@@ -85,7 +87,9 @@ describe("wire matches agy byte for byte", () => {
 		expect(envelope.request.generationConfig).toEqual({
 			maxOutputTokens: 262144,
 			thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+			stopSequences: [...STOP_SEQUENCES],
 		});
+		expect(Object.keys(envelope.request.generationConfig)).toEqual(["maxOutputTokens", "thinkingConfig", "stopSequences"]);
 		expect(JSON.parse(JSON.stringify(envelope)).request.sessionId).toBe(SESSION);
 		expect(envelope.model).toBe("gemini-4-hydrogen-low");
 		expect(envelope.userAgent).toBe("antigravity");
@@ -116,6 +120,7 @@ describe("wire matches agy byte for byte", () => {
 			],
 			tools: [],
 			maxOutputTokens: 10,
+			stopSequences: [],
 			sessionId: SESSION,
 		});
 		expect("last_execution_id" in midTurn.request.labels).toBe(false);
@@ -132,6 +137,7 @@ describe("wire matches agy byte for byte", () => {
 			],
 			tools: [],
 			maxOutputTokens: 10,
+			stopSequences: [],
 			sessionId: SESSION,
 		});
 		expect(newTurn.request.labels.last_execution_id).toBe("11111111-2222-3333-4444-555555555555");
@@ -151,6 +157,7 @@ describe("wire matches agy byte for byte", () => {
 			contents: [{ role: "user", parts: [{ text: "hi" }] }],
 			tools: [],
 			maxOutputTokens: 10,
+			stopSequences: [],
 			sessionId: SESSION,
 		});
 		expect(first.request.labels.request_id.endsWith("-0")).toBe(true);
@@ -166,6 +173,7 @@ describe("wire matches agy byte for byte", () => {
 			contents: [{ role: "user", parts: [{ text: "hi" }] }],
 			tools: [],
 			maxOutputTokens: 10,
+			stopSequences: [],
 			sessionId: SESSION,
 		});
 		expect(second.request.labels.request_id.endsWith("-1")).toBe(true);
