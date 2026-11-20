@@ -8,7 +8,7 @@ Edits you can undo. A TUI built for all-day sessions. And a pi that starts as
 fast as stock, with every patch inside.
 
 **36** tools · **6** sub-agents · **20** MCP servers · **13** skills ·
-**0.24 s** to start with every extension · on stock pi **1.5.2**
+**0.24 s** to start with every extension · on stock pi **1.6.0**
 
 ```bash
 git clone https://github.com/humblemuzzu/muzzpi.git && cd muzzpi
@@ -52,9 +52,9 @@ on an M4 Pro (48 GB, macOS 27).
 | Memory per pi process | 163 MB | **138 MB** |
 
 Medians of 11–15 runs, alternated between versions so load hits both equally,
-measured on pi 1.3.0 with 17 extensions. On pi 1.5.2 with all 19
-([`perf-baseline.ts`](pi-setup/port-harness/perf-baseline.ts), median of 11): a full
-start takes 236 ms and a sub-agent 190 ms.
+measured on pi 1.3.0 with 17 extensions. On pi 1.6.0 with all 20
+([`perf-baseline.ts`](pi-setup/port-harness/perf-baseline.ts), median of 15): a full
+start takes 240 ms and a sub-agent 210 ms.
 
 - **pi's own build recipe, on our patched files.** pi ships a fast prebuilt
   copy of itself, but it was built before any patch, so a patched pi had to run

@@ -12,6 +12,43 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## 1.6.0 (2026-11-20) — from 1.5.2, five core patches, the width patch and three speed shas re-derived
+
+**Patch drift (registry tarballs, stock 1.5.2 vs 1.6.0):** `keybindings.js`, `session-selector-search.js`
+identical. Our hunks applied to stock 1.6.0 with `patch` and `git merge-file` gave byte-identical files, no
+conflict, for `resource-loader.js` (package progress options), `model-selector.js` (cursor keys keep the
+filter), `session-selector.js` (`pendingSelectedPath`, `handleSearchInput`: a changed query selects the top
+row; our pin key still runs before it), `mcp/index.js` (`serverSummary` → pi-mcp `mcpServerSummary`; same
+text while every server has a `description`). `session-manager.js` conflicted: upstream rewrote the readline
+loop our fast `/resume` replaces (#11956, an abort error no listener handled). Ours reads with `fs/promises`
+and closes in `finally`, so it keeps our reader and takes only upstream's post-loop `throwIfAborted`.
+
+**pi-tui `utils.js`:** `graphemeWidth()` now caches single code units and calls a new `clusterWidth()`, whose
+body is the old one byte for byte; the width patcher targets `clusterWidth` when present (it failed with
+`no-zero-anchor` before, which `update-pi.sh` would have hit under `set -e` mid-install). New `graphemesOf`
+skips `Intl.Segmenter` for standalone units. Patched 1.5.2 vs patched 1.6.0: 373,280 width/truncate/wrap/slice
+checks over the BMP, pictographs and mixed-script lines, 0 differ. Speed patches: every anchor still unique,
+new stock sha256s only; `MD_STREAM_SESSIONS=200` streams as stock.
+
+**Breaking: `render()` returns `readonly string[]` and `Container` reuses its array.** Nothing of ours mutates
+render output (grep of every `.render(` and cached `lines`); `show.ts`, `transcript.ts`, `focus/content.ts`
+copy, two tests take readonly lines. Type check (tsc 5.9, every extension): 0 new errors vs 1.5.2.
+
+**Checked, nothing to do:** the Claude request is byte-identical to 1.5.2 (system, 38 tools, betas, thinking;
+none of our tools has `additionalProperties`, which pi-ai now forwards), so no cache rewrite.
+openai-completions sends `developer` only to OpenAI now: no compat change for any of the 19 DeepSeek,
+OpenRouter and opencode models we use (River, crof, llama-local pin it off). `pi.events` handlers gain a
+second async wrapper (bus already had one; still synchronous to the first await). RPC subscribes before
+binding, so `session_start` events reach `pi-spawn` (it ignores unknown types; stderr only accumulates).
+Removed `resolveModelScope`, `restoreModelFromSession`, `mapStopReasonString`: unused by us. pi's own
+find/read/llama-port changes do not reach our tools or `/local`. Bundle recipe and esbuild unchanged,
+`bundle-fidelity` 78/84.
+
+**Verified:** staged in `/tmp` first (verify ALL PASS, tests 2,585 + 604, canary 4/4, sub-agents on Haiku
+and DeepSeek, agy, TUI), then `update-pi.sh 1.6.0` (verify, smoke, canary 4/4), `install.sh pi`, tests
+2,585 + 604 / 0 fail; TUI: write, edit, failed edit, background `finder` wake, `/focus`, `/resume` pin.
+Startup with our 20 extensions: 240 ms, sub-agent 210 ms. Backup: `~/pi-update-backup-1.5.2-20261120-184403`.
+
 ## 1.5.2 (2026-11-12) — from 1.5.0 (via 1.5.1), two core patches + two speed patches re-derived
 
 **Patch drift (registry tarballs, stock 1.5.0 vs 1.5.2; 1.5.1 → 1.5.2 touched only 4 unrelated files):**
