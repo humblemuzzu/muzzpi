@@ -657,7 +657,7 @@ machinery mapped to pi tools or cut; every subagent they spawn is read-only.
    records it uses (`prompt`+`streamingBehavior`, `abort`, `agent_settled`, dialog requests); pi
    0.84's #7327 silently killed every sub-agent that way. When a release touches model resolution,
    tool filtering, CLI arguments or RPC, call one real sub-agent before declaring it clean.
-3. **pi core update** → re-derive the 6 core patches against the new stock files (never blind-copy;
+3. **pi core update** → re-derive every core patch in `patches.sh` against the new stock files (never blind-copy;
    see `pi-migrations.md`) + the width patch + each speed patch `update-pi.sh` reports as DRIFT,
    then rebuild (`update-pi.sh` does). The
    `@mariozechner/*` compat aliases will eventually go — then rename imports.
