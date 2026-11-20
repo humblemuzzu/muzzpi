@@ -188,7 +188,11 @@ describe("verify-patches.sh: pi entrypoint", () => {
 
 describe("verify-patches.sh: sub-agent models", () => {
 	test("a provider you have not logged in to yet warns, naming it, and the check still passes", () => {
-		const lines = modelsAudit(["deepseek deepseek-flash", "deepseek deepseek-v4-pro", "river deepseek-ai/DeepSeek-V4.1-Flash", "openrouter z-ai/glm-5.3-flash"]);
+		const { models } = JSON.parse(readFileSync(join(PI_SETUP, "agent-models.json"), "utf8")) as { models: Record<string, { id: string }> };
+		const everyProviderButAnthropic = Object.values(models)
+			.map((model) => model.id)
+			.filter((id) => id.includes("/") && !id.startsWith("anthropic/"));
+		const lines = modelsAudit(everyProviderButAnthropic.map((id) => id.replace("/", " ")));
 		expect(verdict(lines, "sub-agents: agent-models.json")).toStartWith("PASS");
 		const warn = verdict(lines, "not logged in");
 		expect(warn).toStartWith("WARN");

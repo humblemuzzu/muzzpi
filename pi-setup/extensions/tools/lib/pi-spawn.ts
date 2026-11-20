@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
-import { interpolatePromptVars, type InterpolateContext } from "./interpolate";
+import { interpolatePromptVars } from "./interpolate";
 import { SUB_AGENT_TOOLS_ENV } from "./sub-agent-prompt";
 import { HOLDER_ENV } from "./file-lock";
 import { READ_ONLY_BASH_ENV } from "./read-only-bash";
