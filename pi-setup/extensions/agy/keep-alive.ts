@@ -20,12 +20,17 @@ const CACHED_WEIGHT = 0.05;
 const MIN_CACHED_TOKENS = 4_096;
 /** Reads that found the cache already gone, in a row: past this, pings only cost, so they stop for the session. */
 const MISSES_BEFORE_STOP = 2;
+/**
+ * The share of one rebuild the reads may spend. Replayed over 1,369 real gaps between agy requests, a full
+ * rebuild's worth of reads cost more than it saved (long waits outlast it anyway); two-thirds cost least.
+ */
+const REBUILD_SHARE = 2 / 3;
 
-/** As many reads as cost no more than the one rebuild they prevent (ski rental: never worse than twice the best). */
+/** As many reads as cost no more than two-thirds of the rebuild they prevent. */
 export function pingBudget(promptTokens: number): number {
 	if (promptTokens < MIN_CACHED_TOKENS) return 0;
 	const read = Math.min(promptTokens, RE_READ_TOKENS) + CACHED_WEIGHT * Math.max(0, promptTokens - RE_READ_TOKENS);
-	return Math.max(0, Math.floor((promptTokens - read) / read));
+	return Math.max(0, Math.floor((REBUILD_SHARE * (promptTokens - read)) / read));
 }
 
 export interface KeepAliveDeps {
