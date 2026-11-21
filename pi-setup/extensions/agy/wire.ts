@@ -6,16 +6,15 @@ export const LOAD_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v
 export const QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 export const FALLBACK_PROJECT = "aicode-consumers";
 
-export const USER_AGENT = "antigravity/cli/1.5.13 (aidev_client; os_type=darwin; arch=arm64; cl=1025641825; auth_method=consumer)";
+export const USER_AGENT = "antigravity/cli/1.5.14 (aidev_client; os_type=darwin; arch=arm64; cl=1026970498; auth_method=consumer)";
 
 const FNV_OFFSET = 0xcbf29ce484222325n;
 const FNV_PRIME = 0x100000001b3n;
 
 /**
- * Proxies to this endpoint measured implicit-cache affinity keyed on `sessionId` (a random one per request
- * never hit; one shared by parallel conversations evicted them), so each conversation gets its own. agy
- * sends the signed FNV-1a-64 of an empty key ("-3750763034362895579"); this hashes pi's session id the
- * same way, and an empty key gives agy's value.
+ * Signed 64-bit FNV-1a decimal string matching agy 1.5.14's `sessionId` (which hashes `cascade_id`;
+ * older agy 1.5.11–1.5.13 hashed `""` to `"-3750763034362895579"`). Hashing pi's session id gives
+ * each conversation its own stable cache-affinity key across turns and resumes.
  */
 export function agySessionId(key: string): string {
 	let hash = FNV_OFFSET;
@@ -27,6 +26,7 @@ export function agySessionId(key: string): string {
 
 export interface TextPart {
 	text: string;
+	thought?: true;
 	thoughtSignature?: string;
 }
 
@@ -65,10 +65,14 @@ export interface ToolGroup {
 	functionDeclarations: ToolDeclaration[];
 }
 
+export type WireThinkingConfig =
+	| { includeThoughts: true; thinkingLevel: string | number }
+	| { includeThoughts: true; thinkingBudget: number };
+
 export interface GenerationConfig {
 	maxOutputTokens: number;
-	thinkingConfig: { includeThoughts: true; thinkingLevel: string | number };
-	stopSequences: string[];
+	thinkingConfig: WireThinkingConfig;
+	stopSequences?: string[];
 }
 
 export interface EnvelopeRequest {
@@ -117,6 +121,13 @@ export function completeCall(state: WireState): void {
 	state.lastExecutionId = randomUUID();
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Reuse a UUID session id as `cascade_id` so `sessionId === agySessionId(cascade_id)` like agy 1.5.14. */
+export function cascadeIdFor(state: WireState, sessionId: string | undefined): string {
+	return sessionId && UUID_RE.test(sessionId) ? sessionId : state.cascadeId;
+}
+
 export interface EnvelopeInput {
 	state: WireState;
 	project: string;
@@ -128,42 +139,52 @@ export interface EnvelopeInput {
 	maxOutputTokens: number;
 	stopSequences: readonly string[];
 	sessionId: string;
+	cascadeId?: string;
 	now?: number;
 }
 
 export function buildEnvelope(input: EnvelopeInput): Envelope {
 	const step = input.contents.length;
-	const lastRole = input.contents[input.contents.length - 1]?.role;
-	// agy names the previous execution only on the first call of a new turn, which is the
-	// call whose transcript ends in a user turn after an earlier call.
-	const previousExecution = input.state.calls > 0 && lastRole === "user" ? input.state.lastExecutionId : undefined;
+	const cascadeId = input.cascadeId ?? input.state.cascadeId;
+	const last = input.contents[input.contents.length - 1];
+	// agy names the previous execution only on the first call of a new user turn — never on a
+	// mid-turn tool result (which uses role "user" on Claude and role "model" on Gemini/GPT-OSS).
+	const isNewUserTurn = last?.role === "user" && !last.parts.some((part) => "functionResponse" in part);
+	const previousExecution = input.state.calls > 0 && isNewUserTurn ? input.state.lastExecutionId : undefined;
+	const isClaude = input.family.backend === "claude";
+	const isGemini = input.family.backend === "gemini";
 	const labels: Record<string, string> = {
-		cascade_id: input.state.cascadeId,
+		cascade_id: cascadeId,
 		...(previousExecution ? { last_execution_id: previousExecution } : {}),
 		last_step_index: String(step - 1),
 		model_enum: input.tier.modelEnum,
 		request_id: `${input.state.trajectoryId}-${input.state.calls}`,
-		root_cascade_id: input.state.cascadeId,
+		root_cascade_id: cascadeId,
 		trajectory_id: input.state.trajectoryId,
-		used_claude: "false",
-		used_claude_conservative: "false",
-		used_non_gemini_model: "false",
+		used_claude: isClaude ? "true" : "false",
+		used_claude_conservative: isClaude ? "true" : "false",
+		used_non_gemini_model: isGemini ? "false" : "true",
+	};
+	const thinkingConfig: WireThinkingConfig =
+		input.tier.thinking.kind === "level"
+			? { includeThoughts: true, thinkingLevel: input.tier.thinking.value }
+			: { includeThoughts: true, thinkingBudget: input.tier.thinking.value };
+	const generationConfig: GenerationConfig = {
+		maxOutputTokens: input.maxOutputTokens,
+		thinkingConfig,
+		...(input.stopSequences.length > 0 ? { stopSequences: [...input.stopSequences] } : {}),
 	};
 	const request: EnvelopeRequest = {
 		contents: input.contents,
 		...(input.systemInstruction ? { systemInstruction: input.systemInstruction } : {}),
 		...(input.tools.length > 0 ? { tools: input.tools } : {}),
 		labels,
-		generationConfig: {
-			maxOutputTokens: input.maxOutputTokens,
-			thinkingConfig: { includeThoughts: true, thinkingLevel: input.tier.thinkingLevel },
-			stopSequences: [...input.stopSequences],
-		},
+		generationConfig,
 		sessionId: input.sessionId,
 	};
 	return {
 		project: input.project,
-		requestId: `agent/${input.state.cascadeId}/${input.now ?? Date.now()}/${input.state.trajectoryId}/${step}`,
+		requestId: `agent/${cascadeId}/${input.now ?? Date.now()}/${input.state.trajectoryId}/${step}`,
 		request,
 		model: `${input.family.id}-${input.tier.name}`,
 		userAgent: "antigravity",

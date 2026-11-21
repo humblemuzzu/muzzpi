@@ -2,15 +2,19 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { type Envelope, keepAliveEnvelope } from "./wire";
 
 /**
- * Gemini 4 sets no fixed cache lifetime: an entry nobody read was gone after 45 s in one test and still
- * there after 300 s in another, while one read every 30 s keeps an entry alive.
+ * Gemini 4 on Antigravity keeps implicit cache entries for ~5 minutes when the pool is not under eviction
+ * pressure (live probes hit through 4m34s and expire by 5m03s; agy's own keep-alive targets 4m30s/4m45s).
+ * Pinging at 4m00s from request send leaves a 60s cushion before expiry and 35s before the stale cutoff for
+ * a 3s retry (e.g. if Google's frontend closes an idle socket with ECONNRESET).
  */
-export const LIFETIME_MS = 45_000;
-export const PING_AFTER_MS = 30_000;
-/** A timer this late (a laptop asleep) finds the entry gone, and reading a gone entry is a full rebuild. */
-export const STALE_AFTER_MS = 40_000;
+export const LIFETIME_MS = 300_000;
+export const PING_AFTER_MS = 240_000;
+/** A timer this late (a laptop asleep, or a very long decode) finds the entry gone, and reading a gone entry is a full rebuild. */
+export const STALE_AFTER_MS = 275_000;
 /** A failed read is tried once more this long after, if that is still before the entry goes stale. */
 export const RETRY_AFTER_MS = 3_000;
+/** Floor for immediate reschedules after a >4m decode, so fast local tools finish before firing a redundant ping. */
+const MIN_RESCHEDULE_MS = 1_000;
 
 /** Gemini 4 re-reads the last 2,050 tokens of the previous request at the full rate when a request adds fewer. */
 const RE_READ_TOKENS = 2_050;
@@ -44,19 +48,22 @@ export interface KeepAliveDeps {
 
 interface Entry {
 	payload: Envelope;
-	/** the latest request or read of this prompt */
+	/** when the latest request or read of this prompt went out (prefill start) */
 	at: number;
 	pingsLeft: number;
 }
 
 /**
- * Keeps the last conversation request's cache entry warm between requests: while tools run, while
- * background work runs, and while the person reads. Never beside a request in flight.
+ * Keeps the last conversation request's cache entry warm while something will continue the conversation
+ * (a turn in progress, or a live background agent / bash job). Never while idle, and never beside a
+ * request in flight.
  */
 export class KeepAlive {
 	private entry: Entry | undefined;
-	private pending: Envelope | undefined;
+	private pending: { payload: Envelope; at: number } | undefined;
 	private requesting = false;
+	private turnActive = false;
+	private liveRuns = 0;
 	private misses = 0;
 	private stopped = false;
 	private retried = false;
@@ -71,20 +78,33 @@ export class KeepAlive {
 
 	request(payload: Envelope): void {
 		this.halt();
-		this.pending = payload;
+		this.pending = { payload, at: this.deps.now() };
 		this.requesting = true;
 	}
 
 	/** A reply that reported no prompt never reached the cache, so the previous entry is still the one to keep. */
 	answered(promptTokens: number): void {
 		this.requesting = false;
-		const payload = this.pending;
+		const pending = this.pending;
 		this.pending = undefined;
-		if (payload && promptTokens > 0) {
-			this.entry = { payload, at: this.deps.now(), pingsLeft: pingBudget(promptTokens) };
+		if (pending && promptTokens > 0) {
+			this.entry = { payload: pending.payload, at: pending.at, pingsLeft: pingBudget(promptTokens) };
 			this.retried = false;
 		}
 		this.reschedule();
+	}
+
+	/** A starting turn always sends a request, which reschedules; resuming here would race it with a read. */
+	turn(active: boolean): void {
+		this.turnActive = active;
+		if (!this.waiting()) this.halt();
+	}
+
+	/** Background sub-agents and bash jobs keep an idle session waiting until they finish. */
+	backgroundRuns(live: number): void {
+		this.liveRuns = live;
+		if (!this.waiting()) this.halt();
+		else if (!this.cancelTimer && !this.inFlight) this.reschedule();
 	}
 
 	forget(): void {
@@ -92,13 +112,20 @@ export class KeepAlive {
 		this.entry = undefined;
 		this.pending = undefined;
 		this.requesting = false;
+		this.retried = false;
 	}
 
-	/** A new session: pings are allowed again. */
+	/** A new session: pings are allowed again and live activity starts fresh. */
 	reset(): void {
 		this.forget();
+		this.turnActive = false;
+		this.liveRuns = 0;
 		this.misses = 0;
 		this.stopped = false;
+	}
+
+	private waiting(): boolean {
+		return this.turnActive || this.liveRuns > 0;
 	}
 
 	private halt(): void {
@@ -112,17 +139,27 @@ export class KeepAlive {
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
 		const entry = this.entry;
-		if (!entry || this.stopped || this.requesting || entry.pingsLeft <= 0) return;
-		const due = (at ?? entry.at + PING_AFTER_MS) - this.deps.now();
+		if (!entry || !this.waiting() || this.stopped || this.requesting || entry.pingsLeft <= 0) return;
+		const now = this.deps.now();
+		if (now - entry.at > STALE_AFTER_MS) {
+			this.entry = undefined;
+			return;
+		}
+		const target = at ?? entry.at + PING_AFTER_MS;
+		const due = at === undefined ? Math.max(MIN_RESCHEDULE_MS, target - now) : Math.max(0, target - now);
+		if (now + due - entry.at > STALE_AFTER_MS) {
+			this.entry = undefined;
+			return;
+		}
 		this.cancelTimer = this.deps.schedule(() => {
 			this.cancelTimer = undefined;
 			void this.refresh().catch(() => undefined);
-		}, Math.max(0, due));
+		}, due);
 	}
 
 	private async refresh(): Promise<void> {
 		const entry = this.entry;
-		if (!entry || this.stopped || this.requesting || entry.pingsLeft <= 0) return;
+		if (!entry || !this.waiting() || this.stopped || this.requesting || entry.pingsLeft <= 0) return;
 		const sentAt = this.deps.now();
 		if (sentAt - entry.at > STALE_AFTER_MS) {
 			this.entry = undefined;

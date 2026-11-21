@@ -48,7 +48,9 @@ def read_session(path, since):
                 warms.append(entry.get("usage") or {})
                 continue
             if entry.get("type") == "custom" and entry.get("customType") == "cache-ping":
-                warms.append((entry.get("data") or {}).get("usage") or {})
+                data = entry.get("data") or {}
+                if data.get("provider") in (None, "anthropic"):
+                    warms.append(data.get("usage") or {})
                 continue
             message = entry.get("message") or {}
             usage = message.get("usage") or {}

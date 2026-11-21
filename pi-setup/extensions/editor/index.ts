@@ -579,8 +579,8 @@ export default function (pi: ExtensionAPI) {
 	const cacheTtlMs = (ctx: ExtensionContext, stats: CacheStats): number | undefined => {
 		const catalog = ctx.model?.promptCache;
 		if (!catalog) return undefined;
-		if (stats.lastWriteTtlMs !== undefined) return stats.lastWriteTtlMs;
-		const seconds = catalog[process.env.PI_CACHE_RETENTION === "long" ? "long" : "short"];
+		if (stats.lastWriteTtlMs !== undefined && ctx.model?.provider === "anthropic") return stats.lastWriteTtlMs;
+		const seconds = catalog[process.env.PI_CACHE_RETENTION === "long" ? "long" : "short"] ?? catalog.short;
 		return seconds === undefined ? undefined : seconds * 1000;
 	};
 

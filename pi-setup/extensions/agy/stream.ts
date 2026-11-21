@@ -9,6 +9,7 @@ import type {
 	StreamOptions,
 	TextContent,
 	ThinkingContent,
+	ThinkingLevel,
 	ToolCall,
 	TranscriptContext,
 	Usage,
@@ -23,7 +24,7 @@ import { foreignTurnAt, searchFrom, STOP_SEQUENCES } from "./framing";
 import { projectFor } from "./quota";
 import { errorText, retryRequest } from "./retry";
 import { readSse } from "./sse";
-import { agySessionId, buildEnvelope, completeCall, conversation, recordRequest, type Envelope, STREAM_URL, USER_AGENT } from "./wire";
+import { agySessionId, buildEnvelope, cascadeIdFor, completeCall, conversation, recordRequest, type Envelope, STREAM_URL, USER_AGENT } from "./wire";
 
 interface WirePart {
 	text?: string;
@@ -222,7 +223,7 @@ async function consume(
 					} else {
 						const before = block.text.length;
 						const grown = block.text + part.text;
-						const cut = foreignTurnAt(grown, searchFrom(before));
+						const cut = resolved.family.backend === "gemini" ? foreignTurnAt(grown, searchFrom(before)) : -1;
 						block.textSignature = part.thoughtSignature || block.textSignature;
 						if (cut < 0) {
 							block.text = grown;
@@ -318,10 +319,14 @@ async function logPayload(payload: Envelope): Promise<void> {
 	}
 }
 
+export interface AgyStreamOptions extends StreamOptions {
+	reasoning?: ThinkingLevel;
+}
+
 async function run(
 	model: Model<Api>,
 	context: TranscriptContext,
-	options: StreamOptions,
+	options: AgyStreamOptions,
 	events: AssistantMessageEventStream,
 ): Promise<void> {
 	const output: AssistantMessage = {
@@ -335,14 +340,15 @@ async function run(
 		timestamp: Date.now(),
 	};
 	try {
-		const resolved = resolveModel(model.id);
+		const resolved = resolveModel(model.id, options.reasoning);
 		if (!resolved) throw new Error(`Antigravity does not serve ${model.id}`);
 		const apiKey = options.apiKey;
 		if (!apiKey) throw new Error(`No Antigravity credential for ${model.id}. Run /login agy.`);
 
-		const transcript = convertTranscript(context);
+		const transcript = convertTranscript(context, resolved.family.backend);
 		if (transcript.contents.length === 0) throw new Error("Antigravity request has no messages");
 		const project = await projectFor(apiKey, options.signal);
+		const cascadeId = cascadeIdFor(conversation, options.sessionId);
 		const envelope = buildEnvelope({
 			state: conversation,
 			project,
@@ -350,10 +356,11 @@ async function run(
 			tier: resolved.tier,
 			contents: transcript.contents,
 			systemInstruction: transcript.systemInstruction,
-			tools: toToolDeclarations(getCurrentTools(context.messages)),
+			tools: toToolDeclarations(getCurrentTools(context.messages), resolved.family.backend),
 			maxOutputTokens: Math.min(options.maxTokens ?? resolved.family.maxOutputTokens, resolved.family.maxOutputTokens),
-			stopSequences: STOP_SEQUENCES,
-			sessionId: agySessionId(options.sessionId ?? ""),
+			stopSequences: resolved.family.backend === "gemini" ? STOP_SEQUENCES : [],
+			cascadeId,
+			sessionId: agySessionId(options.sessionId || cascadeId),
 		});
 
 		recordRequest(conversation);
@@ -399,7 +406,7 @@ async function run(
 	}
 }
 
-export const stream: StreamFunction<Api, StreamOptions> = (model, context, options) => {
+export const stream: StreamFunction<Api, AgyStreamOptions> = (model, context, options) => {
 	const events = createAssistantMessageEventStream();
 	void run(model, context, options ?? {}, events);
 	return events;
@@ -410,6 +417,7 @@ export const streamSimple: StreamFunction<Api, SimpleStreamOptions> = (model, co
 	if (!apiKey) throw new Error(`No Antigravity credential for ${model.provider}. Run /login agy.`);
 	return stream(model, context, {
 		maxTokens: options?.maxTokens ?? model.maxTokens,
+		reasoning: options?.reasoning,
 		signal: options?.signal,
 		apiKey,
 		sessionId: options?.sessionId,

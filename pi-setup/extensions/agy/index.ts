@@ -1,12 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createProvider } from "@earendil-works/pi-ai";
+import { AGENT_RUNS_CHANNEL, type RunSnapshot } from "../tools/lib/agent-channel";
 import { CACHE_PING_CHANNEL, CACHE_PING_ENTRY, type CachePing } from "../tools/lib/prompt-cache";
 import { agyAuth } from "./auth";
-import { BASE_URL, MODELS, PROVIDER_ID } from "./catalog";
+import { BASE_URL, familyIdOfWireModel, MODELS, PROVIDER_ID } from "./catalog";
 import { KeepAlive, LIFETIME_MS } from "./keep-alive";
 import { fetchQuota, formatQuota, resetProject } from "./quota";
 import { sendKeepAlive, stream, streamSimple } from "./stream";
 import { type Envelope, resetConversation } from "./wire";
+
+function liveRuns(runs: unknown): number {
+	return Array.isArray(runs) ? (runs as RunSnapshot[]).filter((run) => run.status === "queued" || run.status === "running").length : 0;
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.registerProvider(
@@ -31,12 +36,13 @@ export default function (pi: ExtensionAPI) {
 		},
 		ping: async (payload, signal) => {
 			const ctx = current;
-			if (!ctx) return undefined;
+			if (!ctx || ctx.model?.provider !== PROVIDER_ID || familyIdOfWireModel(payload.model) !== ctx.model.id) return undefined;
 			const apiKey = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER_ID);
-			return apiKey ? sendKeepAlive(apiKey, payload, signal) : undefined;
+			if (!apiKey || signal.aborted) return undefined;
+			return sendKeepAlive(apiKey, payload, signal);
 		},
 		warmed: (payload, usage) => {
-			const ping: CachePing = { provider: PROVIDER_ID, model: payload.model, ttlMs: LIFETIME_MS, usage };
+			const ping: CachePing = { provider: PROVIDER_ID, model: familyIdOfWireModel(payload.model) ?? payload.model, ttlMs: LIFETIME_MS, usage };
 			pi.appendEntry(CACHE_PING_ENTRY, ping);
 			pi.events.emit(CACHE_PING_CHANNEL, ping);
 		},
@@ -45,16 +51,25 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		resetConversation();
 		resetProject();
+		conversationRequest = false;
 		current = ctx;
 		keepAlive.reset();
 	});
 	pi.on("session_shutdown", () => {
-		keepAlive.forget();
+		conversationRequest = false;
+		keepAlive.reset();
 		current = undefined;
 	});
 	pi.on("session_compact", () => keepAlive.forget());
 	pi.on("session_tree", () => keepAlive.forget());
-	pi.on("model_select", () => keepAlive.forget());
+	pi.on("model_select", () => {
+		conversationRequest = false;
+		keepAlive.forget();
+	});
+	pi.on("thinking_level_select", () => keepAlive.forget());
+	pi.on("agent_start", () => keepAlive.turn(true));
+	pi.on("agent_settled", () => keepAlive.turn(false));
+	pi.events.on(AGENT_RUNS_CHANNEL, (runs) => keepAlive.backgroundRuns(liveRuns(runs)));
 
 	// Only the agent loop's requests are the conversation: compaction and side calls skip the `context` event.
 	pi.on("context", () => {
@@ -62,11 +77,16 @@ export default function (pi: ExtensionAPI) {
 		return undefined;
 	});
 	pi.on("before_provider_request", (event, ctx) => {
-		const conversation = conversationRequest;
+		if (!conversationRequest) return undefined;
+		if (ctx.model?.provider !== PROVIDER_ID) {
+			conversationRequest = false;
+			return undefined;
+		}
+		const payload = event.payload as Partial<Envelope> | undefined;
+		if (familyIdOfWireModel(payload?.model) !== ctx.model.id) return undefined;
 		conversationRequest = false;
-		if (!conversation || ctx.model?.provider !== PROVIDER_ID) return undefined;
 		current = ctx;
-		keepAlive.request(event.payload as Envelope);
+		keepAlive.request(payload as Envelope);
 		return undefined;
 	});
 	pi.on("message_end", (event) => {

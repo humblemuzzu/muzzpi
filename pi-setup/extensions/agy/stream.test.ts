@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { type AssistantMessage, isRetryableAssistantError, type TranscriptContext } from "@earendil-works/pi-ai";
 import { MODELS } from "./catalog";
 import { STOP_SEQUENCES } from "./framing";
-import { finishOf, stream } from "./stream";
+import { finishOf, stream, streamSimple } from "./stream";
 import { STREAM_URL } from "./wire";
 
 process.env.TZ = "UTC";
 
-const model = MODELS.find((entry) => entry.id === "gemini-4-neon-low")!;
+const model = MODELS.find((entry) => entry.id === "gemini-4-neon")!;
+const claudeModel = MODELS.find((entry) => entry.id === "claude-sonnet-5-5")!;
+const gptModel = MODELS.find((entry) => entry.id === "gpt-oss-120b")!;
 const context = {
 	messages: [
 		{ role: "system", content: "you are pi", timestamp: 0 },
@@ -45,7 +47,7 @@ const finish = (reason: string, finishMessage?: string) => ({ response: { candid
 
 async function reply(...replyFrames: unknown[]): Promise<{ message: AssistantMessage; deltas: string[] }> {
 	frames = replyFrames;
-	const events = stream(model, context, { apiKey: "token", fetch: globalThis.fetch });
+	const events = stream(model, context, { apiKey: "token", reasoning: "low", fetch: globalThis.fetch });
 	const deltas: string[] = [];
 	for await (const event of events) if (event.type === "text_delta") deltas.push(event.delta);
 	return { message: await events.result(), deltas };
@@ -54,13 +56,33 @@ async function reply(...replyFrames: unknown[]): Promise<{ message: AssistantMes
 const textOf = (message: AssistantMessage) => message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
 
 describe("the request", () => {
-	test("carries the stop sequences and agy's frame on the prompt", async () => {
+	test("carries the stop sequences, agy's frame, and routes reasoning to the wire tier", async () => {
 		await reply(text("ok"), finish("STOP"));
-		const request = sent.at(-1)!.body.request;
-		expect(request.generationConfig.stopSequences).toEqual([...STOP_SEQUENCES]);
-		expect(request.contents[0].parts[0].text).toBe(
+		const body = sent.at(-1)!.body;
+		expect(body.model).toBe("gemini-4-neon-low");
+		expect(body.request.generationConfig.stopSequences).toEqual([...STOP_SEQUENCES]);
+		expect(body.request.contents[0].parts[0].text).toBe(
 			"<USER_REQUEST>\ngo\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 1970-01-01T00:00:00Z.\n</ADDITIONAL_METADATA>",
 		);
+
+		frames = [text("ok"), finish("STOP")];
+		const xhigh = streamSimple(model, context, { apiKey: "token", reasoning: "xhigh", fetch: globalThis.fetch });
+		const xmsg = await xhigh.result();
+		expect(sent.at(-1)!.body.model).toBe("gemini-4-neon-xhigh");
+		expect(sent.at(-1)!.body.request.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: 100 });
+		expect(xmsg.providerThinkingLevel).toBe("xhigh");
+
+		frames = [text("ok"), finish("STOP")];
+		await streamSimple(claudeModel, context, { apiKey: "token", reasoning: "high", fetch: globalThis.fetch }).result();
+		expect(sent.at(-1)!.body.model).toBe("claude-sonnet-5-5-high");
+		expect(sent.at(-1)!.body.request.labels.used_claude).toBe("true");
+		expect(sent.at(-1)!.body.request.generationConfig.stopSequences).toBeUndefined();
+
+		frames = [text("ok"), finish("STOP")];
+		await streamSimple(gptModel, context, { apiKey: "token", reasoning: "high", fetch: globalThis.fetch }).result();
+		expect(sent.at(-1)!.body.model).toBe("gpt-oss-120b-medium");
+		expect(sent.at(-1)!.body.request.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingBudget: 8192 });
+		expect(sent.at(-1)!.body.request.labels.used_non_gemini_model).toBe("true");
 	});
 });
 
@@ -75,7 +97,7 @@ describe("a reply that starts writing a turn that is not its own", () => {
 		expect(textOf(message)).toBe("Waiting for the agents.");
 		expect(message.content.some((block) => block.type === "toolCall")).toBe(false);
 		const logged = readFileSync(join(agentDir, "cache", "agy-foreign-turns.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-		expect(logged.at(-1)).toMatchObject({ model: "gemini-4-neon-low", contextTokens: 600_000 });
+		expect(logged.at(-1)).toMatchObject({ model: "gemini-4-neon", contextTokens: 600_000 });
 		expect(logged.at(-1).cut).toStartWith("The following is a <SYSTEM_MESSAGE>");
 	});
 

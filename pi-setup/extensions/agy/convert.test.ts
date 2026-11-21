@@ -202,6 +202,63 @@ describe("contents match the shape agy sends", () => {
 		expect(converted.contents).toEqual([{ role: "user", parts: [{ text: request("hi", 2) }] }]);
 	});
 
+	test("claude replays thinking blocks with signatures and sends tool results under role user", () => {
+		const converted = convertTranscript(
+			transcript([
+				{ role: "system", content: SYSTEM, timestamp: 0 },
+				{ role: "user", content: "read a file", timestamp: 0 },
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "unsigned from gemini" },
+						{ type: "thinking", thinking: "step 1", thinkingSignature: "AAAA" },
+						{ type: "text", text: "reading" },
+						{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } },
+					],
+					timestamp: 0,
+				},
+				{ role: "toolResult", toolCallId: "toolu_1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 0 },
+			]),
+			"claude",
+		);
+		expect(converted.contents).toEqual([
+			{ role: "user", parts: [{ text: request("read a file", 0) }] },
+			{
+				role: "model",
+				parts: [
+					{ text: "step 1", thought: true, thoughtSignature: "AAAA" },
+					{ text: "reading" },
+					{ functionCall: { id: "toolu_1", name: "read", args: { path: "a" } } },
+				],
+			},
+			{
+				role: "user",
+				parts: [{ functionResponse: { id: "toolu_1", name: "read", response: { output: "ok" } } }],
+			},
+		]);
+	});
+
+	test("gpt-oss keeps thinking blocks local and sends tool results under role model", () => {
+		const converted = convertTranscript(
+			transcript([
+				{ role: "system", content: SYSTEM, timestamp: 0 },
+				{ role: "user", content: "read a file", timestamp: 0 },
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "plan" },
+						{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "a" } },
+					],
+					timestamp: 0,
+				},
+				{ role: "toolResult", toolCallId: "call_1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 0 },
+			]),
+			"openai",
+		);
+		expect(converted.contents.map((c) => c.role)).toEqual(["user", "model", "model"]);
+		expect(converted.contents[1]!.parts).toEqual([{ functionCall: { id: "call_1", name: "read", args: { path: "a" } } }]);
+	});
+
 	test("empty turns add no content", () => {
 		const converted = convertTranscript(
 			transcript([
@@ -263,7 +320,7 @@ describe("what is never replayed", () => {
 });
 
 describe("tool declarations", () => {
-	test("one group per tool, upper-case types, unknown keys dropped", () => {
+	test("single tool group matching agy 1.5.14, upper-case types, unknown keys dropped", () => {
 		const read: Tool = {
 			name: "read",
 			description: "Read a file",
@@ -304,10 +361,6 @@ describe("tool declarations", () => {
 							required: ["path"],
 						},
 					},
-				],
-			},
-			{
-				functionDeclarations: [
 					{
 						name: "edit",
 						description: "Edit a file",
@@ -324,6 +377,7 @@ describe("tool declarations", () => {
 				],
 			},
 		]);
+		expect(toToolDeclarations([])).toEqual([]);
 	});
 
 	test("a tool without parameters sends none", () => {
@@ -361,19 +415,20 @@ describe("schema rewrites Gemini requires", () => {
 		expect(toGoogleSchema({ type: "STRING", const: "file" })).toEqual({ type: "STRING", enum: ["file"] });
 	});
 
-	test("a union of real shapes stays anyOf", () => {
+	test("a union of real shapes stays anyOf on Gemini, and drops anyOf on Claude (v1internal 2020-12 bug)", () => {
 		const mixed = {
 			anyOf: [
 				{ type: "object", properties: { a: { type: "string" } } },
 				{ type: "object", properties: { b: { type: "string" } } },
 			],
 		};
-		expect(toGoogleSchema(mixed)).toEqual({
+		expect(toGoogleSchema(mixed, "gemini")).toEqual({
 			anyOf: [
 				{ type: "OBJECT", properties: { a: { type: "STRING" } } },
 				{ type: "OBJECT", properties: { b: { type: "STRING" } } },
 			],
 		});
+		expect(toGoogleSchema(mixed, "claude")).toEqual({});
 	});
 
 	test("a mixed-type literal union is not merged into a wrong type", () => {

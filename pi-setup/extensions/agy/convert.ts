@@ -1,5 +1,6 @@
 import type { Tool, TranscriptContext } from "@earendil-works/pi-ai";
 import { collapseSystemMessages, getInitialSystemMessage, getSystemMessageText, withoutInitialSystemMessage } from "@earendil-works/pi-ai";
+import type { Backend } from "./catalog";
 import { frameUserTurn, withoutForeignTurn } from "./framing";
 import { sanitizeSurrogates } from "./text";
 import type { Content, InlineDataPart, Part, ToolGroup } from "./wire";
@@ -31,15 +32,17 @@ export function agySafeInstruction(text: string): string {
 }
 
 /**
- * Thinking blocks are stored for the UI but never sent back: agy replays only text and tool parts, and the
- * reasoning signature rides on the text part that closed the turn. A reply that failed or was aborted is
- * never replayed (pi's rule for its own providers), nor are the results of the tool calls it held.
+ * Gemini and GPT-OSS keep thinking blocks local and send tool results under `role: "model"`.
+ * Claude on Antigravity (Anthropic Vertex) replays `thought: true` blocks with their signatures and sends
+ * tool results under `role: "user"` (verified against live agy 1.5.14 captures).
+ * Failed or aborted replies and the results of tool calls they held are never replayed.
  */
-export function convertTranscript(context: TranscriptContext): ConvertedTranscript {
+export function convertTranscript(context: TranscriptContext, backend: Backend = "gemini"): ConvertedTranscript {
 	const collapsed = collapseSystemMessages(context);
 	const system = getInitialSystemMessage(collapsed.messages);
 	const contents: Content[] = [];
 	const replayedCalls = new Set<string>();
+	const toolResultRole: "user" | "model" = backend === "claude" ? "user" : "model";
 
 	for (const message of withoutInitialSystemMessage(collapsed.messages)) {
 		if (message.role === "user") {
@@ -65,10 +68,17 @@ export function convertTranscript(context: TranscriptContext): ConvertedTranscri
 			if (message.stopReason === "error" || message.stopReason === "aborted") continue;
 			const parts: Part[] = [];
 			for (const block of message.content) {
-				if (block.type === "thinking") continue;
+				if (block.type === "thinking") {
+					if (backend !== "claude") continue;
+					const signature = usableSignature(block.thinkingSignature);
+					if (!signature) continue;
+					parts.push({ text: sanitizeSurrogates(block.thinking), thought: true, thoughtSignature: signature });
+					continue;
+				}
 				if (block.type === "text") {
 					const signature = usableSignature(block.textSignature);
-					const text = withoutForeignTurn(sanitizeSurrogates(block.text));
+					const sanitized = sanitizeSurrogates(block.text);
+					const text = backend === "gemini" ? withoutForeignTurn(sanitized) : sanitized;
 					if (!text && !signature) continue;
 					parts.push({ text, ...(signature ? { thoughtSignature: signature } : {}) });
 					continue;
@@ -86,8 +96,8 @@ export function convertTranscript(context: TranscriptContext): ConvertedTranscri
 
 		if (message.role !== "toolResult" || !replayedCalls.has(message.toolCallId)) continue;
 
-		// agy sends tool results as a model turn, consecutive results merged into one. The API takes a
-		// user turn as well; this is the form Gemini 4 meets in agy's own conversations.
+		// agy sends Gemini & GPT-OSS tool results under `role: "model"` and Claude tool results under `role: "user"`,
+		// merging consecutive results into one turn.
 		const text = message.content
 			.filter((item) => item.type === "text")
 			.map((item) => item.text)
@@ -107,10 +117,10 @@ export function convertTranscript(context: TranscriptContext): ConvertedTranscri
 			},
 		};
 		const last = contents[contents.length - 1];
-		if (last?.role === "model" && last.parts.some((entry) => "functionResponse" in entry)) {
+		if (last?.role === toolResultRole && last.parts.some((entry) => "functionResponse" in entry)) {
 			last.parts.push(part);
 		} else {
-			contents.push({ role: "model", parts: [part] });
+			contents.push({ role: toolResultRole, parts: [part] });
 		}
 	}
 
@@ -162,7 +172,7 @@ function mergeLiteralUnion(branches: readonly Record<string, unknown>[]): { type
 	return type ? { type, values } : undefined;
 }
 
-export function toGoogleSchema(schema: unknown): Record<string, unknown> | undefined {
+export function toGoogleSchema(schema: unknown, backend: Backend = "gemini"): Record<string, unknown> | undefined {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
 	const source = schema as Record<string, unknown>;
 	const out: Record<string, unknown> = {};
@@ -176,19 +186,19 @@ export function toGoogleSchema(schema: unknown): Record<string, unknown> | undef
 		if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
 			const properties: Record<string, unknown> = {};
 			for (const [name, child] of Object.entries(value as Record<string, unknown>)) {
-				const converted = toGoogleSchema(child);
+				const converted = toGoogleSchema(child, backend);
 				if (converted) properties[name] = converted;
 			}
 			out.properties = properties;
 			continue;
 		}
 		if (key === "items") {
-			const converted = toGoogleSchema(value);
+			const converted = toGoogleSchema(value, backend);
 			if (converted) out.items = converted;
 			continue;
 		}
 		if (key === "anyOf" && Array.isArray(value)) {
-			union = value.map(toGoogleSchema).filter((entry): entry is Record<string, unknown> => entry !== undefined);
+			union = value.map((entry) => toGoogleSchema(entry, backend)).filter((entry): entry is Record<string, unknown> => entry !== undefined);
 			continue;
 		}
 		if (key === "enum" && Array.isArray(value)) {
@@ -209,7 +219,8 @@ export function toGoogleSchema(schema: unknown): Record<string, unknown> | undef
 	if (literal) {
 		out.type = literal.type;
 		out.enum = literal.values;
-	} else if (union && union.length > 0) {
+	} else if (union && union.length > 0 && backend !== "claude") {
+		// v1internal's Gemini-to-Anthropic schema translator produces invalid JSON Schema 2020-12 on non-literal anyOf.
 		out.anyOf = union;
 	}
 	const constant = source.const;
@@ -220,17 +231,18 @@ export function toGoogleSchema(schema: unknown): Record<string, unknown> | undef
 	return out;
 }
 
-export function toToolDeclarations(tools: readonly Tool[]): ToolGroup[] {
-	return tools.map((tool) => {
-		const parameters = toGoogleSchema(tool.parameters);
-		return {
-			functionDeclarations: [
-				{
+export function toToolDeclarations(tools: readonly Tool[], backend: Backend = "gemini"): ToolGroup[] {
+	if (tools.length === 0) return [];
+	return [
+		{
+			functionDeclarations: tools.map((tool) => {
+				const parameters = toGoogleSchema(tool.parameters, backend);
+				return {
 					name: tool.name,
 					description: tool.description,
 					...(parameters ? { parameters } : {}),
-				},
-			],
-		};
-	});
+				};
+			}),
+		},
+	];
 }

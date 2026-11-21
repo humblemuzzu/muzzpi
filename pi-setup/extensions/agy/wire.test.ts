@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { FAMILIES, MODELS, resolveModel } from "./catalog";
+import { getSupportedThinkingLevels, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { FAMILIES, familyIdOfWireModel, MODELS, resolveModel } from "./catalog";
 import { STOP_SEQUENCES } from "./framing";
 import {
 	agySessionId,
 	buildEnvelope,
+	cascadeIdFor,
 	completeCall,
 	keepAliveEnvelope,
 	newWireState,
@@ -16,10 +18,10 @@ const AGY_SESSION_ID = "-3750763034362895579";
 const SESSION = agySessionId("01a1f2a2-d95d-7718-826d-2f920777cbaf");
 
 const AGY_USER_AGENT =
-	"antigravity/cli/1.5.13 (aidev_client; os_type=darwin; arch=arm64; cl=1025641825; auth_method=consumer)";
+	"antigravity/cli/1.5.14 (aidev_client; os_type=darwin; arch=arm64; cl=1026970498; auth_method=consumer)";
 
-function envelopeOf(modelId: string) {
-	const resolved = resolveModel(modelId);
+function envelopeOf(modelId: string, reasoning?: ThinkingLevel) {
+	const resolved = resolveModel(modelId, reasoning);
 	if (!resolved) throw new Error(`missing model ${modelId}`);
 	const state = newWireState();
 	return buildEnvelope({
@@ -31,7 +33,7 @@ function envelopeOf(modelId: string) {
 		systemInstruction: { role: "user", parts: [{ text: "sys" }] },
 		tools: [{ functionDeclarations: [{ name: "read", description: "read", parameters: { type: "OBJECT" } }] }],
 		maxOutputTokens: resolved.family.maxOutputTokens,
-		stopSequences: STOP_SEQUENCES,
+		stopSequences: resolved.family.backend === "gemini" ? STOP_SEQUENCES : [],
 		sessionId: SESSION,
 		now: 1794993179992,
 	});
@@ -43,13 +45,19 @@ describe("wire matches agy byte for byte", () => {
 		expect(USER_AGENT).toBe(AGY_USER_AGENT);
 	});
 
-	test("the session id hashes like agy's: an empty key gives agy's constant, each pi session its own", () => {
+	test("the session id hashes like agy 1.5.14: matches captured cascade_id and gives each pi session its own", () => {
 		expect(agySessionId("")).toBe(AGY_SESSION_ID);
+		expect(agySessionId("a6355a19-2732-4022-9fbf-4c12fdd9290a")).toBe("-5796187971439324348");
 		expect(agySessionId("a")).toBe(BigInt.asIntN(64, 0xaf63dc4c8601ec8cn).toString());
 		expect(SESSION).toMatch(/^-?\d+$/);
 		expect(SESSION).not.toBe(AGY_SESSION_ID);
 		expect(agySessionId("01a1f2a2-d95d-7718-826d-2f920777cbaf")).toBe(SESSION);
 		expect(agySessionId("01a1f25a-0cac-72f8-9d0f-e97b92edf135")).not.toBe(SESSION);
+
+		const state = newWireState();
+		expect(cascadeIdFor(state, "a6355a19-2732-4022-9fbf-4c12fdd9290a")).toBe("a6355a19-2732-4022-9fbf-4c12fdd9290a");
+		expect(cascadeIdFor(state, "chad-1234")).toBe(state.cascadeId);
+		expect(cascadeIdFor(state, undefined)).toBe(state.cascadeId);
 	});
 
 	test("envelope key order is the order agy sends", () => {
@@ -125,6 +133,23 @@ describe("wire matches agy byte for byte", () => {
 		});
 		expect("last_execution_id" in midTurn.request.labels).toBe(false);
 
+		const claudeMidTurn = buildEnvelope({
+			state,
+			project: "p",
+			family: FAMILIES.find((f) => f.id === "claude-sonnet-5-5")!,
+			tier: FAMILIES.find((f) => f.id === "claude-sonnet-5-5")!.tiers[0]!,
+			contents: [
+				{ role: "user", parts: [{ text: "hi" }] },
+				{ role: "model", parts: [{ functionCall: { id: "1", name: "read", args: {} } }] },
+				{ role: "user", parts: [{ functionResponse: { id: "1", name: "read", response: { output: "ok" } } }] },
+			],
+			tools: [],
+			maxOutputTokens: 10,
+			stopSequences: [],
+			sessionId: SESSION,
+		});
+		expect("last_execution_id" in claudeMidTurn.request.labels).toBe(false);
+
 		const newTurn = buildEnvelope({
 			state,
 			project: "p",
@@ -184,34 +209,64 @@ describe("wire matches agy byte for byte", () => {
 		expect(state.calls).toBe(1);
 	});
 
-	test("every model carries agy's id, enum and output ceiling", () => {
-		const expected: Record<string, [string, number, string | number]> = {
-			"gemini-4-carbon-medium": ["MODEL_PLACEHOLDER_M437", 262144, "MEDIUM"],
-			"gemini-4-carbon-high": ["MODEL_PLACEHOLDER_M427", 262144, "HIGH"],
-			"gemini-4-argon-medium": ["MODEL_PLACEHOLDER_M418", 65536, "MEDIUM"],
-			"gemini-4-argon-high": ["MODEL_PLACEHOLDER_M417", 65536, "HIGH"],
-			"gemini-4-hydrogen-low": ["MODEL_PLACEHOLDER_M527", 262144, "LOW"],
-			"gemini-4-hydrogen-medium": ["MODEL_PLACEHOLDER_M526", 262144, "MEDIUM"],
-			"gemini-4-hydrogen-high": ["MODEL_PLACEHOLDER_M525", 262144, "HIGH"],
-			"gemini-4-hydrogen-xhigh": ["MODEL_PLACEHOLDER_M528", 262144, 100],
-			"gemini-4-neon-low": ["MODEL_PLACEHOLDER_M534", 262144, "LOW"],
-			"gemini-4-neon-medium": ["MODEL_PLACEHOLDER_M533", 262144, "MEDIUM"],
-			"gemini-4-neon-high": ["MODEL_PLACEHOLDER_M532", 262144, "HIGH"],
-			"gemini-4-neon-xhigh": ["MODEL_PLACEHOLDER_M535", 262144, 100],
-		};
-		expect(MODELS.map((model) => model.id).sort()).toEqual(Object.keys(expected).sort());
-		for (const [id, [modelEnum, maxOutputTokens, thinkingLevel]] of Object.entries(expected)) {
-			const envelope = envelopeOf(id);
+	test("every family + thinking level maps to agy's wire slug, enum, labels, and thinking config", () => {
+		expect(MODELS.map((model) => model.id)).toEqual([
+			"gemini-4-neon",
+			"gemini-4-carbon",
+			"gemini-4-argon",
+			"gemini-4-hydrogen",
+			"gemini-3.8-flash",
+			"claude-opus-5-5",
+			"claude-sonnet-5-5",
+			"gpt-oss-120b",
+		]);
+		const cases: Array<[string, ThinkingLevel, string, string, number, Record<string, unknown>, string, string]> = [
+			["gemini-4-neon", "low", "gemini-4-neon-low", "MODEL_PLACEHOLDER_M534", 262144, { includeThoughts: true, thinkingLevel: "LOW" }, "false", "false"],
+			["gemini-4-neon", "medium", "gemini-4-neon-medium", "MODEL_PLACEHOLDER_M533", 262144, { includeThoughts: true, thinkingLevel: "MEDIUM" }, "false", "false"],
+			["gemini-4-neon", "high", "gemini-4-neon-high", "MODEL_PLACEHOLDER_M532", 262144, { includeThoughts: true, thinkingLevel: "HIGH" }, "false", "false"],
+			["gemini-4-neon", "xhigh", "gemini-4-neon-xhigh", "MODEL_PLACEHOLDER_M535", 262144, { includeThoughts: true, thinkingLevel: 100 }, "false", "false"],
+			["gemini-4-carbon", "low", "gemini-4-carbon-low", "MODEL_PLACEHOLDER_M438", 262144, { includeThoughts: true, thinkingLevel: "LOW" }, "false", "false"],
+			["gemini-4-carbon", "medium", "gemini-4-carbon-medium", "MODEL_PLACEHOLDER_M437", 262144, { includeThoughts: true, thinkingLevel: "MEDIUM" }, "false", "false"],
+			["gemini-4-carbon", "high", "gemini-4-carbon-high", "MODEL_PLACEHOLDER_M427", 262144, { includeThoughts: true, thinkingLevel: "HIGH" }, "false", "false"],
+			["gemini-4-argon", "low", "gemini-4-argon-low", "MODEL_PLACEHOLDER_M419", 65536, { includeThoughts: true, thinkingLevel: "LOW" }, "false", "false"],
+			["gemini-4-argon", "medium", "gemini-4-argon-medium", "MODEL_PLACEHOLDER_M418", 65536, { includeThoughts: true, thinkingLevel: "MEDIUM" }, "false", "false"],
+			["gemini-4-argon", "high", "gemini-4-argon-high", "MODEL_PLACEHOLDER_M417", 65536, { includeThoughts: true, thinkingLevel: "HIGH" }, "false", "false"],
+			["gemini-4-hydrogen", "low", "gemini-4-hydrogen-low", "MODEL_PLACEHOLDER_M527", 262144, { includeThoughts: true, thinkingLevel: "LOW" }, "false", "false"],
+			["gemini-4-hydrogen", "medium", "gemini-4-hydrogen-medium", "MODEL_PLACEHOLDER_M526", 262144, { includeThoughts: true, thinkingLevel: "MEDIUM" }, "false", "false"],
+			["gemini-4-hydrogen", "high", "gemini-4-hydrogen-high", "MODEL_PLACEHOLDER_M525", 262144, { includeThoughts: true, thinkingLevel: "HIGH" }, "false", "false"],
+			["gemini-4-hydrogen", "xhigh", "gemini-4-hydrogen-xhigh", "MODEL_PLACEHOLDER_M528", 262144, { includeThoughts: true, thinkingLevel: 100 }, "false", "false"],
+			["gemini-3.8-flash", "low", "gemini-3.8-flash-low", "MODEL_PLACEHOLDER_M320", 65536, { includeThoughts: true, thinkingLevel: "LOW" }, "false", "false"],
+			["gemini-3.8-flash", "medium", "gemini-3.8-flash-medium", "MODEL_PLACEHOLDER_M319", 65536, { includeThoughts: true, thinkingLevel: "MEDIUM" }, "false", "false"],
+			["gemini-3.8-flash", "high", "gemini-3.8-flash-high", "MODEL_PLACEHOLDER_M318", 65536, { includeThoughts: true, thinkingLevel: "HIGH" }, "false", "false"],
+			["claude-opus-5-5", "low", "claude-opus-5-5-low", "MODEL_PLACEHOLDER_M400", 128000, { includeThoughts: true, thinkingLevel: "LOW" }, "true", "true"],
+			["claude-opus-5-5", "medium", "claude-opus-5-5-medium", "MODEL_PLACEHOLDER_M401", 128000, { includeThoughts: true, thinkingLevel: "MEDIUM" }, "true", "true"],
+			["claude-opus-5-5", "high", "claude-opus-5-5-high", "MODEL_PLACEHOLDER_M402", 128000, { includeThoughts: true, thinkingLevel: "HIGH" }, "true", "true"],
+			["claude-sonnet-5-5", "low", "claude-sonnet-5-5-low", "MODEL_PLACEHOLDER_M403", 128000, { includeThoughts: true, thinkingLevel: "LOW" }, "true", "true"],
+			["claude-sonnet-5-5", "medium", "claude-sonnet-5-5-medium", "MODEL_PLACEHOLDER_M404", 128000, { includeThoughts: true, thinkingLevel: "MEDIUM" }, "true", "true"],
+			["claude-sonnet-5-5", "high", "claude-sonnet-5-5-high", "MODEL_PLACEHOLDER_M405", 128000, { includeThoughts: true, thinkingLevel: "HIGH" }, "true", "true"],
+			["gpt-oss-120b", "medium", "gpt-oss-120b-medium", "MODEL_OPENAI_GPT_OSS_120B_MEDIUM", 32768, { includeThoughts: true, thinkingBudget: 8192 }, "false", "true"],
+		];
+		for (const [familyId, reasoning, wireModel, modelEnum, maxOutputTokens, thinkingConfig, usedClaude, usedNonGemini] of cases) {
+			const envelope = envelopeOf(familyId, reasoning);
+			expect(envelope.model).toBe(wireModel);
+			expect(familyIdOfWireModel(wireModel)).toBe(familyId);
 			expect(envelope.request.labels.model_enum).toBe(modelEnum);
 			expect(envelope.request.generationConfig.maxOutputTokens).toBe(maxOutputTokens);
-			expect(envelope.request.generationConfig.thinkingConfig.thinkingLevel).toBe(thinkingLevel);
-			expect(envelope.request.labels.used_claude).toBe("false");
-			expect(envelope.request.labels.used_non_gemini_model).toBe("false");
+			expect(envelope.request.generationConfig.thinkingConfig).toEqual(thinkingConfig);
+			expect(envelope.request.labels.used_claude).toBe(usedClaude);
+			expect(envelope.request.labels.used_claude_conservative).toBe(usedClaude);
+			expect(envelope.request.labels.used_non_gemini_model).toBe(usedNonGemini);
+			if (usedNonGemini === "true") expect(envelope.request.generationConfig.stopSequences).toBeUndefined();
+			else expect(envelope.request.generationConfig.stopSequences).toEqual([...STOP_SEQUENCES]);
 		}
+		// Clamping unsupported thinking levels: xhigh on carbon clamps to high; high on gpt-oss clamps to medium.
+		expect(resolveModel("gemini-4-carbon", "xhigh")?.wireModel).toBe("gemini-4-carbon-high");
+		expect(resolveModel("gpt-oss-120b", "high")?.wireModel).toBe("gpt-oss-120b-medium");
+		expect(resolveModel("gemini-4-neon", "minimal")?.wireModel).toBe("gemini-4-neon-low");
 	});
 
 	test("a keep-alive read is the request again, stamped now, labelled, one output token", () => {
-		const envelope = envelopeOf("gemini-4-neon-high");
+		const envelope = envelopeOf("gemini-4-neon", "high");
 		const before = JSON.stringify(envelope);
 		const ping = keepAliveEnvelope(envelope, 1795000000000);
 		expect(JSON.stringify(envelope)).toBe(before);
@@ -226,15 +281,21 @@ describe("wire matches agy byte for byte", () => {
 		expect(Object.keys(ping)).toEqual(Object.keys(envelope));
 	});
 
-	test("no model advertises a level it cannot send", () => {
+	test("each model advertises exactly its supported thinking levels and 5m promptCache for the HUD", () => {
+		const expectedLevels: Record<string, string[]> = {
+			"gemini-4-neon": ["low", "medium", "high", "xhigh"],
+			"gemini-4-carbon": ["low", "medium", "high"],
+			"gemini-4-argon": ["low", "medium", "high"],
+			"gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+			"gemini-3.8-flash": ["low", "medium", "high"],
+			"claude-opus-5-5": ["low", "medium", "high"],
+			"claude-sonnet-5-5": ["low", "medium", "high"],
+			"gpt-oss-120b": ["medium"],
+		};
 		for (const model of MODELS) {
-			const levels = Object.entries(model.thinkingLevelMap ?? {}).filter(([, value]) => value !== null);
-			expect(levels).toHaveLength(1);
-			const tier = model.id.slice(model.id.lastIndexOf("-") + 1);
-			expect(levels[0]![0]).toBe(tier);
-			expect(model.contextWindow).toBe(1_048_576);
-			expect(model.maxTokens).toBeLessThanOrEqual(262144);
-			expect(model.input).toEqual(["text", "image"]);
+			expect(getSupportedThinkingLevels(model)).toEqual(expectedLevels[model.id]!);
+			expect(model.promptCache).toEqual({ short: 300, long: 300 });
+			expect(model.input).toEqual(model.id === "gpt-oss-120b" ? ["text"] : ["text", "image"]);
 		}
 	});
 });
