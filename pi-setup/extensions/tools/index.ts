@@ -27,6 +27,7 @@ import { createRedoEditTool, createUndoEditTool } from "./undo-edit";
 import { createSkillTool } from "./skill";
 import { isLocalProvider } from "./lib/local-providers";
 import { createScreenshotTool } from "./screenshot";
+import { createMplRenderTool } from "./mpl";
 import { createFinderTool } from "./finder";
 import { createOracleTool } from "./oracle";
 import { createDelegateTool } from "./delegate";
@@ -150,6 +151,7 @@ export default function (pi: ExtensionAPI) {
 	// model. permissions.json rejects `screencapture`/`sips -Z` in bash so this
 	// cannot be routed around by hand — see lib/vision.ts for why that matters.
 	pi.registerTool(createScreenshotTool());
+	pi.registerTool(createMplRenderTool());
 	pi.registerTool(createFinderTool({
 		systemPrompt: readAgentPrompt("agent.amp.finder.md"),
 		models,

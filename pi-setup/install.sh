@@ -310,7 +310,7 @@ if command -v npm &>/dev/null; then
     # the copied lockfile stores the file: links relative to the repo checkout, which sits at a different depth
     run install_tool_deps "$TOOLS_DIR" || warn "npm install failed — run it in $TOOLS_DIR by hand"
 else
-    warn "npm not found: tool dependencies not installed; web, screenshot and diff tools will fail"
+    warn "npm not found: tool dependencies not installed; web, screenshot, chart and diff tools will fail"
 fi
 ok "Extensions installed"
 

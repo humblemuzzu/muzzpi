@@ -7,7 +7,7 @@ that research, review and build in parallel. Web, GitHub and screenshot tools.
 Edits you can undo. A TUI built for all-day sessions. And a pi that starts as
 fast as stock, with every patch inside.
 
-**36** tools · **6** sub-agents · **20** MCP servers · **13** skills ·
+**37** tools · **6** sub-agents · **20** MCP servers · **13** skills ·
 **0.24 s** to start with every extension · on stock pi **1.6.0**
 
 ```bash
@@ -209,6 +209,11 @@ Pick by what you need back:
   to Claude's vision limits so small text stays readable. The harness refuses a
   request that would cross the API's 32 MiB limit, which pi does not check and
   which breaks every later turn.
+- **`mpl_render`** charts data from a codemode script through
+  [mpl](https://github.com/ivarvong/mpl), a pixel-exact JS port of matplotlib, in a
+  gruvbox theme that matches the terminal. The agent sees the PNG and fixes what
+  overlaps; files land in `~/.pi/agent/charts/`, with an SVG or a hover-to-read HTML
+  page on request.
 - **`search_sessions`** finds a past conversation; **`read_session`** hands the
   whole of it to one reader model with no tools: every prompt, reply and
   sub-agent answer in full, secrets redacted first.
@@ -430,7 +435,7 @@ muzzpi/
 ├── install.sh              ./install.sh pi | ghostty | herdr-ghostty | herdr-app
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
-│   ├── extensions/         19 extensions; tools/ holds the 31 tools
+│   ├── extensions/         19 extensions; tools/ holds the 33 tools
 │   ├── agents/             system prompt, working rules, sub-agent prompts
 │   ├── agent-models.json   which model each sub-agent runs on
 │   ├── permissions.json    what bash may never do

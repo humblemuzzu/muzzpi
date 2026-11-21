@@ -525,7 +525,9 @@ function scrubJson(value: unknown, scrub: (text: string) => string): unknown {
 	if (typeof value === "string") return scrub(value);
 	if (Array.isArray(value)) return value.map((v) => scrubJson(v, scrub));
 	if (value !== null && typeof value === "object") {
-		return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrubJson(v, scrub)]));
+		// base64 pixels are not text: a pattern matched inside them corrupts the image, which fails the request
+		const image = (value as { type?: unknown }).type === "image" && typeof (value as { data?: unknown }).data === "string";
+		return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, image && k === "data" ? v : scrubJson(v, scrub)]));
 	}
 	return value;
 }

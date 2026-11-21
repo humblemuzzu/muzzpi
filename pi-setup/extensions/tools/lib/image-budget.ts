@@ -93,7 +93,10 @@ export function recordReturnedImages(ctx: any, toolCallId: string, bytes: number
   if (images <= 0) return;
   const key = sessionKey(ctx);
   const calls = pending.get(key) ?? new Map();
-  calls.set(toolCallId, { bytes, images, at: Date.now() });
+  // a codemode script's call (`<script id>/<n>`) reaches the session only inside the script's result
+  const id = toolCallId.split("/")[0]!;
+  const earlier = calls.get(id);
+  calls.set(id, { bytes: bytes + (earlier?.bytes ?? 0), images: images + (earlier?.images ?? 0), at: Date.now() });
   pending.set(key, calls);
 }
 

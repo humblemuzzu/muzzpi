@@ -87,7 +87,7 @@
   },
   "terminal": {
     "clearOnShrink": false,
-    "showImages": false
+    "showImages": true
   },
   "warnings": {
     "anthropicExtraUsage": false

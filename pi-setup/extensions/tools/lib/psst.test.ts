@@ -40,6 +40,13 @@ describe("scrubToolResult", () => {
 		expect("structuredContent" in out!).toBe(false);
 	});
 
+	test("an image block inside structuredContent keeps its pixels; the text beside it is scrubbed", () => {
+		const structured = { image: { type: "image", data: "hunter2", mimeType: "image/png" }, png: "/charts/hunter2.png" };
+		const out = scrubToolResult({ content: [], structuredContent: structured }, scrub) as any;
+		expect(out.structuredContent.image.data).toBe("hunter2");
+		expect(out.structuredContent.png).toBe("/charts/<scrubbed>.png");
+	});
+
 	test("a result with nothing to scrub is left alone", () => {
 		expect(scrubToolResult({ content: [] }, scrub)).toBeUndefined();
 	});

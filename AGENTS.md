@@ -344,6 +344,11 @@ Never make Grok retype posts by default: it streams ~94 tok/s on grok-4.6, so tw
 90 s. X's citations are the ground truth and arrive however little Grok writes. Grok's copy stays
 for `users` and as the fallback when no source loads. A retired model is replaced from `/v1/models`.
 
+**`mpl_render` is codemode-only** (`exposure: "codemode"`, reference in namespace `mpl`); mpl is a
+git dependency pinned by sha in `tools/package.json` (not on npm; its `prepare` builds `dist/`), imported
+on the first chart, never at startup. Its PNG reaches the script inside `structuredContent`, so
+`scrubJson` leaves an image block's `data` alone (a pattern hit corrupts the image and fails the request).
+
 ### Nothing heavy on pi's main thread
 
 - **One thread draws, reads keys and runs tools**: read big files in chunks and yield (`createSlicer`).

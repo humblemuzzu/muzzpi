@@ -94,6 +94,15 @@ describe("measureSession", () => {
     expect(measureSession(ctxWith([]))!.images).toBe(0);
   });
 
+  test("a codemode script's image calls count under the script until the script's result lands", () => {
+    recordReturnedImages(ctxWith([]), "script-1/0", MiB, 1);
+    recordReturnedImages(ctxWith([]), "script-1/1", MiB, 1);
+    expect(measureSession(ctxWith([]))!.images).toBe(2);
+
+    const landed = [{ role: "toolResult", toolCallId: "script-1", content: [] }];
+    expect(measureSession(ctxWith(landed))!.images).toBe(0);
+  });
+
   test("pending images belong to their own session", () => {
     recordReturnedImages(ctxWith([], {}, "session-a"), "call-a", MiB, 2);
     expect(measureSession(ctxWith([], {}, "session-b"))!.images).toBe(0);
