@@ -1,4 +1,4 @@
-import type { Model, ThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { Model, ModelCost, ThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
 export const PROVIDER_ID = "agy";
 export const API_ID = "agy-cloudcode";
@@ -25,12 +25,24 @@ export interface Family {
 	readonly maxOutputTokens: number;
 	readonly input: readonly ("text" | "image")[];
 	readonly defaultTier: TierName;
+	/** List price per 1M tokens; pi's calculateCost turns it into `usage.cost`. */
+	readonly cost: ModelCost;
 	readonly tiers: readonly Tier[];
 }
 
 const level = (value: "LOW" | "MEDIUM" | "HIGH" | 100): WireThinking => ({ kind: "level", value });
 const budget = (value: number): WireThinking => ({ kind: "budget", value });
 
+/**
+ * List prices per 1M tokens (USD), not what the Ultra plan charges. Post-promotion rates:
+ * Gemini 4 Carbon and Argon are $4/$20 from 2026-12-01 (half that before); Gemini 3.8 Flash is
+ * $1.50/$7.50/$0.15 from 2027-01-01 (half that before). Sources: ai.google.dev/gemini-api/docs/pricing,
+ * cloud.google.com/model-garden/pricing, cloud.google.com/model-garden/partner-models/pricing,
+ * platform.claude.com/docs/en/about-claude/pricing. Cache reads are 5% of input on Gemini 4 and Claude,
+ * 10% on Gemini 3.8 Flash ($0.075 on $0.75, $0.15 on $1.50), and full input rate on GPT-OSS, which gets no
+ * Vertex cache discount. Gemini cache writes are not billed today (the SKU starts 2027-01-12) and we never
+ * report one.
+ */
 export const FAMILIES: readonly Family[] = [
 	{
 		id: "gemini-4-neon",
@@ -40,6 +52,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 262_144,
 		input: ["text", "image"],
 		defaultTier: "high",
+		cost: { input: 3, output: 15, cacheRead: 0.15, cacheWrite: 0 },
 		tiers: [
 			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M534", thinking: level("LOW") },
 			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M533", thinking: level("MEDIUM") },
@@ -55,6 +68,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 262_144,
 		input: ["text", "image"],
 		defaultTier: "high",
+		cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
 		tiers: [
 			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M438", thinking: level("LOW") },
 			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M437", thinking: level("MEDIUM") },
@@ -69,6 +83,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 65_536,
 		input: ["text", "image"],
 		defaultTier: "high",
+		cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
 		tiers: [
 			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M419", thinking: level("LOW") },
 			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M418", thinking: level("MEDIUM") },
@@ -83,6 +98,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 262_144,
 		input: ["text", "image"],
 		defaultTier: "high",
+		cost: { input: 1.5, output: 7.5, cacheRead: 0.075, cacheWrite: 0 },
 		tiers: [
 			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M527", thinking: level("LOW") },
 			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M526", thinking: level("MEDIUM") },
@@ -98,6 +114,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 65_536,
 		input: ["text", "image"],
 		defaultTier: "high",
+		cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
 		tiers: [
 			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M320", thinking: level("LOW") },
 			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M319", thinking: level("MEDIUM") },
@@ -112,6 +129,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 128_000,
 		input: ["text", "image"],
 		defaultTier: "high",
+		cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
 		tiers: [
 			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M400", thinking: level("LOW") },
 			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M401", thinking: level("MEDIUM") },
@@ -126,6 +144,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 128_000,
 		input: ["text", "image"],
 		defaultTier: "high",
+		cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
 		tiers: [
 			{ name: "low", title: "Low", modelEnum: "MODEL_PLACEHOLDER_M403", thinking: level("LOW") },
 			{ name: "medium", title: "Medium", modelEnum: "MODEL_PLACEHOLDER_M404", thinking: level("MEDIUM") },
@@ -140,6 +159,7 @@ export const FAMILIES: readonly Family[] = [
 		maxOutputTokens: 32_768,
 		input: ["text"],
 		defaultTier: "medium",
+		cost: { input: 0.09, output: 0.36, cacheRead: 0.09, cacheWrite: 0 },
 		tiers: [{ name: "medium", title: "Medium", modelEnum: "MODEL_OPENAI_GPT_OSS_120B_MEDIUM", thinking: budget(8192) }],
 	},
 ];
@@ -219,7 +239,7 @@ function buildModels(): readonly Model<typeof API_ID>[] {
 		baseUrl: BASE_URL,
 		reasoning: true,
 		input: [...family.input],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		cost: family.cost,
 		promptCache: { short: PROMPT_CACHE_SECONDS, long: PROMPT_CACHE_SECONDS },
 		contextWindow: family.contextWindow,
 		maxTokens: family.maxOutputTokens,
