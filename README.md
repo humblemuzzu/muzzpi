@@ -280,7 +280,7 @@ note. Nothing stops an overnight run on a false alarm.
 | `/goal` | | a long-running goal, audited before it is marked done; `/goal strict <task>` has the agent write it |
 | `/md` | | this chat as markdown, with or without tool calls and thinking |
 | `/deepseek` | | DeepSeek peak and off-peak clock |
-| `/local` | | run a local model through llama.cpp |
+| `/local` | | run a local model (Inkling 2 Mini) through Ollama |
 | `/psst` | | the secrets vault: names, add a secret, which ones the agent gets |
 | `/resume` | `Ctrl+B` | pin a session to the top |
 

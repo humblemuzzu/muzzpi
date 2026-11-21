@@ -55,7 +55,7 @@ loader level turns one off.
 | `notify.ts` | Desktop notification when the agent finishes (OSC 777) |
 | `command-palette/` | `/help` or `Ctrl+Shift+P` — every command, shortcut and skill in one searchable list; enter runs ours and types pi's own into the prompt |
 | `agents-ui/` | The background agents on screen: a dock above the editor while any run (`↓` on an empty editor to manage, `s` steer, `c` continue, `x` stop, `X` twice stops all), a full-screen view of one agent's conversation where typing steers or continues it (`Enter`, or `/agents <id>`), and `/agents` / `Ctrl+Shift+A` for the whole list |
-| `local-model.ts` | `/local` — start/stop the llama.cpp router and load/unload its model, without blocking pi |
+| `local-model.ts` | `/local` — load a local model into Ollama and switch to it; `/local off` frees it and switches back |
 | `deepseek-peak/` | `/deepseek` — a peak/off-peak pricing clock in the editor border (Chinese public holidays are off-peak); `/deepseek off` is remembered. Its rules also price every DeepSeek reply made in peak hours at 2× |
 | `guardrails/` | Comment gate on `edit` / `write` (the behaviour rules themselves ship in the system prompt, not here) |
 | `theme-studio/` | `/theme`, `Ctrl+Shift+K` — live-preview a pi theme and the Ghostty theme/font/size; Esc reverts, Enter keeps; `/theme <name>` switches the pi theme directly |
@@ -123,7 +123,7 @@ one openrouter model (`z-ai/glm-5.3-flash`).
 | `deepseek` | `$DEEPSEEK_API_KEY` |
 | `river` | `$RIVER_API_KEY`; models.json sets `supportsDeveloperRole: false` because River accepts the `developer` role and silently drops it |
 | `openrouter`, `xai`, `openai-codex`, `kimi-coding` | `/login`; xai/codex/kimi models are in the catalog but not in `enabledModels` |
-| `llama-local` (`LFM2.5-2.6B`) | local llama.cpp router, managed via `/local` |
+| `ollama` (`inkling-2-mini:26b-a5b-nvfp4`) | the Ollama app on this Mac, managed via `/local` |
 
 ### Themes (`themes/`)
 gruvbox (active), nightowl, catppuccin-mocha, black-metal.
@@ -170,7 +170,6 @@ pi-setup/
 ├── build-extensions.ts         # Bundles each extension into one .js (run by install.sh)
 ├── verify-patches.sh           # Read-only audit of every patch/config
 ├── slim-sessions.ts            # Shrinks session files: drops images or slims kept sub-agent chats (--dry first)
-├── llama-local.sh              # Starts the llama.cpp router /local uses
 ├── cache-diag.py  cache-report.py  edit-scoreboard.py   # prompt-cache and edit diagnostics
 ├── extensions/                 # 19 extensions; tools/ holds the 31 tools (tests: bun test)
 │   ├── editor/                 # Custom TUI editor + cache line

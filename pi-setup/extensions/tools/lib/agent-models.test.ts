@@ -340,7 +340,7 @@ describe("following the main session's model", () => {
 	});
 
 	test("a local main model is not followed, and `main` without one is refused only when named", () => {
-		const local = { model: { provider: "llama-local", id: "LFM2.5-2.6B" }, source: "main" as const };
+		const local = { model: { provider: "ollama", id: "inkling-2-mini:26b-a5b-nvfp4" }, source: "main" as const };
 		expect(resolveRoute(config, "oracle", {}, catalog(), false, local)).toEqual({ model: "anthropic/claude-sonnet-5-5", thinking: "high" });
 		const none = { model: undefined, source: "main" as const };
 		expect(resolveRoute(config, "oracle", {}, catalog(), false, none)).toEqual({ model: "anthropic/claude-sonnet-5-5", thinking: "high" });

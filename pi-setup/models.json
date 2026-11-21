@@ -89,13 +89,13 @@
         }
       }
     },
-    "llama-local": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
       "api": "openai-completions",
-      "apiKey": "llama",
+      "apiKey": "ollama",
       "compat": {
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false,
+        "supportsReasoningEffort": true,
         "supportsStore": false,
         "supportsStrictMode": false,
         "supportsUsageInStreaming": true,
@@ -103,30 +103,22 @@
       },
       "models": [
         {
-          "id": "LFM2.5-2.6B",
-          "name": "🧪 LFM2.5-2.6B — local (llama.cpp Q6_K)",
+          "id": "inkling-2-mini:26b-a5b-nvfp4",
+          "name": "🧪 Inkling 2 Mini — local (Ollama MLX NVFP4)",
           "reasoning": true,
           "input": [
-            "text"
+            "text",
+            "image"
           ],
-          "contextWindow": 65536,
-          "maxTokens": 16384,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
-        },
-        {
-          "id": "Qwen3.8-27B-Uncensored",
-          "name": "🧪 Qwen3.8-27B-Uncensored — local (llama.cpp Q4_K_M)",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "contextWindow": 32768,
-          "maxTokens": 8192,
+          "contextWindow": 131072,
+          "maxTokens": 32768,
+          "thinkingLevelMap": {
+            "off": "none"
+          },
+          "samplingParams": {
+            "temperature": 1.0,
+            "top_p": 1.0
+          },
           "cost": {
             "input": 0,
             "output": 0,

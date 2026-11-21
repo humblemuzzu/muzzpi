@@ -74,7 +74,8 @@
     "agy/gemini-4-neon-low",
     "agy/gemini-4-neon-medium",
     "agy/gemini-4-neon-high",
-    "agy/gemini-4-neon-xhigh"
+    "agy/gemini-4-neon-xhigh",
+    "ollama/inkling-2-mini:26b-a5b-nvfp4"
   ],
   "steeringMode": "all",
   "followUpMode": "all",

@@ -54,7 +54,7 @@ pi CLI (v1.6.0) — @earendil-works/pi-coding-agent
   ├─ openrouter                       → /login (auth.json)
   ├─ deepseek                         → DEEPSEEK_API_KEY in ~/.zshrc
   ├─ river                            → RIVER_API_KEY in ~/.zshrc
-  └─ llama-local                      → llama.cpp via /local
+  └─ ollama                           → the Ollama app via /local
 ```
 
 Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
@@ -257,7 +257,7 @@ holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
 | `editor/` | box-drawn editor, clipboard image paste, one meta row below (cache, `setStatus` texts, diff); `/hud` / Ctrl+Shift+I opens the detail view. Labels take `priority` (narrow drops lowest) and `when: "idle"\|"detail"`. Values stay plain text (the user reads them); colour only for an alert |
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent). Chinese public holidays are off-peak: `peak.ts` `CHINA_HOLIDAYS` needs each November's State Council notice |
 | `agents-ui/` | the background agents on screen: a dock under the editor (one grey line; `/agents dock line\|full\|off`), `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
-| `local-model.ts` | `/local` llama.cpp router; bare system prompt for `llama-local` and `llama.cpp` |
+| `local-model.ts` | `/local` loads an `ollama` model and switches to it; bare system prompt for `ollama` and `llama.cpp` |
 | `agy/` | provider `agy`: Gemini 4 Carbon/Argon/Hydrogen/Neon on Gemini Code Assist's `v1internal` API through agy's own OAuth client. `/login agy` imports the keychain item agy writes (`security find-generic-password -s gemini -a antigravity`), else runs the browser flow. **agy's OAuth client id and secret are never in this repo** (it is public): `client.ts` reads them from the installed agy binary and caches the pair that refreshes in `~/.pi/agent/agy-client.json` (0600). Wire rules that break silently: `sessionId` is a JSON **string**, the signed FNV-1a-64 of pi's session id (`agySessionId`; agy sends the hash of an empty key, `-3750763034362895579`); proxies measured cache affinity keyed on it, so never share one across conversations; tool results are `model` turns, and **their images go in `functionResponse.parts`, never inside `response`** (there Gemini bills the base64 as text and never sees the image); a `thoughtSignature` must be echoed verbatim; thinking blocks are never sent back; tool schemas are rewritten (upper-case types, unknown keys dropped, `const` and literal unions folded into `enum`). **Every user-role turn wears agy's own frame** (`framing.ts`, agy's wording byte for byte): typed prompts a `<USER_REQUEST>` plus agy's local-time `<ADDITIONAL_METADATA>`, agent, bash-job and `/ysk` results a `<SYSTEM_MESSAGE>`, goal nudges an `<EPHEMERAL_MESSAGE>`, pi's summaries and `!` output as written. The frame is read from the text alone, so **a new sender of a model-visible message must open with a constant `framing.ts` knows** (`agent-channel.ts`, `injected-prompts.ts`), or it goes out as the user's request. Neon will not write agy's frames, but it copied pi's old `[Automated …]` lines into invented agent reports: a reply line opening a foreign turn is cut (stop sequences, a stream guard that logs to `cache/agy-foreign-turns.jsonl`, and again on replay), and failed or aborted replies are never replayed. Every finish but `STOP`, `MAX_TOKENS` and `CONTINUATION` is an error; a transient one (`MALFORMED_*` …) ends in "try your request again", the wording pi's retry resends. **agy self-updates, so `wire.ts` `USER_AGENT` and the model tiers drift with it**: after an agy update, re-capture its user-agent and any new tier's `model_enum` through the logging proxy and bump both. **pi's `<docs>` index line alone turns a turn into `429 RESOURCE_EXHAUSTED`**, so that section is replaced with one sentence (`agySafeInstruction`) — never send the raw section, and do not read the 429 as quota: `/agy-quota` stays at 100%. `/agy-quota` reads both plan pools; `PI_AGY_PAYLOAD_LOG=<file>` dumps each request. **Gemini 4's cache has no fixed lifetime** (an unread entry was gone after 45 s once and alive after 300 s once): `keep-alive.ts` re-sends the last conversation request with one output token and agy's `prompt_cache_keep_alive` label 30 s after each reply or read, never beside a request, idle or not (most replies come 1-5 minutes later), until the reads cost two-thirds of one rebuild at Gemini 4's 5% cache price, which the plan's quota follows (on real gaps a full rebuild's worth of reads cost more than it saved); a failed read is retried once, and two reads in a row that find the cache gone stop it for the session. Parent and children |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
@@ -623,12 +623,10 @@ edit there, deployed by `install.sh`, read at session start.
 
 ## Local models
 
-**llama.cpp must be >= b10270** (older builds mangle `lfm2` tool calls). Check
-`llama-server --version` first if local tool calling goes strange; compare the
-build number (`0.6.0 (build 11429)`).
-
-pi's `/llama` uses provider `llama.cpp` (`/login llama.cpp`); ours is `/local` + provider
-`llama-local` (no login, always listed, no auto-start). For those two providers only,
+Ours is `/local` + provider `ollama` (models.json, no login; the Ollama app, opened on demand);
+pi's `/llama` uses provider `llama.cpp`. **Ollama's OpenAI endpoint ignores `num_ctx`**: the
+context is the server's (`ollama ps`), so a model's `contextWindow` must not exceed it. Inkling 2
+Mini needs Ollama >= 0.40.17. For those two providers only,
 `local-model.ts` **replaces** the system prompt with a short tool crib and skips the rules
 section. **Do not widen those two provider gates.** Local models loop for minutes on
 self-directed work — always time them out. Gotchas: it's `ctx.hasUI`, not `ctx.canPrompt`

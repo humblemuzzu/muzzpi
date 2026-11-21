@@ -4,5 +4,5 @@
  * do not widen this gate.
  */
 export function isLocalProvider(provider: string | undefined): boolean {
-	return provider === "llama-local" || provider === "llama.cpp";
+	return provider === "ollama" || provider === "llama.cpp";
 }
