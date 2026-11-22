@@ -49,7 +49,8 @@ Write the one-line rule and delete whatever it supersedes.
 
 ```
 pi CLI (v1.6.0) — @earendil-works/pi-coding-agent
-  ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)   [DEFAULT]
+  ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)
+  ├─ agy (agy/ extension)             → /login agy               [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
   ├─ deepseek                         → DEEPSEEK_API_KEY in ~/.zshrc
@@ -57,7 +58,7 @@ pi CLI (v1.6.0) — @earendil-works/pi-coding-agent
   └─ ollama                           → the Ollama app via /local
 ```
 
-Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
+Default: `agy` / `gemini-4-neon`, thinking `high`, theme gruvbox,
 `cacheWarming: "off"` (`prompt-cache` owns warming), `tuiMode: "fullscreen"`,
 `quietStartup: "header"` (`"regular"` restores normal scrollback), `markdown.mermaid: "final"`
 (`"streaming"` lexes the whole reply again every frame).

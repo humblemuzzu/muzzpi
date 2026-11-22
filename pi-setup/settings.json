@@ -3,8 +3,8 @@
   "hideThinkingBlock": true,
   "defaultThinkingLevel": "high",
   "theme": "gruvbox",
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-5-5",
+  "defaultProvider": "agy",
+  "defaultModel": "gemini-4-neon",
   "skills": [
     "~/.config/agents/skills"
   ],
