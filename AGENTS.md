@@ -344,7 +344,9 @@ Never make Grok retype posts by default: it streams ~94 tok/s on grok-4.6, so tw
 for `users` and as the fallback when no source loads. A retired model is replaced from `/v1/models`.
 
 **`mpl_render` is codemode-only** (`exposure: "codemode"`, reference in namespace `mpl`); mpl is a
-git dependency pinned by sha in `tools/package.json` (not on npm; its `prepare` builds `dist/`), imported
+git dependency pinned by sha in `tools/package.json` (not on npm; its `prepare` builds `dist/` while npm packs it;
+**keep `tools/.npmrc` `allow-git=root`**: npm 12 refuses git dependencies without it, and the npm 12 warning that
+mpl's `prepare` was blocked is harmless), imported
 on the first chart, never at startup. Its PNG reaches the script inside `structuredContent`, so
 `scrubJson` leaves an image block's `data` alone (a pattern hit corrupts the image and fails the request).
 
