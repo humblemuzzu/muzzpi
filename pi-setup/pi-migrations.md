@@ -26,6 +26,21 @@ file would have silently reverted an upstream feature or fix.
   of bdsqqq's `desloping-code-changes` (ed716e5; bdsqqq/dots has no LICENSE, so nothing copied); the rest is
   still cursor's text bar title. No upstream change: c-sqr, mat-design, mat-tdd, chrome-cdp, dig, review,
   userinterface-wiki. pi 1.6.1 is npm latest.
+- goal: pi-codex-goal 0.7.7 → 0.7.11. Ported: `create_goal` rejects unknown fields under every budget policy
+  (#142), `isRetryableTransientError` delegates to pi-ai's `isRetryableAssistantError`, `/goal copy` uses pi's
+  `copyToClipboard` (lazy `import()`, which pi's jiti resolves; a static import breaks bun tests in the goal dir)
+  and `replaceControlCharacters` (#134). Not ported: ceee827, upstream's Oxlint/Oxfmt reformat (no behaviour
+  listed in its release). Upstream's 0.7.11 suite: old 90/155, new 91/155, failure list only lost
+  "isRetryableTransientError mirrors host retry classification".
+- searchd 0.6.0 on ripgrep 16.0.0's crate set (ignore 0.4.35, globset 0.4.22, grep-matcher 0.1.10, grep-regex
+  0.1.15, grep-searcher 0.1.18, grep-printer 0.3.2, same versions as rg 16's `Cargo.lock`); those crates need
+  Rust 1.96, so `rust-version` and `install.sh`'s gate moved with them. searchd 0.5.1 already matched rg 16 on
+  its selftest (1296 matched, 0 differed); `cargo test` on 0.6.0: 102 passed.
+- tools deps: playwright-core ^1.65.1 (drives the installed Chrome; example.com captured), mpl 689ebd4 →
+  8befb5c (fill_between where/step, log base, set_axis_off; bar and spine setters now reject extra arguments
+  instead of dropping them). mpl still declares `node >=24`, as the old pin did; it runs on 22.
+- Toolchain: nvm Node 22.23.3 → 22.23.5 (default alias; globals reinstalled at the same versions), Homebrew
+  node 26.13.1, ripgrep 16.0.0, gh 2.106.0, git 2.56.1, bun 1.4.5.
 
 ## 1.6.1 (2026-11-26) — from 1.6.0, one core patch and two speed shas re-derived
 
