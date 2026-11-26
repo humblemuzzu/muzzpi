@@ -12,6 +12,34 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## 1.6.1 (2026-11-26) — from 1.6.0, one core patch and two speed shas re-derived
+
+**Patch drift (registry tarballs, stock 1.6.0 vs 1.6.1):** six core patch files identical. `session-manager.js`
+changed in two places outside our fast `/resume` region (`buildSessionContext` pushes in a loop instead of a
+spread, #12154 stack overflow past ~120k entries; `loadEntriesFromFile` scans only new text per read, #12224);
+`git merge-file` gave 0 conflicts and our hunks byte-identical. pi-tui `utils.js` unchanged (width patch as is).
+Speed patches: `markdown.js` (unclosed `$` before a digit is no longer pending math) and `interactive-mode.js`
+changed elsewhere; every anchor still unique, new stock sha256s only; `marked` still 18.0.11.
+
+**Checked, nothing to do:** `after_provider_response` now fires on 4xx/5xx and each retry (Anthropic, OpenAI,
+Google, openai-completions): `editor` returns on non-2xx, `anthropic-sub` only reads plan headers.
+`showCacheMissNotices` became `notices.*`: unused by us. `createOutputFileStream` changed shape and MCP's
+`toModelContent` moved to pi-mcp: our bash and `mcp-index.js` use neither. RPC JSONL reader rewritten (same
+line semantics), `killTrackedDetachedChildren` new only on Windows. `getProviderAuthStatus` changed;
+`hasConfiguredAuth` did not. Anthropic keeps `$schema` on non-strict tool schemas (canary still plan).
+`setEditorText`/`pasteToEditor` now repaint. Catalog dropped `opencode-go/longcat-2.0`, `longcat-2.5-free`
+(and `glm-5.2` was already gone): removed from `opencode-scope.json`. Bundle recipe and esbuild unchanged.
+Type check (tsc 5.9, every extension): 0 new errors in our code vs 1.6.0.
+
+**A live pi loses its bundle chunks in an update:** `npm install -g` replaces the package dir, and the
+builder keeps only the previous build's chunks, so the `install.sh` rebuild after the update pruned 1.6.0's
+(38 files). Restored from the backup (`cp -Rn`) for the session running the update; restart open sessions.
+
+**Verified:** staged in `/tmp` first (verify 27/27, tests 3,084 / 0 fail, smoke on Opus and DeepSeek, canary
+4/4, write + edit + `finder`), then the `update-pi.sh` steps by hand, `install.sh pi`, verify 27/27, smoke
+(`anthropic/claude-opus-5-5`), canary 4/4, tests, write + edit + `finder` on `deepseek-flash`.
+Backup: `~/pi-update-backup-1.6.0-20261126-112335`.
+
 ## 1.6.0 (2026-11-20) — from 1.5.2, five core patches, the width patch and three speed shas re-derived
 
 **Patch drift (registry tarballs, stock 1.5.2 vs 1.6.0):** `keybindings.js`, `session-selector-search.js`

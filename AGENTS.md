@@ -48,7 +48,7 @@ Write the one-line rule and delete whatever it supersedes.
 ## Providers and defaults
 
 ```
-pi CLI (v1.6.0) — @earendil-works/pi-coding-agent
+pi CLI (v1.6.1) — @earendil-works/pi-coding-agent
   ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)  [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
@@ -132,7 +132,7 @@ bash pi-setup/verify-patches.sh     # read-only audit; each FAIL prints its fix
 | `resource-loader.js` | pi core `dist/core/` | suppresses extension tool-conflict boot errors |
 | `session-selector.js` + `keybindings.js` | pi core | session pinning, `Ctrl+B` in `/resume`; pins in `~/.pi/agent/pinned-sessions.json` (user data) |
 | `session-manager.js` + `session-selector-search.js` | pi core | fast `/resume`: a tool result is counted without being decoded, each file's info cached by size+mtime, a keystroke that extends the query re-matches only the last matches; the list, matches and order stay stock's |
-| `model-selector.js` | pi core `dist/modes/interactive/components/` | the `/model` picker's third scope, **opencode**: it lists only the ids in `<agent dir>/opencode-scope.json` (source `pi-setup/opencode-scope.json`, copied by `install.sh`; 24 allowed Zen ids + all 34 Go ids). That allowlist is why `enabledModels` can stay short — the opencode models are not in it, and without the file the picker has stock's two scopes. `Tab` cycles all → scoped → opencode |
+| `model-selector.js` | pi core `dist/modes/interactive/components/` | the `/model` picker's third scope, **opencode**: it lists only the ids in `<agent dir>/opencode-scope.json` (source `pi-setup/opencode-scope.json`, copied by `install.sh`; a curated list of OpenCode Go ids, each one in pi's catalog). That allowlist is why `enabledModels` can stay short — the opencode models are not in it, and without the file the picker has stock's two scopes. `Tab` cycles all → scoped → opencode |
 | `mcp-index.js` | pi core `dist/extensions/mcp/index.js` | lazy MCP connect (stock connects every enabled server at every session start); a server's `idleTimeout` (s) closes its transport when unused |
 | **pi-tui width patch** | **every** pi-tui copy | conservative grapheme widths; without it the TUI smears on Indic/exotic unicode |
 | **our bundle** | `dist/muzzpi-bundle/`, `pi` → its launcher `pi` | what pi runs: the patched files, bundled; stale after any change to them. The launcher sets `MallocLargeCache=0` (macOS kept ~640 MB of freed buffers per long session) for pi alone: `cli.js` drops it, so nothing pi runs inherits it |
@@ -155,7 +155,8 @@ the patched `dist/` (~45% faster to start than `dist/cli.js`).
   `verify-patches.sh` fails a stale build. Rollback: `ln -sfn "$PI_PKG/dist/cli.js" "$PI_BIN"`.
 - A pi whose recipe or esbuild differs from `UPSTREAM` is refused (exit 3, pi
   stays on `dist/cli.js`): re-derive, then `port-harness/bundle-fidelity.mjs`.
-- Rebuilds keep the previous chunks (a live pi imports them lazily). esbuild
+- Rebuilds keep only the previous build's chunks (a live pi imports them lazily); a pi update's
+  `npm install -g` deletes them all, so restart every open pi session after updating. esbuild
   loads by path: `~/node_modules` holds an older one that a lookup finds.
 - Extensions get pi's virtual modules: locate pi's files with `tools/lib/pi-package-dir.ts`.
 
@@ -309,7 +310,7 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
   instead of sending); a setting a command changes is saved (new ones in `lib/prefs.ts`); retired
   names stay in `tools/retired-commands.ts`; shortcuts reach `/help` only through
   `contributeHelp`. pi: `ui.input` never shows its placeholder (`askText`),
-  `setEditorText` does not repaint, `sendUserMessage` runs a command only with
+  `sendUserMessage` runs a command only with
   `expandPromptTemplates: true`, and a command handler is awaited before the next prompt.
 
 ## Custom tools

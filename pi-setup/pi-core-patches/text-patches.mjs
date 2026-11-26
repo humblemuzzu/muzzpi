@@ -61,7 +61,7 @@ export const PATCHES = [
 		test: "cd pi-setup/extensions/tools && bun test markdown-stream.test.ts",
 		package: "@earendil-works/pi-tui",
 		file: "dist/components/markdown.js",
-		stock: "88a6fd1b0388719335b38e6bdf614e2e5a8f68ccddcc5d0307b20146e768db88",
+		stock: "8683237641521f92a0538e1411e7ecbf5cd9734be49eb0bb68760c45bdefbe92",
 		requires: { marked: "18.0.11" },
 		edits: [
 			["const markdownParser = new Marked();\n", `${MARKDOWN_LEX}const markdownParser = new Marked();\n`],
@@ -112,7 +112,7 @@ export const PATCHES = [
 		test: "cd pi-setup/extensions/tools && bun test core-patches.test.ts",
 		package: "@earendil-works/pi-coding-agent",
 		file: "dist/modes/interactive/interactive-mode.js",
-		stock: "8c98aa79a90070c5df772b308fcfe3643656ebcd6fc909b52c25a6aa98153129",
+		stock: "adc2c4563d40aaead264f68e1a197ea53ea72e950d23362630ed75ceb6df3521",
 		edits: [
 			[
 				"component.updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs });",
