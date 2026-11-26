@@ -1,6 +1,6 @@
 ---
 name: c-sqr
-description: "strict quality review (cursor). harsh maintainability critique of a branch diff — abstraction quality, oversized files (>1k lines), spaghetti conditionals, and 'delete-the-complexity' restructurings. invoke explicitly when you want a demanding structural review of changes. not a bug hunt."
+description: "strict quality review (cursor) and de-slop pass. harsh maintainability critique of a branch diff — abstraction quality, oversized files (>1k lines), spaghetti conditionals, 'delete-the-complexity' restructurings — where every deletion must show what it would break. invoke explicitly for a demanding structural review or slop cleanup of changes. not a bug hunt."
 ---
 
 # Strict Code Quality Review
@@ -131,6 +131,18 @@ When you identify a code-quality problem, prefer suggestions like:
 Do not be satisfied with "maybe rename this" feedback when the real issue is structural.
 Do not be satisfied with a merely cleaner version of the same messy idea if there is a plausible path to a much simpler idea.
 
+## Before Deleting Anything
+
+Ambition about deletion is how slop gets in too: an agent removes something that looked redundant and was holding real behavior. Every removal, merge or "this is slop" finding needs evidence, not a resemblance.
+
+- **Show what it would break.** Read the owner and its consumers, name the case the construct might be serving, then check that case: trace it in the source or run it. Looking like another helper, or having a vague name, is not proof of redundancy.
+- **Label confidence the way `review` does.** VERIFIED (traced or run), HUNCH (an interpretation not yet checked), or QUESTION (a product decision only the user can make). For each consequential finding, say what would disprove it and whether that check ran.
+- **Keep what earns its place, and say why.** A wrapper with no styling can still keep text flowing inline; a class repeated from a shared default can be a deliberate exception for narrow screens; an option can exist because the underlying primitive needs it. A pass that deletes both the redundant prop and the necessary wrapper failed.
+- **Comments:** delete narration of obvious code and leftover agent or process notes; keep a short comment that states a non-obvious constraint.
+- **Stay on the diff.** No drive-by renames, formatting churn, unrelated fixes, or rewrites of another author's work. A new helper must remove real duplication or own a real responsibility, not just move lines.
+- **No quota.** An unchanged diff is a valid result. Finish when every candidate is accepted with evidence, rejected, or reported as unresolved.
+- **When asked to edit, not just review:** keep behavior identical unless a behavior change was requested, run the narrowest check that exercises each accepted edit, and report what remains unproven. Reading well is not proof that it works.
+
 ## Review Tone
 
 Be direct, serious, and demanding about quality.
@@ -189,3 +201,7 @@ Treat these as presumptive blockers unless the author can justify them clearly:
 - the PR duplicates an existing helper or puts logic in the wrong layer when there is a clear canonical home
 
 If those conditions are not met, leave explicit, actionable feedback and push for a cleaner decomposition.
+
+## Provenance
+
+Everything except "Before Deleting Anything" is cursor's `cursor-team-kit/skills/thermo-nuclear-code-quality-review` (cursor/plugins, last touched upstream in `6e3d2ea`), unchanged apart from the frontmatter and the title (upstream: "Thermo-Nuclear Code Quality Review"). "Before Deleting Anything" is written for this setup from the ideas in bdsqqq's `desloping-code-changes` skill (bdsqqq/dots `ed716e5`).

@@ -181,11 +181,12 @@ The last open tab can't be closed; `about:blank` stays.
 |---|---|---|
 | `evaluate_script` | `{pageId, function:"async () => {…}", args?:[uid], waitForStableDom?, format?:"function"\|"script", filePath?}` | **the workhorse.** Returns text with a json fence. Parse: `JSON.parse(t.replace(/^[\s\S]*?\`\`\`json\n/,"").replace(/\`\`\`[\s\S]*$/,""))`. The return value must be JSON-serialisable. Put sleeps inside the function |
 | `take_snapshot` | `{pageId, verbose?}` | a11y tree with `uid=1_5` per element. **uids belong to the latest snapshot only**; take a new one after navigation |
-| `get_css_styles` | `{pageId, uid}` | matched rules, cascade, custom props for one element. Needs a fresh uid |
-| `take_screenshot` | `{pageId, fullPage?, uid?, format?:"png"\|"jpeg"\|"webp", quality?}` | viewport by default, 2× DPR. `fullPage:true` + `format:"jpeg", quality:60` is cheap for long pages. Element-only with `uid` |
+| `get_css_styles` | `{pageId, uid, computedProperties?:["position","z-index",…]}` | **Computed styles first** (variables resolved: `color: var(--brand)` → `rgb(1, 2, 3)`), then matched rules, cascade, custom props for one element. `computedProperties` adds kebab-case properties no rule set. Needs a fresh uid |
+| `take_screenshot` | `{pageId, fullPage?, uid?, format?:"png"\|"jpeg"\|"webp", quality?, omitBackground?}` | viewport by default, 2× DPR. `fullPage:true` + `format:"jpeg", quality:60` is cheap for long pages. Element-only with `uid`. `omitBackground:true` drops the default white for a transparent PNG/WebP (CSS backgrounds stay; ignored for JPEG) |
 | `list_network_requests` | `{pageId, resourceTypes?:["font","image","stylesheet",…], pageSize?, pageIdx?}` | the fastest way to list every font and image URL. `pageIdx` is ignored unless `pageSize` is set |
 | `get_network_request` | `{pageId, reqid?}` | headers and body |
 | `list_console_messages` / `get_console_message` | `{pageId, types?}` / `{pageId, msgid}` | |
+| `set_logpoints` | `{pageId, logpoints:["<url>:<line>[:<col>] <expr>"]}` | e.g. `"http://localhost:3000/app.js:2 'total:', total"`. Sets the **whole** list (`[]` clears); logs land in `list_console_messages` each time the line runs and survive reloads. Source-map paths like `src/app.ts:42` work |
 
 `filePath` / `requestFilePath` / `responseFilePath` / `sourcePath` only accept paths **inside the MCP's configured workspace roots**. `/tmp` is denied with an "Access denied … not within any of the configured workspace roots" text error. Return data inline instead, and save it with bash or `tools.write`.
 

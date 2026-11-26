@@ -7,7 +7,7 @@
       "idleTimeout": 600,
       "args": [
         "-y",
-        "chrome-devtools-mcp@1.12.0",
+        "chrome-devtools-mcp@1.14.0",
         "--isolated",
         "--no-usage-statistics",
         "--no-performance-crux"

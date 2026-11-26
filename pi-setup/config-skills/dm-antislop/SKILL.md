@@ -7,6 +7,9 @@ description: "install or update dmmulroy's anti-slop Oxlint plugin in a TypeScri
 
 Anti-slop is vendored code: the target repository owns its rules, diagnostics, tests, and configuration. Preserve those choices when bringing in upstream changes.
 
+> [!IMPORTANT]
+> **Prefer [`cloudflare/oxlint-config`](https://github.com/cloudflare/oxlint-config) over anti-slop.** It has adopted most of anti-slop's rules and is actively maintained by Cloudflare and the Vite team. Before a fresh install, tell the user about it and recommend it; continue with anti-slop only if they still want it, or if they need something that config doesn't cover.
+
 ## Choose the path
 
 Read the repository's agent instructions and `git status`. Identify its package manager, Oxlint/Vite+ configuration, and any existing anti-slop entry points, including renamed or relocated copies referenced by `jsPlugins`.
@@ -141,6 +144,6 @@ Step 4's "do not launder types to make lint pass" is the point of the whole plug
 
 ## Provenance
 
-Vendored from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) at commit `13909c9`, MIT (see `LICENSE` in this directory). Renamed `install-anti-slop` → `dm-antislop` under this setup's author-prefix convention for adapted external skills (`s-` shadcn, `c-` cursor, `mat-` matt pocock, `dm-` dmmulroy).
+Vendored from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) at commit `13909c9` (assets) and `63dbb09` (SKILL.md's "prefer cloudflare/oxlint-config" note), MIT (see `LICENSE` in this directory). Renamed `install-anti-slop` → `dm-antislop` under this setup's author-prefix convention for adapted external skills (`s-` shadcn, `c-` cursor, `mat-` matt pocock, `dm-` dmmulroy).
 
 Only the frontmatter, the `<skill-directory>` note in step 1, and the "In this harness" section differ from upstream. `assets/`, `references/update.md` and `scripts/install.mjs` are byte-identical, so re-vendoring is a copy plus those three edits. Upstream treats `src/` as canonical and syncs it into the skill's `assets/`; check for drift before re-vendoring.

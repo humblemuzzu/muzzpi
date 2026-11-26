@@ -212,12 +212,12 @@ Rarely used servers stay in the file with `"enabled": false`; `/mcp` turns one o
 
 | Server | Notes |
 |---|---|
-| `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.12.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
+| `chrome-devtools` | **stdio**, pinned `chrome-devtools-mcp@1.14.0`: perf traces + Insights, Lighthouse, network, console, heap, Puppeteer |
 | `astro` | `127.0.0.1:8089/mcp`; runs inside the Astro Mac app (Settings → MCP Server) |
 | `paper` | `127.0.0.1:29979/mcp`; inside Paper Desktop, **read+write** on the open file |
 | `cloudflare*` | remote HTTP; `cloudflare` and `cloudflare-bindings` use OAuth |
 
-**chrome-devtools flags are load-bearing.** `--isolated` (1.12 defaults to it only
+**chrome-devtools flags are load-bearing.** `--isolated` (1.14 defaults to it only
 while no profile or browser is named; a persistent profile is readable by the agent),
 `--no-usage-statistics` + `--no-performance-crux` (both default ON; telemetry
 to Google, trace URLs to CrUX). **Its arg parser is not strict** — a misspelled

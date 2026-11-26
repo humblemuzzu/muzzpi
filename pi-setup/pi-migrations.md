@@ -12,6 +12,21 @@ file would have silently reverted an upstream feature or fix.
 
 ---
 
+## Upstream sync (2026-11-26) — on 1.6.1, no pi update
+
+- MCP: chrome-devtools-mcp 1.12.0 → 1.14.0. 1.14 sends `server_start` straight from the server process
+  (b14eb81), but `ClearcutLogger` is only created when `usageStatistics` is on (`src/index.ts`), so our flags
+  still cover it. Live probe of both versions with our exact args and env: no unknown-argument warning, no
+  usage notice, no watchdog process, page + snapshot + `get_css_styles` work. Schema changes: `get_css_styles`
+  +`computedProperties` (output now starts with resolved computed styles), `take_screenshot` +`omitBackground`
+  (RGBA PNG seen), new `set_logpoints` (a logpoint on `app.js:2` logged after reload), `list_console_messages`
+  −`serviceWorkerId`. `paper-chrome` updated; `--isolated` default rule unchanged in 1.14.
+- Skills: `dm-antislop` takes upstream 63dbb09's "prefer cloudflare/oxlint-config" note (only README and
+  SKILL.md changed there; assets stay at 13909c9). `c-sqr` gains "Before Deleting Anything", our own wording
+  of bdsqqq's `desloping-code-changes` (ed716e5; bdsqqq/dots has no LICENSE, so nothing copied); the rest is
+  still cursor's text bar title. No upstream change: c-sqr, mat-design, mat-tdd, chrome-cdp, dig, review,
+  userinterface-wiki. pi 1.6.1 is npm latest.
+
 ## 1.6.1 (2026-11-26) — from 1.6.0, one core patch and two speed shas re-derived
 
 **Patch drift (registry tarballs, stock 1.6.0 vs 1.6.1):** six core patch files identical. `session-manager.js`
