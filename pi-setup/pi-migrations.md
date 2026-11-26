@@ -40,7 +40,15 @@ file would have silently reverted an upstream feature or fix.
   8befb5c (fill_between where/step, log base, set_axis_off; bar and spine setters now reject extra arguments
   instead of dropping them). mpl still declares `node >=24`, as the old pin did; it runs on 22.
 - Toolchain: nvm Node 22.23.3 → 22.23.5 (default alias; globals reinstalled at the same versions), Homebrew
-  node 26.13.1, ripgrep 16.0.0, gh 2.106.0, git 2.56.1, bun 1.4.5.
+  node 26.13.1, ripgrep 16.0.0, gh 2.106.0, git 2.56.1, bun 1.4.5. Node 22.23.3 removed once no process ran it.
+- npm 12.2.3 (nvm and the Homebrew root). Without `tools/.npmrc` `allow-git=root` it fails the tools install
+  with `EALLOWGIT` (mpl is a git dependency); with it npm 10.9.9, 11.21.3 and 12.2.3 all install, and npm 12's
+  mpl `dist/` (built while packing, fresh cache) is byte-identical to npm 11's, 203 files. npm cannot record
+  an allowScripts entry for a git dependency ("no trusted identity for policy key"), so its blocked-`prepare`
+  warning stays. Other call sites need nothing: `update-pi.sh` and `build-pi-bundle.mjs` pass `--ignore-scripts`
+  (esbuild runs without its postinstall), pi 1.6.1 installs and starts under npm 12 (only protobufjs's
+  version-scheme warning is blocked), and chrome-devtools-mcp 1.14.0 answers `initialize` under npm 12's npx.
+  Tools suite on npm-12-installed deps: 2590 pass, 0 fail.
 
 ## 1.6.1 (2026-11-26) — from 1.6.0, one core patch and two speed shas re-derived
 
