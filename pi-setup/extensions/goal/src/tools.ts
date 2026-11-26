@@ -28,7 +28,7 @@ function createGoalParams(policy: TokenBudgetPolicy) {
       description:
         "Replace an existing non-complete goal. Use only when the user explicitly asks to set a new goal over the current one.",
     })),
-  }, policy === "disabled" ? { additionalProperties: false } : {});
+  }, { additionalProperties: false });
 }
 
 const UpdateGoalParams = Type.Object({

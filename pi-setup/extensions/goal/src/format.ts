@@ -1,4 +1,4 @@
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { replaceControlCharacters, stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { formatRecoveryAttention, type RecoveryAttention } from "./recovery.ts";
 import type { GoalStatus, ThreadGoal } from "./types.ts";
@@ -161,8 +161,7 @@ export function formatFooterStatus(
     return "Goal blocked (/goal for reason; /goal resume)";
   }
   if (goal.status === "waiting") {
-    const reason = stripTerminalSequences(goal.waitingReason ?? "")
-      .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    const reason = replaceControlCharacters(stripTerminalSequences(goal.waitingReason ?? ""))
       .replace(/\s+/g, " ")
       .trim();
     return `Goal waiting: ${reason} (/goal resume)`;
