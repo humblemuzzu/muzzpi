@@ -1,9 +1,0 @@
-{
-	"compilerOptions": {
-		"paths": {
-			"@earendil-works/pi-coding-agent": ["../tools/node_modules/@earendil-works/pi-coding-agent"],
-			"@earendil-works/pi-ai": ["../tools/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai"],
-			"@earendil-works/pi-ai/*": ["../tools/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/*"]
-		}
-	}
-}

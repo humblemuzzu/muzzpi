@@ -270,7 +270,7 @@ run mkdir -p "$CONFIG_SKILLS"
 info "Building and installing extensions..."
 EXT_LIVE="$PI_AGENT/extensions"
 EXT_OLD="$EXT_LIVE$BACKUP_SUFFIX"
-RETIRED_EXTENSIONS="subagent-inspector cache-compaction.js mentions.js"
+RETIRED_EXTENSIONS="subagent-inspector cache-compaction.js mentions.js agy"
 if [ -d "$EXT_LIVE" ]; then
     run mv "$EXT_LIVE" "$EXT_OLD"
     warn "Backed up extensions to $(basename "$EXT_OLD")"

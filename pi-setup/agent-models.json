@@ -8,14 +8,6 @@
     "river-flash": { "id": "river/deepseek-ai/DeepSeek-V4.1-Flash", "about": "the same DeepSeek V4.1 Flash on River's API: use it for \"river flash\" or \"deepseek flash from/via river\"; plain \"deepseek flash\" means deepseek-flash" },
     "deepseek-pro": { "id": "deepseek/deepseek-v4-pro", "about": "DeepSeek V4 Pro, DeepSeek API, no image input" },
     "glm-flash": { "id": "openrouter/z-ai/glm-5.3-flash", "about": "GLM 5.3 Flash via OpenRouter" },
-    "neon": { "id": "agy/gemini-4-neon", "about": "Antigravity plan: Gemini 4 Neon (thinking: low, medium, high, xhigh)" },
-    "carbon": { "id": "agy/gemini-4-carbon", "about": "Antigravity plan: Gemini 4 Carbon (thinking: low, medium, high)" },
-    "argon": { "id": "agy/gemini-4-argon", "about": "Antigravity plan: Gemini 4 Argon (thinking: low, medium, high)" },
-    "hydrogen": { "id": "agy/gemini-4-hydrogen", "about": "Antigravity plan: Gemini 4 Hydrogen (thinking: low, medium, high, xhigh)" },
-    "gemini-flash": { "id": "agy/gemini-3.8-flash", "about": "Antigravity plan: Gemini 3.8 Flash (thinking: low, medium, high)" },
-    "agy-opus": { "id": "agy/claude-opus-5-5", "about": "Antigravity plan: Claude Opus 5.5 (thinking: low, medium, high)" },
-    "agy-sonnet": { "id": "agy/claude-sonnet-5-5", "about": "Antigravity plan: Claude Sonnet 5.5 (thinking: low, medium, high)" },
-    "gpt-oss": { "id": "agy/gpt-oss-120b", "about": "Antigravity plan: GPT-OSS 120B, text only (thinking: medium)" },
     "main": { "id": "$main" }
   },
   "agents": {

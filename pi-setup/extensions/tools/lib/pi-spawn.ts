@@ -358,7 +358,6 @@ export const CHILD_EXTENSIONS: readonly string[] = [
 	path.join(PI_AGENT_DIR, "extensions", "guardrails"),
 	path.join(PI_AGENT_DIR, "extensions", "anthropic-sub.js"),
 	path.join(PI_AGENT_DIR, "extensions", "prompt-cache.js"),
-	path.join(PI_AGENT_DIR, "extensions", "agy"),
 ];
 
 /** set to 1 to give children every extension again */

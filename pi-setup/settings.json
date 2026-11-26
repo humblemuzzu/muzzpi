@@ -3,8 +3,8 @@
   "hideThinkingBlock": true,
   "defaultThinkingLevel": "high",
   "theme": "gruvbox",
-  "defaultProvider": "agy",
-  "defaultModel": "gemini-4-neon",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-5-5",
   "skills": [
     "~/.config/agents/skills"
   ],
@@ -21,8 +21,7 @@
     "~/.pi/agent/extensions/prompt-cache.js",
     "~/.pi/agent/extensions/goal",
     "~/.pi/agent/extensions/agents-ui",
-    "~/.pi/agent/extensions/ideas",
-    "~/.pi/agent/extensions/agy"
+    "~/.pi/agent/extensions/ideas"
   ],
   "compaction": {
     "enabled": true,
@@ -34,15 +33,7 @@
       "deepseek/deepseek-flash": { "reserveTokens": 30000 },
       "deepseek/deepseek-v4-pro": { "reserveTokens": 30000 },
       "river/deepseek-ai/DeepSeek-V4.1-Flash": { "reserveTokens": 78576 },
-      "openrouter/z-ai/glm-5.3-flash": { "reserveTokens": 78575 },
-      "agy/gemini-4-neon": { "reserveTokens": 128576 },
-      "agy/gemini-4-carbon": { "reserveTokens": 128576 },
-      "agy/gemini-4-argon": { "reserveTokens": 128576 },
-      "agy/gemini-4-hydrogen": { "reserveTokens": 128576 },
-      "agy/gemini-3.8-flash": { "reserveTokens": 128576 },
-      "agy/claude-opus-5-5": { "reserveTokens": 30000 },
-      "agy/claude-sonnet-5-5": { "reserveTokens": 30000 },
-      "agy/gpt-oss-120b": { "reserveTokens": 16384 }
+      "openrouter/z-ai/glm-5.3-flash": { "reserveTokens": 78575 }
     }
   },
   "cacheWarming": "off",
@@ -59,14 +50,6 @@
     "river/deepseek-ai/DeepSeek-V4.1-Flash",
     
     "openrouter/z-ai/glm-5.3-flash",
-    "agy/gemini-4-neon",
-    "agy/gemini-4-carbon",
-    "agy/gemini-4-argon",
-    "agy/gemini-4-hydrogen",
-    "agy/gemini-3.8-flash",
-    "agy/claude-opus-5-5",
-    "agy/claude-sonnet-5-5",
-    "agy/gpt-oss-120b",
     "ollama/inkling-2-mini:26b-a5b-nvfp4"
   ],
   "steeringMode": "all",

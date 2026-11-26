@@ -45,7 +45,7 @@ find/read/llama-port changes do not reach our tools or `/local`. Bundle recipe a
 `bundle-fidelity` 78/84.
 
 **Verified:** staged in `/tmp` first (verify ALL PASS, tests 2,585 + 604, canary 4/4, sub-agents on Haiku
-and DeepSeek, agy, TUI), then `update-pi.sh 1.6.0` (verify, smoke, canary 4/4), `install.sh pi`, tests
+and DeepSeek, TUI), then `update-pi.sh 1.6.0` (verify, smoke, canary 4/4), `install.sh pi`, tests
 2,585 + 604 / 0 fail; TUI: write, edit, failed edit, background `finder` wake, `/focus`, `/resume` pin.
 Startup with our 20 extensions: 240 ms, sub-agent 210 ms. Backup: `~/pi-update-backup-1.5.2-20261120-184403`.
 

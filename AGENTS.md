@@ -49,8 +49,7 @@ Write the one-line rule and delete whatever it supersedes.
 
 ```
 pi CLI (v1.6.0) — @earendil-works/pi-coding-agent
-  ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)
-  ├─ agy (agy/ extension)             → /login agy               [DEFAULT]
+  ├─ anthropic + anthropic-sub.ts     → Claude Max OAuth (/login)  [DEFAULT]
   ├─ xai, openai-codex, kimi-coding   → /login (auth.json)
   ├─ openrouter                       → /login (auth.json)
   ├─ deepseek                         → DEEPSEEK_API_KEY in ~/.zshrc
@@ -58,7 +57,7 @@ pi CLI (v1.6.0) — @earendil-works/pi-coding-agent
   └─ ollama                           → the Ollama app via /local
 ```
 
-Default: `agy` / `gemini-4-neon`, thinking `high`, theme gruvbox,
+Default: `anthropic` / `claude-opus-5-5`, thinking `high`, theme gruvbox,
 `cacheWarming: "off"` (`prompt-cache` owns warming), `tuiMode: "fullscreen"`,
 `quietStartup: "header"` (`"regular"` restores normal scrollback), `markdown.mermaid: "final"`
 (`"streaming"` lexes the whole reply again every frame).
@@ -91,7 +90,7 @@ cost one rebuild. Reads are `cache-ping` entries: `/stats` and a child's run usa
 child stall watchdog does not. **Keep pi's `cacheWarming` off**: it would double the reads. Compaction
 (parent only) replays the capture plus a summary instruction (pi's checkpoint format plus droid's
 continuation rules, `cache-compaction.ts`); any doubt runs pi's own, which lacks those rules. Models
-compact above 970k (`compaction.modelOverrides`, reserve = window − 970k); agy models above 920k, since Gemini 4's window holds input and output together. `cache-report.py` shows what was rebuilt after
+compact above 970k (`compaction.modelOverrides`, reserve = window − 970k). `cache-report.py` shows what was rebuilt after
 expiry and what the gap waited on, and `cache/prefix-breaks.jsonl` (main session) names what changed first when a prefix broke; `PI_ANTHROPIC_METER_LOG=<file>` logs the plan meter per request.
 
 ### System prompt assembly
@@ -259,7 +258,6 @@ holds other installers' TypeScript, leave it: `herdr-agent-state.ts` (herdr),
 | `deepseek-peak/` | `/deepseek` + peak/off-peak clock in the editor border; the label shows only while DeepSeek is in use (main model or a live sub-agent). Chinese public holidays are off-peak: `peak.ts` `CHINA_HOLIDAYS` needs each November's State Council notice |
 | `agents-ui/` | the background agents on screen: a dock under the editor (one grey line; `/agents dock line\|full\|off`), `↓` to manage, `/agents` / Ctrl+Shift+A list, full-screen view per agent. Parent-only; see Sub-agents |
 | `local-model.ts` | `/local` loads an `ollama` model and switches to it; bare system prompt for `ollama` and `llama.cpp` |
-| `agy/` | provider `agy`: Gemini 4 Neon/Carbon/Argon/Hydrogen, Gemini 3.8 Flash, Claude Opus/Sonnet 5.5, and GPT-OSS 120B on Gemini Code Assist's `v1internal` API through agy's own OAuth client. One catalog entry per family; pi's thinking level selects the wire tier (`<family>-<tier>`, `model_enum`, `thinkingLevel` or `thinkingBudget` for GPT-OSS) via `thinkingLevelMap`. `/login agy` imports the keychain item agy writes (`security find-generic-password -s gemini -a antigravity`), else runs the browser flow. **agy's OAuth client id and secret are never in this repo** (it is public): `client.ts` reads them from the installed agy binary and caches the pair that refreshes in `~/.pi/agent/agy-client.json` (0600). Wire rules that break silently: `sessionId` is a JSON **string**, the signed FNV-1a-64 of pi's session id (`agySessionId`, matching agy 1.5.14's FNV-1a-64 of `cascade_id`); never share one across conversations; tool results are `model` turns on Gemini/GPT-OSS and **`user` turns on Claude**, and **their images go in `functionResponse.parts`, never inside `response`** (there Gemini bills the base64 as text and never sees the image); `thoughtSignature` is echoed verbatim; thinking blocks stay local on Gemini/GPT-OSS and are replayed (`thought: true`) on Claude; tool schemas are rewritten (upper-case types, unknown keys dropped, `const` and literal unions folded into `enum`). **Every user-role turn wears agy's own frame** (`framing.ts`, agy's wording byte for byte): typed prompts a `<USER_REQUEST>` plus agy's local-time `<ADDITIONAL_METADATA>`, agent, bash-job and `/ysk` results a `<SYSTEM_MESSAGE>`, goal nudges an `<EPHEMERAL_MESSAGE>`, pi's summaries and `!` output as written. The frame is read from the text alone, so **a new sender of a model-visible message must open with a constant `framing.ts` knows** (`agent-channel.ts`, `injected-prompts.ts`), or it goes out as the user's request. Neon will not write agy's frames, but it copied pi's old `[Automated …]` lines into invented agent reports: on Gemini, a reply line opening a foreign turn is cut (stop sequences, a stream guard that logs to `cache/agy-foreign-turns.jsonl`, and again on replay), and failed or aborted replies are never replayed. Every finish but `STOP`, `MAX_TOKENS` and `CONTINUATION` is an error; a transient one (`MALFORMED_*` …) ends in "try your request again", the wording pi's retry resends. **agy self-updates, so `wire.ts` `USER_AGENT` and the model tiers drift with it**: after an agy update, re-capture its user-agent and any new tier's `model_enum` through the logging proxy and bump both. **pi's `<docs>` index line alone turns a turn into `429 RESOURCE_EXHAUSTED`**, so that section is replaced with one sentence (`agySafeInstruction`) — never send the raw section, and do not read the 429 as quota: `/agy-quota` stays at 100%. `/agy-quota` reads both plan pools; `PI_AGY_PAYLOAD_LOG=<file>` dumps each request. **`catalog.ts` `cost` is the published list price per 1M tokens** (post-promo: Carbon/Argon $4/$20, 3.8 Flash $1.50/$7.50; cache read 5% of input on Gemini 4 and Claude, 10% on 3.8 Flash, input rate on GPT-OSS): `calculateCost` turns it into `usage.cost`, which is what the status line, `/stats` and the HUD show — never zero it. `models.json` `modelOverrides.<model>.cost` also applies to `agy` (after extension models) but is deliberately unused, so one model has one price. **Implicit cache lives ~5 min when not evicted** (`promptCache: { short: 300, long: 300 }` shows the 5m countdown in the HUD): `keep-alive.ts` re-sends the last conversation request with one output token and agy's `prompt_cache_keep_alive` label 4 min (`240 s`, measured from request send, stale cutoff `275 s`) after the last send or read — **only while a turn, background agent, or background bash job is live** (never while idle, matching `prompt-cache`) — until reads cost two-thirds of one rebuild at Gemini 4's 5% cache price; a failed read retries once after `3 s`, and two consecutive misses stop it for the session. Parent and children |
 | `guardrails/` | comment gate on `edit` / `write` |
 | `you-should-know/` | `/ysk` side agent on deepseek-flash. **Off until `/ysk on`**; costs per check |
 | `ideas/` | `/idea <text>` parks an idea per project, `pi:` in front (or any idea in the repo holding `pi-setup/extensions/ideas`) files it under the harness; `/idea` lists. `<agent dir>/ideas/*.jsonl` is append-only user data, never rewritten; the `.md` views are regenerated. `cli.js` is herdr's ⌘I popup. Parent only |
@@ -288,8 +286,7 @@ Edit the rules in that .md, never in an extension. **`COMMENTS` in
 - **A deployed extension may import `@earendil-works/pi-ai` (root), `/compat`, `/models`, `/oauth`,
   `/providers/all` and nothing deeper.** pi's loader aliases exactly those (plus `@mariozechner/*`,
   agent-core, pi-tui, typebox); any other subpath (`/utils/*`, `/api/*`) resolves to nothing at runtime
-  although `tsconfig` paths hide it. `sanitizeSurrogates`, `buildBaseOptions`, the error formatter and
-  the provider-retry loop are inlined in `agy/` for that reason.
+  although `tsconfig` paths hide it: inline what you need from there.
 - **Every transcript component caches its lines per width.** In fullscreen mode pi-tui renders the
   whole transcript every frame (a fresh cache per frame, `layout.js`), and `Box` reuses its output
   only when child lines come back unchanged. One row rebuilding its lines made each keystroke cost
@@ -426,7 +423,7 @@ ack over 100 ms runs `rg`**: the tools never depend on it; nothing touches it at
 - **Don't use `--no-tools`** for sub-agents: it empties the registry; nothing can be re-activated.
 - **A child reply that repeats itself** (`lib/repetition.ts`, droid's thresholds; symbol-only units
   ignored) is aborted and re-prompted, twice at most; the third time the child is stopped.
-- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub, prompt-cache, agy) via
+- **Children load only `CHILD_EXTENSIONS`** (tools, system-prompt, guardrails, anthropic-sub, prompt-cache) via
   `--no-extensions -e`, plus `-e builtin:codemode` when their tools include `codemode` (a script
   reaches only the child's tools; `--no-extensions` drops pi's built-ins too). An extension a child
   needs goes in that list; `PI_SUBAGENT_ALL_EXTENSIONS=1` restores the full set; `verify-patches.sh`

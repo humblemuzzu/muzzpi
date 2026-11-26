@@ -286,9 +286,9 @@ describe("modelViolation: the child must run on exactly what was asked for", () 
 		expect(modelViolation("openrouter/anthropic/claude-sonnet-5.5", undefined, shipped)).toContain("not one of the models");
 	});
 
-	test("the shipped list names no Claude model outside subscription providers (anthropic, agy)", () => {
+	test("the shipped list names no Claude model outside the anthropic subscription provider", () => {
 		for (const { id } of Object.values(shipped.models)) {
-			if (/claude|sonnet|opus|haiku/i.test(id)) expect(id.startsWith("anthropic/") || id.startsWith("agy/")).toBe(true);
+			if (/claude|sonnet|opus|haiku/i.test(id)) expect(id.startsWith("anthropic/")).toBe(true);
 		}
 	});
 
