@@ -1,18 +1,18 @@
 [package]
 name = "searchd"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.96"
 license = "MIT"
 publish = false
 
 [dependencies]
-ignore = "=0.4.33"
-globset = "=0.4.20"
-grep-matcher = "=0.1.9"
-grep-regex = "=0.1.14"
-grep-searcher = "=0.1.17"
-grep-printer = "=0.3.1"
+ignore = "=0.4.35"
+globset = "=0.4.22"
+grep-matcher = "=0.1.10"
+grep-regex = "=0.1.15"
+grep-searcher = "=0.1.18"
+grep-printer = "=0.3.2"
 regex-syntax = "0.8"
 rayon = "1.12"
 memmap2 = "0.9"

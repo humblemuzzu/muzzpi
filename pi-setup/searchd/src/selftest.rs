@@ -651,10 +651,10 @@ mod tests {
 		assert!(matches!(start_decision(Some(&gone), Some("ripgrep 14.1.1"), "0.5.0"), Start::Serve));
 	}
 
-	/// The code needs let-chains and edition 2024, and says so.
+	/// ripgrep 16's grep crates need Rust 1.96, and the crate says so.
 	#[test]
 	fn the_toolchain_it_needs_is_declared() {
-		assert_eq!(env!("CARGO_PKG_RUST_VERSION"), "1.88");
+		assert_eq!(env!("CARGO_PKG_RUST_VERSION"), "1.96");
 	}
 
 	#[test]

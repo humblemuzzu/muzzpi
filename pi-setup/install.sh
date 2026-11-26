@@ -320,13 +320,13 @@ ok "Extensions installed"
 SEARCHD_SRC="$SCRIPT_DIR/searchd"
 SEARCHD_BIN="$PI_AGENT/bin/searchd"
 
-# searchd needs Rust 1.88 (let-chains, edition 2024).
+# searchd needs Rust 1.96 (ripgrep 16's grep crates).
 rustc_new_enough() {
     local version major minor
     version="$(rustc --version 2>/dev/null | sed -n '1s/^rustc \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
     [ -n "$version" ] || return 1
     read -r major minor <<< "$version"
-    [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 88 ]; }
+    [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 96 ]; }
 }
 
 # Losing the index costs no correctness, only speed, so the warning says what
@@ -355,7 +355,7 @@ else
     elif ! command -v cargo &>/dev/null; then
         searchd_off "./install.sh pi --with-deps   (installs Rust, then builds and stamps it)"
     elif ! rustc_new_enough; then
-        searchd_off "rustup update   (searchd needs rustc 1.88+, this is $(rustc --version 2>/dev/null | cut -d' ' -f2))"
+        searchd_off "rustup update   (searchd needs rustc 1.96+, this is $(rustc --version 2>/dev/null | cut -d' ' -f2))"
     else
         info "Building searchd (the index behind find and grep)..."
         if run env CARGO_TARGET_DIR="$SEARCHD_TARGET" cargo build --release --locked --manifest-path "$SEARCHD_SRC/Cargo.toml"; then
