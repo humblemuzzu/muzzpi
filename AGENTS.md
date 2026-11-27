@@ -7,7 +7,9 @@ This repo is muzzpi: a portable pi harness in `pi-setup/`, deployed to
 config in `ghostty/` (`./install.sh ghostty`), and two optional, separate herdr setups in
 `herdr/` (see its README): herdr in Ghostty (`herdr/in-ghostty/`, `./install.sh
 herdr-ghostty`, alias `herdr`) and the Herdr Mac app (`herdr/app/`, `./install.sh herdr-app`).
-They share no settings and neither installer touches the other's files; keep it that way. README.md is the public pitch;
+They share no settings and neither installer touches the other's files; keep it that way. `agy/` (`./install.sh agy`)
+sets up Google's Antigravity CLI and shares nothing with `pi-setup/`: **never name pi or its tools in `agy/rules` or
+`agy/skills`**, and never make pi drive `agy` (Google suspends accounts for wrapping it). README.md is the public pitch;
 keep its numbers true when the facts change.
 
 **herdr is opt-in: never wire it into `install.sh pi` or `ghostty`.**

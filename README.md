@@ -428,11 +428,15 @@ herdr (⌘T tabs, ⌘O open a project, ⌘] next agent, ⌘W close, ⌘I park an
 state in its agents list. Nothing else installs either; which is which, every
 key and how to turn each off are in [`herdr/`](herdr/README.md).
 
+**agy (optional).** For Google's Antigravity CLI: no permission prompts, a
+status line with quota and context, and telemetry off. `./install.sh agy`; it
+shares nothing with pi. See [`agy/`](agy/README.md).
+
 ## Layout
 
 ```
 muzzpi/
-├── install.sh              ./install.sh pi | ghostty | herdr-ghostty | herdr-app
+├── install.sh              ./install.sh pi | ghostty | herdr-ghostty | herdr-app | agy
 ├── AGENTS.md               the rules every agent reads first
 ├── pi-setup/
 │   ├── extensions/         19 extensions; tools/ holds the 33 tools
@@ -446,9 +450,10 @@ muzzpi/
 │   ├── port-harness/       benchmarks and the Claude-plan canary
 │   └── pi-migrations.md    one record per pi release
 ├── ghostty/                themes, fonts, switchers
-└── herdr/                  optional, two separate setups:
-    ├── in-ghostty/         herdr inside Ghostty: ⌘ keys, ⌘O picker, ⌘W close, ⌘I ideas
-    └── app/                the Herdr Mac app: the same keys, a look, pi's state
+├── herdr/                  optional, two separate setups:
+│   ├── in-ghostty/         herdr inside Ghostty: ⌘ keys, ⌘O picker, ⌘W close, ⌘I ideas
+│   └── app/                the Herdr Mac app: the same keys, a look, pi's state
+└── agy/                    optional: Antigravity CLI settings, status line, telemetry off
 ```
 
 Read next: [`AGENTS.md`](AGENTS.md) for how it fits together and what not to
